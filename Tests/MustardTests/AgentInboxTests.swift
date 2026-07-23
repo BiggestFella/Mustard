@@ -91,6 +91,15 @@ final class AgentInboxTests: XCTestCase {
         XCTAssertEqual(attention.inFlight.map(\.title), ["q2", "ap", "q1", "r1"])
     }
 
+    func test_attention_inFlight_uidTiebreakOnEqualCreatedAt() {
+        let a = MustardTask(title: "a"); a.stage = .needsReview; a.createdAt = Date(timeIntervalSince1970: 500)
+        let b = MustardTask(title: "b"); b.stage = .needsApproval; b.createdAt = Date(timeIntervalSince1970: 500)
+        let inFlight = AgentInbox.attention([a, b]).inFlight
+        // Equal createdAt → ordered by uid ascending (deterministic tiebreak).
+        let byUid = [a, b].sorted { $0.uid < $1.uid }.map(\.title)
+        XCTAssertEqual(inFlight.map(\.title), byUid)
+    }
+
     func test_attentionTaskCount_includesNeedsApproval() {
         let ap = MustardTask(title: "ap"); ap.stage = .needsApproval
         let q = MustardTask(title: "q"); q.stage = .needsInput

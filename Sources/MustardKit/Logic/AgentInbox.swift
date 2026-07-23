@@ -19,9 +19,7 @@ public enum AgentInbox {
     /// Agent tasks awaiting your approval, answer, or output review (all three gate
     /// stages) — matches PersonalBoard.waitingCount/needsHuman (F27 count unification).
     public static func attentionTaskCount(_ tasks: [MustardTask]) -> Int {
-        tasks.filter {
-            $0.stage == .needsApproval || $0.stage == .needsInput || $0.stage == .needsReview
-        }.count
+        tasks.filter { $0.stage.isGate }.count
     }
 
     /// The two attention groups for the unified Agent Console queue: questions (Needs You)
@@ -40,11 +38,10 @@ public enum AgentInbox {
         func precedes(_ a: MustardTask, _ b: MustardTask) -> Bool {
             a.createdAt != b.createdAt ? a.createdAt < b.createdAt : a.uid < b.uid
         }
-        let gateStages: Set<TaskStage> = [.needsApproval, .needsInput, .needsReview]
         return AgentAttention(
             questions: tasks.filter { $0.stage == .needsInput }.sorted(by: precedes),
             reviews: tasks.filter { $0.stage == .needsReview }.sorted(by: precedes),
-            inFlight: tasks.filter { gateStages.contains($0.stage) }.sorted(by: precedes)
+            inFlight: tasks.filter { $0.stage.isGate }.sorted(by: precedes)
         )
     }
 

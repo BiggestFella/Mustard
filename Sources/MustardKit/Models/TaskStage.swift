@@ -46,6 +46,10 @@ public enum TaskStage: String, Codable, CaseIterable, Identifiable {
 
     /// Open == still actionable (excludes done).
     public var isOpen: Bool { self != .done }
+
+    /// True for the three "needs a human decision" gate stages (needsApproval /
+    /// needsInput / needsReview) — the single source of truth those callers share.
+    public var isGate: Bool { kind == .gate }
 }
 
 /// Visual treatment of a board column, mapped from `TaskStage.kind`.
