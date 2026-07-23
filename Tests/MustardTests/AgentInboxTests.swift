@@ -92,12 +92,14 @@ final class AgentInboxTests: XCTestCase {
     }
 
     func test_attention_inFlight_uidTiebreakOnEqualCreatedAt() {
-        let a = MustardTask(title: "a"); a.stage = .needsReview; a.createdAt = Date(timeIntervalSince1970: 500)
-        let b = MustardTask(title: "b"); b.stage = .needsApproval; b.createdAt = Date(timeIntervalSince1970: 500)
+        // Equal createdAt → ordered by uid ascending. Pin explicit inverted uids so a
+        // broken (input-order-preserving) comparator fails deterministically, not ~50%.
+        let a = MustardTask(title: "a"); a.stage = .needsReview
+        a.createdAt = Date(timeIntervalSince1970: 500); a.uid = "2"
+        let b = MustardTask(title: "b"); b.stage = .needsApproval
+        b.createdAt = Date(timeIntervalSince1970: 500); b.uid = "1"
         let inFlight = AgentInbox.attention([a, b]).inFlight
-        // Equal createdAt → ordered by uid ascending (deterministic tiebreak).
-        let byUid = [a, b].sorted { $0.uid < $1.uid }.map(\.title)
-        XCTAssertEqual(inFlight.map(\.title), byUid)
+        XCTAssertEqual(inFlight.map(\.title), ["b", "a"])   // uid "1" (b) before "2" (a)
     }
 
     func test_attentionTaskCount_includesNeedsApproval() {
