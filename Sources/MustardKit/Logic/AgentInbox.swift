@@ -42,6 +42,8 @@ public enum AgentInbox {
     /// The console gate row's primary button for a stage: its label, and whether it
     /// advances in one click (Approve/Accept, via PersonalBoard.approveTarget) or must
     /// open the conversation (Answer — replying needs typing). Nil for non-gate stages.
+    /// Enumerates the gate stages (`TaskStage.isGate`) — keep in sync if a gate stage is
+    /// added, or a new `.gate` stage will surface in `inFlight` with no action button.
     public static func gateAction(for stage: TaskStage) -> (label: String, oneClick: Bool)? {
         switch stage {
         case .needsApproval: return ("Approve", true)

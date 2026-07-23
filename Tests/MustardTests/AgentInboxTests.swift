@@ -97,6 +97,22 @@ final class AgentInboxTests: XCTestCase {
         XCTAssertEqual(AgentInbox.attentionTaskCount([ap, q, rev, planned]), 3)
     }
 
+    func test_attentionTaskCount_matchesBoardWaitingCount() {
+        // Defect #2, pinned: the console/hover/notch count must equal the board's
+        // "N waiting on you" for the same task set (both derive from TaskStage.isGate).
+        let ap = MustardTask(title: "ap"); ap.stage = .needsApproval
+        let q = MustardTask(title: "q"); q.stage = .needsInput
+        let rev = MustardTask(title: "rev"); rev.stage = .needsReview
+        let planned = MustardTask(title: "p"); planned.stage = .planned
+        let wip = MustardTask(title: "w"); wip.stage = .inProgress
+        let tasks = [ap, q, rev, planned, wip]
+
+        XCTAssertEqual(
+            AgentInbox.attentionTaskCount(tasks),
+            PersonalBoard.waitingCount(tasks, view: .everyone, area: .all)
+        )
+    }
+
     func test_gateAction_perStage() {
         XCTAssertEqual(AgentInbox.gateAction(for: .needsApproval)?.label, "Approve")
         XCTAssertEqual(AgentInbox.gateAction(for: .needsApproval)?.oneClick, true)

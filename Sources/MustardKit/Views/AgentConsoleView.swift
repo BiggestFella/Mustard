@@ -299,6 +299,8 @@ public struct AgentConsoleView: View {
     }
 
     /// The gate-kind spine colour: purple (approval), amber (answer), green (review).
+    /// Enumerates the gate stages (`TaskStage.isGate`) — keep in sync with `gateSubmeta`
+    /// and `AgentInbox.gateAction` if a gate stage is added.
     private func gateSpineColor(_ stage: TaskStage) -> Color {
         switch stage {
         case .needsApproval: return Theme.Palette.agent
@@ -308,7 +310,8 @@ public struct AgentConsoleView: View {
         }
     }
 
-    /// The muted sub-meta line under a gate row's title.
+    /// The muted sub-meta line under a gate row's title. Enumerates the gate stages
+    /// (`TaskStage.isGate`) — keep in sync with `gateSpineColor` / `AgentInbox.gateAction`.
     private func gateSubmeta(_ task: MustardTask) -> String {
         switch task.stage {
         case .needsApproval: return task.isGated ? "gated · approve to run" : "approve to run"
