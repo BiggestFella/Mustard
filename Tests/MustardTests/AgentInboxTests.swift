@@ -74,4 +74,40 @@ final class AgentInboxTests: XCTestCase {
         XCTAssertTrue(attention.questions.isEmpty)
         XCTAssertTrue(attention.reviews.isEmpty)
     }
+
+    // MARK: F27 — in-flight bucket + gate actions + unified count
+
+    func test_attention_inFlight_allThreeGatesOldestFirst_excludingOthers() {
+        let ap = MustardTask(title: "ap"); ap.stage = .needsApproval; ap.createdAt = Date(timeIntervalSince1970: 150)
+        let q1 = MustardTask(title: "q1"); q1.stage = .needsInput; q1.createdAt = Date(timeIntervalSince1970: 200)
+        let q2 = MustardTask(title: "q2"); q2.stage = .needsInput; q2.createdAt = Date(timeIntervalSince1970: 100)
+        let r1 = MustardTask(title: "r1"); r1.stage = .needsReview; r1.createdAt = Date(timeIntervalSince1970: 300)
+        let wip = MustardTask(title: "wip"); wip.stage = .inProgress
+        let queued = MustardTask(title: "queued"); queued.stage = .queued
+
+        let attention = AgentInbox.attention([q1, r1, wip, q2, ap, queued])
+
+        // Oldest-first across all three gate stages: q2(100) ap(150) q1(200) r1(300)
+        XCTAssertEqual(attention.inFlight.map(\.title), ["q2", "ap", "q1", "r1"])
+    }
+
+    func test_attentionTaskCount_includesNeedsApproval() {
+        let ap = MustardTask(title: "ap"); ap.stage = .needsApproval
+        let q = MustardTask(title: "q"); q.stage = .needsInput
+        let rev = MustardTask(title: "rev"); rev.stage = .needsReview
+        let planned = MustardTask(title: "p"); planned.stage = .planned
+
+        XCTAssertEqual(AgentInbox.attentionTaskCount([ap, q, rev, planned]), 3)
+    }
+
+    func test_gateAction_perStage() {
+        XCTAssertEqual(AgentInbox.gateAction(for: .needsApproval)?.label, "Approve")
+        XCTAssertEqual(AgentInbox.gateAction(for: .needsApproval)?.oneClick, true)
+        XCTAssertEqual(AgentInbox.gateAction(for: .needsInput)?.label, "Answer")
+        XCTAssertEqual(AgentInbox.gateAction(for: .needsInput)?.oneClick, false)
+        XCTAssertEqual(AgentInbox.gateAction(for: .needsReview)?.label, "Accept")
+        XCTAssertEqual(AgentInbox.gateAction(for: .needsReview)?.oneClick, true)
+        XCTAssertNil(AgentInbox.gateAction(for: .planned))
+        XCTAssertNil(AgentInbox.gateAction(for: .queued))
+    }
 }

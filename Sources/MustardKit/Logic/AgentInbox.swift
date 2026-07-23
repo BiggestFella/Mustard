@@ -16,9 +16,12 @@ public enum AgentInbox {
         RecommendationQueue.pending(recommendations, now: now).count
     }
 
-    /// Agent tasks awaiting your answer or output review (Needs You + Needs Review).
+    /// Agent tasks awaiting your approval, answer, or output review (all three gate
+    /// stages) — matches PersonalBoard.waitingCount/needsHuman (F27 count unification).
     public static func attentionTaskCount(_ tasks: [MustardTask]) -> Int {
-        tasks.filter { $0.stage == .needsInput || $0.stage == .needsReview }.count
+        tasks.filter {
+            $0.stage == .needsApproval || $0.stage == .needsInput || $0.stage == .needsReview
+        }.count
     }
 
     /// The two attention groups for the unified Agent Console queue: questions (Needs You)
@@ -26,6 +29,9 @@ public enum AgentInbox {
     public struct AgentAttention {
         public let questions: [MustardTask]
         public let reviews: [MustardTask]
+        /// All three gate stages (needsApproval ∪ needsInput ∪ needsReview) in one
+        /// oldest-first list — the console's "In flight · needs you" tier (F27).
+        public let inFlight: [MustardTask]
     }
 
     public static func attention(_ tasks: [MustardTask]) -> AgentAttention {
@@ -34,10 +40,24 @@ public enum AgentInbox {
         func precedes(_ a: MustardTask, _ b: MustardTask) -> Bool {
             a.createdAt != b.createdAt ? a.createdAt < b.createdAt : a.uid < b.uid
         }
+        let gateStages: Set<TaskStage> = [.needsApproval, .needsInput, .needsReview]
         return AgentAttention(
             questions: tasks.filter { $0.stage == .needsInput }.sorted(by: precedes),
-            reviews: tasks.filter { $0.stage == .needsReview }.sorted(by: precedes)
+            reviews: tasks.filter { $0.stage == .needsReview }.sorted(by: precedes),
+            inFlight: tasks.filter { gateStages.contains($0.stage) }.sorted(by: precedes)
         )
+    }
+
+    /// The console gate row's primary button for a stage: its label, and whether it
+    /// advances in one click (Approve/Accept, via PersonalBoard.approveTarget) or must
+    /// open the conversation (Answer — replying needs typing). Nil for non-gate stages.
+    public static func gateAction(for stage: TaskStage) -> (label: String, oneClick: Bool)? {
+        switch stage {
+        case .needsApproval: return ("Approve", true)
+        case .needsInput: return ("Answer", false)
+        case .needsReview: return ("Accept", true)
+        default: return nil
+        }
     }
 
     /// Co-pilot dock text (BAK-106): "{N} recommendation(s) and {M} item(s) waiting
