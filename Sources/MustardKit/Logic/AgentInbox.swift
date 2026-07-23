@@ -22,13 +22,9 @@ public enum AgentInbox {
         tasks.filter { $0.stage.isGate }.count
     }
 
-    /// The two attention groups for the unified Agent Console queue: questions (Needs You)
-    /// and outputs (Needs Review), each oldest-first so the longest-waiting item leads.
+    /// The single attention bucket for the console's "In flight · needs you" tier:
+    /// all three gate stages (needsApproval ∪ needsInput ∪ needsReview), oldest-first.
     public struct AgentAttention {
-        public let questions: [MustardTask]
-        public let reviews: [MustardTask]
-        /// All three gate stages (needsApproval ∪ needsInput ∪ needsReview) in one
-        /// oldest-first list — the console's "In flight · needs you" tier (F27).
         public let inFlight: [MustardTask]
     }
 
@@ -39,8 +35,6 @@ public enum AgentInbox {
             a.createdAt != b.createdAt ? a.createdAt < b.createdAt : a.uid < b.uid
         }
         return AgentAttention(
-            questions: tasks.filter { $0.stage == .needsInput }.sorted(by: precedes),
-            reviews: tasks.filter { $0.stage == .needsReview }.sorted(by: precedes),
             inFlight: tasks.filter { $0.stage.isGate }.sorted(by: precedes)
         )
     }
