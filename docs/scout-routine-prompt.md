@@ -60,6 +60,16 @@ GROUND + WRITE (per kept email):
   Ticket vs task: ticket_write = DRAFTING A NEW ticket/story. If the email asks Leon to
   check / verify / confirm / review / reply about an EXISTING ticket, use create_task (a
   to-do) or a draft reply — never ticket_write.
+  LABELS: read the thread's actual Gmail labels and list them verbatim in "labels" — this is
+  the ground-truth signal Mustard uses to tell a Jira/Shortcut notification apart from a
+  human email that merely mentions a ticket key (a label only exists on real Jira/Shortcut
+  robot mail, filtered there by a Gmail filter; a human reply is never labelled that way).
+  SOURCE URL: if the "Jira"/"Jira Updates" label is present, use the Jira issue link
+  (https://<workspace>.atlassian.net/browse/<KEY>) if you can find one in the thread. If the
+  "Shortcut Notifications" label is present, use the Shortcut story link
+  (https://app.shortcut.com/<workspace>/story/<id>) from the thread body — never substitute a
+  Jira/Atlassian link for a Shortcut-labelled thread. Otherwise use the Gmail thread link, or
+  null if none is findable.
   Write ONE file: <project folder>/_recs/<gmail-message-id>.json  (sanitize id to
   [A-Za-z0-9._-]; if it exists, SKIP — idempotent). EXACT JSON, these keys only, confidence is
   a number, no prose:
@@ -69,7 +79,8 @@ GROUND + WRITE (per kept email):
     "sourceItemID": "<gmail thread id>",
     "sourceEventID": "<gmail message id>",
     "sourceContext": "<short provenance, e.g. 'App Store Connect · SalesBuddi · app rejected'>",
-    "sourceURL": "<thread link or null>",
+    "sourceURL": "<link per SOURCE URL rule above, or null>",
+    "labels": ["<thread's Gmail labels verbatim, e.g. 'Jira', 'Shortcut Notifications'>"],
     "occurredAt": "<ISO8601 or null>",
     "title": "<short imperative title>",
     "body": "<1-3 sentences: what and why>",

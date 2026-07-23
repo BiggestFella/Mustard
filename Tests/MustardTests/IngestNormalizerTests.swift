@@ -2,9 +2,11 @@ import XCTest
 @testable import MustardKit
 
 final class IngestNormalizerTests: XCTestCase {
-    private func proposal(source: SourceID, context: String, title: String, action: String) -> SourceProposal {
+    private func proposal(source: SourceID, context: String, title: String, action: String,
+                           labels: [String]? = nil, sourceURL: String? = nil) -> SourceProposal {
         SourceProposal(source: source, project: "DL", sourceItemID: "t", sourceEventID: "e",
-                       sourceContext: context, title: title, actionType: action)
+                       sourceContext: context, sourceURL: sourceURL, title: title, actionType: action,
+                       labels: labels)
     }
 
     func test_shortcutPOReviewInTitle_demotesToIgnore() {
@@ -47,5 +49,35 @@ final class IngestNormalizerTests: XCTestCase {
         let out = IngestNormalizer.normalize(p)
         XCTAssertEqual(out.source, .gmail)
         XCTAssertEqual(out.actionType, "fyi")
+    }
+
+    // Labels thread through normalize and take priority over content.
+    func test_shortcutNotificationsLabel_classifiesAsShortcut() {
+        let p = proposal(source: .gmail, context: "no shortcut wording here",
+                         title: "Story assigned", action: "fyi", labels: ["Shortcut Notifications"])
+        XCTAssertEqual(IngestNormalizer.normalize(p).source, .shortcut)
+    }
+
+    func test_jiraLabel_winsOverContentThatLooksLikeShortcut() {
+        let p = proposal(source: .gmail, context: "Shortcut · mentions a story",
+                         title: "x", action: "fyi", labels: ["Jira"])
+        XCTAssertEqual(IngestNormalizer.normalize(p).source, .jira)
+    }
+
+    // Bug: scout occasionally writes a Jira/Atlassian browse link into sourceURL
+    // for a Shortcut-sourced rec — the "Open" link then opens the wrong system.
+    // normalize() must drop a mismatched-host sourceURL rather than pass it through.
+    func test_shortcutSourceWithJiraHostURL_dropsSourceURL() {
+        let p = proposal(source: .gmail, context: "", title: "x", action: "fyi",
+                         labels: ["Shortcut Notifications"],
+                         sourceURL: "https://codeheroes.atlassian.net/browse/DLA-1")
+        XCTAssertNil(IngestNormalizer.normalize(p).sourceURL)
+    }
+
+    func test_shortcutSourceWithShortcutHostURL_keepsSourceURL() {
+        let p = proposal(source: .gmail, context: "", title: "x", action: "fyi",
+                         labels: ["Shortcut Notifications"],
+                         sourceURL: "https://app.shortcut.com/codeheroes/story/123")
+        XCTAssertEqual(IngestNormalizer.normalize(p).sourceURL, "https://app.shortcut.com/codeheroes/story/123")
     }
 }

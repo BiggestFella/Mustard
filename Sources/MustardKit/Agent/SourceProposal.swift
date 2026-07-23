@@ -32,13 +32,17 @@ public struct SourceProposal: Equatable, Sendable, Codable {
     public let confidence: Double
     public let reasoning: String
     public let draft: String
+    /// Gmail thread labels (e.g. "Jira", "Shortcut Notifications"), when the scout
+    /// attached them. Ground-truth source signal — see `SourceClassifier`.
+    public let labels: [String]?
 
     public init(
         source: SourceID, project: String = "", sourceItemID: String, sourceEventID: String,
         sourceContext: String = "", sourceURL: String? = nil, occurredAt: Date? = nil,
         title: String, body: String = "", actionType: String = "vault_note",
         originalSource: String? = nil,
-        confidence: Double = 0.5, reasoning: String = "", draft: String = ""
+        confidence: Double = 0.5, reasoning: String = "", draft: String = "",
+        labels: [String]? = nil
     ) {
         self.source = source
         self.project = project
@@ -54,6 +58,7 @@ public struct SourceProposal: Equatable, Sendable, Codable {
         self.confidence = confidence
         self.reasoning = reasoning
         self.draft = draft
+        self.labels = labels
     }
 }
 
@@ -78,7 +83,20 @@ public extension SourceProposal {
             source: source, project: project, sourceItemID: sourceItemID,
             sourceEventID: sourceEventID, sourceContext: sourceContext, sourceURL: sourceURL,
             occurredAt: occurredAt, title: title, body: body, actionType: actionType,
-            originalSource: originalSource, confidence: confidence, reasoning: reasoning, draft: draft
+            originalSource: originalSource, confidence: confidence, reasoning: reasoning, draft: draft,
+            labels: labels
+        )
+    }
+
+    /// A copy with only `sourceURL` overridden — used to drop a mismatched-host link
+    /// (see `SourceURLGuard`) without disturbing anything else.
+    func withSourceURL(_ sourceURL: String?) -> SourceProposal {
+        SourceProposal(
+            source: source, project: project, sourceItemID: sourceItemID,
+            sourceEventID: sourceEventID, sourceContext: sourceContext, sourceURL: sourceURL,
+            occurredAt: occurredAt, title: title, body: body, actionType: actionType,
+            originalSource: originalSource, confidence: confidence, reasoning: reasoning, draft: draft,
+            labels: labels
         )
     }
 

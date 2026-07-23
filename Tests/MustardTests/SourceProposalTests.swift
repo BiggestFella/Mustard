@@ -122,4 +122,35 @@ final class SourceProposalTests: XCTestCase {
         XCTAssertEqual(out.reasoning, "r")
         XCTAssertEqual(out.draft, "d")
     }
+
+    // The scout's Gmail thread labels are the ground-truth source signal (see
+    // SourceClassifier); the field must round-trip through decode and reclassify.
+    func test_sourceProposal_decodesLabelsFromRoutineJSON() throws {
+        let json = #"{"source":"gmail","project":"DL","sourceItemID":"t","sourceEventID":"e","sourceContext":"","labels":["Shortcut Notifications","Inbox"],"title":"x","body":"","actionType":"fyi","confidence":0.5,"reasoning":"","draft":""}"#
+        let p = try JSONDecoder().decode(SourceProposal.self, from: Data(json.utf8))
+        XCTAssertEqual(p.labels, ["Shortcut Notifications", "Inbox"])
+    }
+
+    func test_sourceProposal_decodesWhenLabelsAbsent() throws {
+        let json = #"{"source":"gmail","project":"DL","sourceItemID":"t","sourceEventID":"e","sourceContext":"","title":"x","body":"","actionType":"fyi","confidence":0.5,"reasoning":"","draft":""}"#
+        let p = try JSONDecoder().decode(SourceProposal.self, from: Data(json.utf8))
+        XCTAssertNil(p.labels)
+    }
+
+    func test_reclassified_preservesLabels() {
+        let p = SourceProposal(source: .gmail, project: "DL", sourceItemID: "t", sourceEventID: "e",
+                               title: "x", actionType: "fyi", labels: ["Jira Updates"])
+        let out = p.reclassified(source: .jira, actionType: "create_task")
+        XCTAssertEqual(out.labels, ["Jira Updates"])
+    }
+
+    func test_withSourceURL_overridesOnlyURL_preservesEverythingElse() {
+        let p = SourceProposal(source: .shortcut, project: "DL", sourceItemID: "t", sourceEventID: "e",
+                               sourceURL: "https://browse.jira.com/DLA-1", title: "T", actionType: "create_task")
+        let out = p.withSourceURL(nil)
+        XCTAssertNil(out.sourceURL)
+        XCTAssertEqual(out.source, .shortcut)
+        XCTAssertEqual(out.title, "T")
+        XCTAssertEqual(out.actionType, "create_task")
+    }
 }
