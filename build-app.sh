@@ -7,11 +7,18 @@ OUT="$DIR/build"
 APP="$OUT/Mustard.app"
 
 swift build -c release --package-path "$DIR"
-BIN="$(swift build -c release --package-path "$DIR" --show-bin-path)/Mustard"
+BIN_DIR="$(swift build -c release --package-path "$DIR" --show-bin-path)"
+BIN="$BIN_DIR/Mustard"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Mustard"
+
+# MustardKit's Assets.xcassets (brand-mark logos) compile into a resource bundle
+# next to the binary; Bundle.module looks for it under Contents/Resources.
+for bundle in "$BIN_DIR"/*.bundle; do
+  [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"
+done
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

@@ -30,8 +30,7 @@ struct SourcePanelView: View {
     private func chrome(_ link: SourceLink) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: link.symbol)
-                    .font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.agent)
+                SourceLogo(source: link.id, size: 15)
                 Text(link.label)
                     .font(Theme.Fonts.title).foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1).truncationMode(.tail)

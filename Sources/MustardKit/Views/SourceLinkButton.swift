@@ -30,8 +30,7 @@ private struct SourceLinkButtonInner: View {
 
     var body: some View {
         Button { open() } label: {
-            Image(systemName: link.symbol).font(.system(size: 12))
-                .foregroundStyle(Theme.Palette.agent)
+            SourceLogo(source: link.id, size: 14)
         }
         .buttonStyle(.plain)
         .help("Open source — \(link.sourceName)")

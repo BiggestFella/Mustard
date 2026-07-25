@@ -59,11 +59,14 @@ struct MobileRecommendationSheet: View {
                 Text(badge.label.uppercased())
                     .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             } else {
-                Label(badge.label, systemImage: badge.symbol)
-                    .labelStyle(.titleAndIcon).font(.caption.weight(.medium))
-                    .foregroundStyle(Color(hex: badge.fgHex))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Color(hex: badge.bgHex), in: Capsule())
+                HStack(spacing: 4) {
+                    SourceLogo(source: badge.id, size: 12)
+                    Text(badge.label)
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Color(hex: badge.fgHex))
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Color(hex: badge.bgHex), in: Capsule())
             }
             if !rec.sourceContext.isEmpty {
                 Text("· \(rec.sourceContext)").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)

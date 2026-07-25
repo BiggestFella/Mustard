@@ -331,11 +331,14 @@ struct ProvenancePill: View {
                     .font(.system(size: 10, weight: .semibold)).tracking(0.06)
                     .foregroundStyle(Theme.Palette.textTertiary)
             } else {
-                Label(badge.label, systemImage: badge.symbol)
-                    .labelStyle(.titleAndIcon).font(Theme.Fonts.caption.weight(.medium))
-                    .foregroundStyle(Color(hex: badge.fgHex))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Color(hex: badge.bgHex), in: Capsule())
+                HStack(spacing: 4) {
+                    SourceLogo(source: badge.id, size: 13)
+                    Text(badge.label)
+                }
+                .font(Theme.Fonts.caption.weight(.medium))
+                .foregroundStyle(Color(hex: badge.fgHex))
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Color(hex: badge.bgHex), in: Capsule())
             }
             if !rec.sourceContext.isEmpty {
                 Text("· \(rec.sourceContext)").font(Theme.Fonts.meta)

@@ -169,8 +169,17 @@ public enum Theme {
         /// Gesture tracking a finger (drag snap-back, cancel).
         public static let drag = Animation.spring(response: 0.32, dampingFraction: 0.7)
 
+        /// Small state changes settling into place (hover lift, selection, toggles).
+        public static let settle = Animation.snappy(duration: 0.16)
+
         /// Layout restacking after an item leaves (deck cards, list reflow).
-        public static let settle = Animation.spring(response: 0.34, dampingFraction: 0.82)
+        public static let reflow = Animation.spring(response: 0.34, dampingFraction: 0.82)
+
+        /// Content expanding or collapsing (drawers, disclosure, trays).
+        public static let expand = Animation.snappy(duration: 0.18)
+
+        /// Menus and popovers arriving (slash menu, ⌘K).
+        public static let pop = Animation.spring(duration: 0.22)
     }
 
     public enum Fonts {
@@ -232,17 +241,6 @@ public enum Theme {
             case .pop: return 12
             }
         }
-    }
-
-    // MARK: Motion — canonical animation tokens (one feel across the app)
-
-    public enum Motion {
-        /// Small state changes settling into place (hover lift, selection).
-        public static let settle = Animation.snappy(duration: 0.16)
-        /// Content expanding or collapsing (drawers, disclosure, trays).
-        public static let expand = Animation.snappy(duration: 0.18)
-        /// Menus and popovers arriving (slash menu, ⌘K).
-        public static let pop = Animation.spring(duration: 0.22)
     }
 
     // MARK: Metrics — radius scale (codifies the hand-used 6/7/10/12)
