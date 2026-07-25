@@ -37,26 +37,32 @@ public struct TodayView: View {
     private var progress: (done: Int, total: Int) { DayPlanner.dayProgress(allTasks, day: today) }
     private var nudgeCount: Int { AgentInbox.waitingCount(recommendations: recommendations, tasks: allTasks) }
 
-    /// The chronological timeline, minus tasks already pinned in FOCUS (BAK-247) so a
-    /// starred task isn't shown twice. FOCUS is the single home for pinned tasks.
-    private var scheduled: [MustardTask] { RitualPlanner.timeline(allTasks, day: today) }
+    /// The forward-flowing spine: today (always shown) plus upcoming days that carry
+    /// items. Events are empty until Google OAuth is wired; the rail then lights up with
+    /// no further view work. FOCUS-pinned tasks are excluded from today (BAK-247).
+    private var spine: [SpineDay] {
+        TimelineSpine.build(tasks: allTasks, events: [], reference: today)
+    }
+    /// Today's item count is used for the empty-state guard and the summary line.
+    private var todayItems: [AgendaItem] { spine.first(where: { $0.label == .today })?.items ?? [] }
     private var unscheduled: [MustardTask] { DayPlanner.unscheduled(allTasks) }
 
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                summaryLine
                 progressBar
                 ritualBanner
                 agentNudge
                 focusSection
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(scheduled) { task in
-                        TimelineRow(task: task, onToggleDone: { toggle(task) }, onOpen: { selectedTask = task })
-                        Divider().overlay(Theme.Palette.hairline)
-                    }
-                }
-                if scheduled.isEmpty && focusTasks.isEmpty {
+                TimelineSpineView(
+                    days: spine,
+                    now: today,
+                    onToggleDone: { toggle($0) },
+                    onOpen: { selectedTask = $0 }
+                )
+                if todayItems.isEmpty && focusTasks.isEmpty {
                     // Warm empty state (Craft pass Phase 1) — points at the capture
                     // field directly below it. Guards on FOCUS too so a day whose only
                     // tasks are pinned above doesn't read as "nothing scheduled" (BAK-247).
@@ -254,6 +260,33 @@ public struct TodayView: View {
             .onTapGesture(perform: onPlan)
             .padding(.bottom, 16)
         }
+    }
+
+    /// Calm one-liner under the header: "N tasks · agent on M" (events appended once the
+    /// calendar source is wired). Zero parts are omitted; nothing shows on an empty day.
+    @ViewBuilder private var summaryLine: some View {
+        if !summaryParts.isEmpty {
+            Text(summaryParts.joined(separator: " · "))
+                .font(Theme.Fonts.meta)
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .padding(.bottom, 10)
+        }
+    }
+
+    /// Builds the summaryLine parts ("N tasks", "agent on M") from today's items. Pulled
+    /// out of the @ViewBuilder body above: mutating statements guarded by a bare `if`
+    /// are transformed by the ViewBuilder DSL and must themselves conform to `View`,
+    /// which a `[String].append` call does not — so the array-building lives here instead.
+    private var summaryParts: [String] {
+        let items = todayItems
+        let taskCount = items.filter { if case .task = $0.kind { return true }; return false }.count
+        let agentCount = items.filter {
+            if case let .task(t) = $0.kind { return t.owner == .agent }; return false
+        }.count
+        var parts: [String] = []
+        if taskCount > 0 { parts.append("\(taskCount) task\(taskCount == 1 ? "" : "s")") }
+        if agentCount > 0 { parts.append("agent on \(agentCount)") }
+        return parts
     }
 
     /// Thin day-progress bar — "N of M done" over today's scheduled tasks.
