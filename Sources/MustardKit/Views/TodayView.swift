@@ -196,9 +196,10 @@ public struct TodayView: View {
         return parts.isEmpty ? "Set up today in under a minute" : parts.joined(separator: " · ")
     }
 
-    /// FOCUS pins — today's starred tasks, above the chronological timeline. These
-    /// are FILTERED OUT of the timeline below (`RitualPlanner.timeline`, BAK-247) so a
-    /// pinned task shows exactly once, here, rather than duplicated in the list.
+    /// FOCUS pins — today's starred tasks, above the chronological spine. These are
+    /// excluded from the spine's TODAY section (`TimelineSpine.build` filters out
+    /// `focusOnDay` UIDs, BAK-247) so a pinned task shows exactly once, here, rather
+    /// than duplicated on the rail below.
     @ViewBuilder private var focusSection: some View {
         let focus = focusTasks
         if !focus.isEmpty {
