@@ -27,8 +27,13 @@ public struct NotesView: View {
     /// offer (Task 9). Non-nil presents the alert; the target is created in the
     /// currently-open note's project.
     @State private var pendingWikilinkTarget: String?
+    /// A note handed in from outside (the ⌘⇧F search palette) for this surface to
+    /// select — consumed then cleared, mirroring RootView's notch-task handoff.
+    @Binding private var pendingOpen: NoteRef?
 
-    public init() {}
+    public init(pendingOpen: Binding<NoteRef?> = .constant(nil)) {
+        self._pendingOpen = pendingOpen
+    }
 
     /// The project the create sheet is currently targeting. `SourceConfig` isn't
     /// Identifiable, so key `.sheet(item:)` by the project string.
@@ -54,6 +59,14 @@ public struct NotesView: View {
         }
         .sheet(item: $creating) { target in
             createNoteSheet(target)
+        }
+        // Consume a search-palette selection: setting `selected` flushes any open
+        // note's save-on-switch, same as sidebar navigation. `initial: true` covers
+        // the handoff landing before this surface is on screen (⌘⇧F from another tab).
+        .onChange(of: pendingOpen, initial: true) { _, ref in
+            guard let ref else { return }
+            selected = ref
+            pendingOpen = nil
         }
     }
 
