@@ -327,6 +327,13 @@ public struct NotesView: View {
                 } else {
                     self.pendingWikilinkTarget = target
                 }
+            },
+            // Autocomplete's Create row (polish pack D): write + reindex WITHOUT
+            // navigating — same reasoning as the slash menu's Sub-page command
+            // (yanking the caret mid-typing would be hostile).
+            onCreateNote: { title in
+                _ = self.writeNote(title: title, project: selected.project,
+                                   workingDirectory: selected.workingDirectory)
             }
         )
         .alert(

@@ -22,6 +22,9 @@ struct NoteEditorView: View {
     /// Handles a wikilink click: navigate to the target, or offer to create it
     /// when unresolved. NotesView owns the decision.
     let onWikilinkTap: (String) -> Void
+    /// Creates a note by title WITHOUT navigating (autocomplete's Create row —
+    /// the caret must stay put mid-typing). NotesView's writeNote, threaded through.
+    var onCreateNote: (String) -> Void = { _ in }
     @Environment(NoteIndexService.self) private var noteIndex
     @Environment(\.scenePhase) private var scenePhase
 
@@ -35,6 +38,10 @@ struct NoteEditorView: View {
     /// as `slashMenu` — the coordinator writes it on selection change, this
     /// view renders the overlay.
     @State private var formatBar: InlineFormatBarState?
+    /// Wikilink hover-preview presentation (polish pack C): same pattern.
+    @State private var hoverLink: WikilinkHoverState?
+    /// `[[` autocomplete presentation (polish pack D): same pattern.
+    @State private var autocomplete: WikilinkAutocompleteState?
     /// Moveable-block geometry from the layout manager — drives the hover gutter.
     @State private var blockRects: [MarkdownBlockRect] = []
     /// Imperative bridge overlay clicks/drags use to reach the coordinator.
@@ -59,6 +66,10 @@ struct NoteEditorView: View {
                     onWikilinkTap: onWikilinkTap,
                     slashMenu: $slashMenu,
                     formatBar: $formatBar,
+                    hoverLink: $hoverLink,
+                    autocomplete: $autocomplete,
+                    noteTitles: entries.map(\.title),
+                    onCreateNote: onCreateNote,
                     onBlockRectsChange: { blockRects = $0 },
                     proxy: editorProxy
                 )
@@ -77,6 +88,8 @@ struct NoteEditorView: View {
                 }
                 .overlay(alignment: .topLeading) { slashMenuOverlay }
                 .overlay(alignment: .topLeading) { formatBarOverlay }
+                .overlay(alignment: .topLeading) { autocompleteOverlay }
+                .overlay(alignment: .topLeading) { hoverPreviewOverlay }
                 // Keep the editor's overlays (menu near the bottom edge) above
                 // the later BacklinksPanel sibling, which would otherwise draw
                 // over them.
@@ -93,8 +106,10 @@ struct NoteEditorView: View {
         // that would otherwise be dropped when switching notes.
         .onChange(of: ref) { oldRef, _ in
             save(to: oldRef, content: text, ifDifferentFrom: diskText)
-            slashMenu = nil   // a half-typed trigger must not survive a note switch
-            formatBar = nil   // a stale selection toolbar must not survive a note switch
+            slashMenu = nil    // a half-typed trigger must not survive a note switch
+            formatBar = nil    // a stale selection toolbar must not survive a note switch
+            hoverLink = nil    // a preview of the OLD note's link must not survive either
+            autocomplete = nil // nor a half-typed [[ query
         }
         // Autosave when the editor leaves the hierarchy — switching away from the
         // Notes tab or closing the detail pane tears the view down without firing
@@ -223,6 +238,69 @@ struct NoteEditorView: View {
             }
         }
         .animation(Theme.Motion.pop, value: formatBar != nil)
+    }
+
+    /// The caret-anchored `[[` title picker (polish pack D), positioned like the
+    /// slash menu; keyboard selection lives in the coordinator, clicks route back
+    /// through the proxy's undo-safe splice.
+    @ViewBuilder
+    private var autocompleteOverlay: some View {
+        ZStack(alignment: .topLeading) {
+            if let menu = autocomplete {
+                WikilinkAutocompleteView(
+                    query: menu.query,
+                    selectedIndex: menu.selectedIndex,
+                    titles: entries.map(\.title),
+                    onPick: { editorProxy.pickWikilink($0) },
+                    onCreate: { editorProxy.createWikilinkNote($0) }
+                )
+                .offset(x: menu.anchor.minX, y: menu.anchor.maxY + 6)
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .topLeading)))
+            }
+        }
+        .animation(Theme.Motion.pop, value: autocomplete != nil)
+    }
+
+    /// The hovered-wikilink peek (polish pack C): a resolved target shows its
+    /// title + first body lines from the index's contentSnapshot; a dangling one
+    /// shows a quiet create hint. Draw-only — clicks still belong to the editor.
+    @ViewBuilder
+    private var hoverPreviewOverlay: some View {
+        ZStack(alignment: .topLeading) {
+            if let hover = hoverLink {
+                Group {
+                    if let target = hover.resolved,
+                       let entry = entries.first(where: { $0.relativePath == target.relativePath }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(entry.title)
+                                .font(Theme.Fonts.body.weight(.medium))
+                                .foregroundStyle(Theme.Palette.textPrimary)
+                                .lineLimit(1)
+                            Text(NotePreview.excerpt(content: entry.contentSnapshot, maxLines: 4))
+                                .font(Theme.Fonts.meta)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .lineLimit(4)
+                        }
+                    } else {
+                        Text("Unresolved — click to create “\(hover.target)”")
+                            .font(Theme.Fonts.meta)
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: 320, alignment: .leading)
+                .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: Theme.Metrics.rLg))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Metrics.rLg)
+                        .stroke(Theme.Palette.hairline, lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.10), radius: 8, y: 4)
+                .offset(x: hover.anchor.minX, y: hover.anchor.maxY + 6)
+                .transition(.opacity)
+                .allowsHitTesting(false)   // never intercept the click that follows a hover
+            }
+        }
+        .animation(Theme.Motion.pop, value: hoverLink != nil)
     }
 
     private var missingState: some View {
