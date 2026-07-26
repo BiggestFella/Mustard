@@ -33,4 +33,31 @@ final class WikilinkAutocompleteTests: XCTestCase {
     func test_empty_query_returns_all_titles_unchanged() {
         XCTAssertEqual(WikilinkAutocomplete.candidates(query: "", titles: ["B", "A"]), ["B", "A"])
     }
+
+    // MARK: Stem-targeted insertion (final-review #1/#2 — links resolve by stem)
+
+    func test_rank_orders_by_title_and_keeps_stems() {
+        let cands = [
+            WikilinkAutocomplete.LinkCandidate(title: "Standup 2026-07-20", stem: "2026-07-20-standup"),
+            WikilinkAutocomplete.LinkCandidate(title: "Roadmap", stem: "Roadmap"),
+        ]
+        let ranked = WikilinkAutocomplete.rank(query: "stand", candidates: cands)
+        XCTAssertEqual(ranked.map(\.stem), ["2026-07-20-standup"])
+    }
+
+    func test_insertion_uses_bare_stem_when_title_matches() {
+        let c = WikilinkAutocomplete.LinkCandidate(title: "Roadmap", stem: "Roadmap")
+        XCTAssertEqual(WikilinkAutocomplete.insertion(for: c), "[[Roadmap]]")
+    }
+
+    func test_insertion_aliases_title_when_stem_differs() {
+        let c = WikilinkAutocomplete.LinkCandidate(title: "Standup 2026-07-20", stem: "2026-07-20-standup")
+        XCTAssertEqual(WikilinkAutocomplete.insertion(for: c),
+                       "[[2026-07-20-standup|Standup 2026-07-20]]")
+    }
+
+    func test_stem_of_path() {
+        XCTAssertEqual(WikilinkAutocomplete.stem(ofPath: "notes/guides/Setup.md"), "Setup")
+        XCTAssertEqual(WikilinkAutocomplete.stem(ofPath: "Top.md"), "Top")
+    }
 }

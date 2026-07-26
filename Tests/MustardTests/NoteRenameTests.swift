@@ -81,6 +81,17 @@ final class NoteRenameTests: XCTestCase {
         XCTAssertTrue(out.contains("# Fresh Name"))
     }
 
+    func test_plan_rewrites_self_links_in_renamed_note() {
+        let plan = NoteRename.plan(
+            oldRelativePath: "notes/Old.md",
+            oldContent: "# Old\n\nsee [[Old#Notes]] above\n",
+            newTitle: "New",
+            others: [],
+            existingPaths: [])
+        XCTAssertTrue(plan.renamedNoteContent.contains("[[New#Notes]]"),
+                      "a self-link must follow the rename")
+    }
+
     func test_plan_composes_newpath_retitle_and_linkedits() {
         let others = [
             (relativePath: "notes/Ref.md", content: "see [[Old]] here"),

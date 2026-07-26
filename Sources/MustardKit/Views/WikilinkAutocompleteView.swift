@@ -9,24 +9,24 @@ import SwiftUI
 struct WikilinkAutocompleteView: View {
     let query: String
     let selectedIndex: Int
-    let titles: [String]
-    let onPick: (String) -> Void
+    let candidates: [WikilinkAutocomplete.LinkCandidate]
+    let onPick: (WikilinkAutocomplete.LinkCandidate) -> Void
     let onCreate: (String) -> Void
 
     private static let menuWidth: CGFloat = 260
     private static let menuMaxHeight: CGFloat = 300
 
     var body: some View {
-        let candidates = WikilinkAutocomplete.candidates(query: query, titles: titles)
+        let candidates = WikilinkAutocomplete.rank(query: query, candidates: self.candidates)
         let showCreate = !query.trimmingCharacters(in: .whitespaces).isEmpty
         let rowCount = candidates.count + (showCreate ? 1 : 0)
         let clampedSelection = min(selectedIndex, rowCount - 1)
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(candidates.enumerated()), id: \.offset) { index, title in
-                        row(icon: "doc.text", label: title,
-                            isSelected: index == clampedSelection) { onPick(title) }
+                    ForEach(Array(candidates.enumerated()), id: \.offset) { index, candidate in
+                        row(icon: "doc.text", label: candidate.title,
+                            isSelected: index == clampedSelection) { onPick(candidate) }
                             .id(index)
                     }
                     if showCreate {

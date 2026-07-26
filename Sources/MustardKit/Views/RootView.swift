@@ -125,7 +125,8 @@ public struct RootView: View {
                 Button("") { sourcePanel.isPresented.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                 // Hidden trigger: ⌘⇧F opens full-text note search (polish pack B).
-                Button("") { showNoteSearch.toggle() }
+                // Closes the ⌘K bar first — the two palettes must never stack.
+                Button("") { showCommandBar = false; showNoteSearch.toggle() }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
             }
             .opacity(0)

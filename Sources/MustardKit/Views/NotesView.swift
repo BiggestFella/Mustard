@@ -362,13 +362,18 @@ public struct NotesView: View {
 
     private func executeRename(_ target: RenameTarget, newTitle: String, reselect: Bool) {
         let io = FileVaultIO(rootPath: target.ref.workingDirectory)
-        // Read the live file, not the index snapshot — disk (post-flush) is the
-        // truth the rename must transform.
+        // Read LIVE files, never index snapshots — this vault has three writers
+        // (Obsidian, the sweep agent, the connected worker) and the index refreshes
+        // on a 300s tick, so a snapshot-based rewrite could clobber up to ~5 min
+        // of external edits in every linking note (final-review #3). A rename is
+        // rare; a whole-project read is cheap at that frequency.
         guard let oldContent = io.read(target.ref.relativePath) else { return }
         let projectEntries = entries.filter { $0.project == target.ref.project }
-        let others = projectEntries
+        let others: [(relativePath: String, content: String)] = projectEntries
             .filter { $0.relativePath != target.ref.relativePath }
-            .map { (relativePath: $0.relativePath, content: $0.contentSnapshot) }
+            .compactMap { entry in
+                io.read(entry.relativePath).map { (relativePath: entry.relativePath, content: $0) }
+            }
         // Exclude self so a pure retitle of the same note can't collide-suffix.
         let existing = others.map(\.relativePath)
         let plan = NoteRename.plan(oldRelativePath: target.ref.relativePath,
@@ -457,10 +462,11 @@ public struct NotesView: View {
             },
             // Autocomplete's Create row (polish pack D): write + reindex WITHOUT
             // navigating — same reasoning as the slash menu's Sub-page command
-            // (yanking the caret mid-typing would be hostile).
+            // (yanking the caret mid-typing would be hostile). Returns the created
+            // path so the splice can link by ITS stem (sanitization/collision).
             onCreateNote: { title in
-                _ = self.writeNote(title: title, project: selected.project,
-                                   workingDirectory: selected.workingDirectory)
+                self.writeNote(title: title, project: selected.project,
+                               workingDirectory: selected.workingDirectory)
             }
         )
         .alert(

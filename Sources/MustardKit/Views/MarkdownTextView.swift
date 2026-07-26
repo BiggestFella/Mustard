@@ -79,7 +79,9 @@ final class MarkdownEditorProxy {
 
     // MARK: Wikilink autocomplete (Notes polish pack D)
 
-    func pickWikilink(_ title: String) { coordinator?.performWikilinkPick(title) }
+    func pickWikilink(_ candidate: WikilinkAutocomplete.LinkCandidate) {
+        coordinator?.performWikilinkPick(candidate)
+    }
     func createWikilinkNote(_ query: String) { coordinator?.performWikilinkCreate(query) }
 
     // MARK: Block actions (Phase 3 / BAK-252 — gutter context menu)
@@ -147,12 +149,15 @@ struct MarkdownTextView: NSViewRepresentable {
     var hoverLink: Binding<WikilinkHoverState?> = Binding<WikilinkHoverState?>.constant(nil)
     /// `[[` autocomplete popup state (polish pack D) — same ownership pattern.
     var autocomplete: Binding<WikilinkAutocompleteState?> = Binding<WikilinkAutocompleteState?>.constant(nil)
-    /// Same-project note titles for autocomplete candidates (passed by NoteEditorView
-    /// from its entries; the coordinator ranks them via `WikilinkAutocomplete`).
-    var noteTitles: [String] = []
+    /// Same-project autocomplete candidates: display title + the filename stem
+    /// links actually resolve by (passed by NoteEditorView from its entries; the
+    /// coordinator ranks them via `WikilinkAutocomplete.rank`).
+    var noteCandidates: [WikilinkAutocomplete.LinkCandidate] = []
     /// Creates a note titled by the autocomplete query WITHOUT navigating (the
     /// caret must stay put mid-typing) — NotesView's writeNote, threaded through.
-    var onCreateNote: (String) -> Void = { _ in }
+    /// Returns the created relativePath so the splice can target ITS stem (a
+    /// sanitized or collision-suffixed filename diverges from the typed title).
+    var onCreateNote: (String) -> String? = { _ in nil }
     /// Moveable-block geometry publication for the hover gutter (2b Task 9).
     var onBlockRectsChange: ([MarkdownBlockRect]) -> Void = { _ in }
     var proxy: MarkdownEditorProxy? = nil
@@ -895,8 +900,8 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             if var menu = parent.autocomplete.wrappedValue {
-                let candidates = WikilinkAutocomplete.candidates(query: menu.query,
-                                                                 titles: parent.noteTitles)
+                let candidates = WikilinkAutocomplete.rank(query: menu.query,
+                                                           candidates: parent.noteCandidates)
                 let rowCount = autocompleteRowCount(for: menu.query)
                 guard rowCount > 0 else { return false }
 
@@ -1011,21 +1016,23 @@ struct MarkdownTextView: NSViewRepresentable {
             )
         }
 
-        /// Total keyboard rows: ranked title candidates + the trailing "Create"
-        /// row (shown only for a non-blank query). One count, owned here, so the
+        /// Total keyboard rows: ranked candidates + the trailing "Create" row
+        /// (shown only for a non-blank query). One count, owned here, so the
         /// coordinator's ↑/↓/⏎ and the overlay's rendering can't drift apart —
         /// `WikilinkAutocompleteView` derives its rows from the same functions.
         private func autocompleteRowCount(for query: String) -> Int {
-            let candidates = WikilinkAutocomplete.candidates(query: query, titles: parent.noteTitles)
+            let candidates = WikilinkAutocomplete.rank(query: query, candidates: parent.noteCandidates)
             let hasCreateRow = !query.trimmingCharacters(in: .whitespaces).isEmpty
             return candidates.count + (hasCreateRow ? 1 : 0)
         }
 
-        /// Commits a picked title: replaces the "[["+query trigger with the full
-        /// `[[Title]]` through the SAME undo-safe channel as slash commands.
-        func performWikilinkPick(_ title: String) {
+        /// Commits a pick: replaces the "[["+query trigger with the candidate's
+        /// STEM-targeted link (`[[stem]]` / `[[stem|title]]` — links resolve by
+        /// filename stem, never by display title) through the SAME undo-safe
+        /// channel as slash commands.
+        func performWikilinkPick(_ candidate: WikilinkAutocomplete.LinkCandidate) {
             guard let textView, let state = parent.autocomplete.wrappedValue else { return }
-            let insertion = "[[\(title)]]"
+            let insertion = WikilinkAutocomplete.insertion(for: candidate)
             isPerformingEdit = true
             textView.breakUndoCoalescing()
             textView.insertText(insertion, replacementRange: state.triggerRange)
@@ -1038,14 +1045,17 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         /// The "Create '<query>'" row: creates the note (no navigation — the caret
-        /// must stay here) and links to it. File creation IS outside the undo
-        /// group, same trade-off as create-from-dangling: ⌘Z reverts the text and
-        /// the created note simply dangles until linked again or cleaned up.
+        /// must stay here) and links to it BY THE CREATED FILE'S STEM — sanitization
+        /// or a collision suffix can make the filename diverge from the typed title,
+        /// and splicing the raw title would then link the WRONG (pre-existing) note.
+        /// File creation IS outside the undo group, same trade-off as
+        /// create-from-dangling: ⌘Z reverts the text and the created note dangles.
         func performWikilinkCreate(_ query: String) {
             let title = query.trimmingCharacters(in: .whitespaces)
             guard !title.isEmpty else { return }
-            parent.onCreateNote(title)
-            performWikilinkPick(title)
+            let createdPath = parent.onCreateNote(title)
+            let stem = createdPath.map(WikilinkAutocomplete.stem(ofPath:)) ?? title
+            performWikilinkPick(WikilinkAutocomplete.LinkCandidate(title: title, stem: stem))
         }
 
         // MARK: Inline format toolbar (Phase 4 / BAK-253 — floating selection toolbar)

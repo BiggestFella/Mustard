@@ -23,8 +23,9 @@ struct NoteEditorView: View {
     /// when unresolved. NotesView owns the decision.
     let onWikilinkTap: (String) -> Void
     /// Creates a note by title WITHOUT navigating (autocomplete's Create row —
-    /// the caret must stay put mid-typing). NotesView's writeNote, threaded through.
-    var onCreateNote: (String) -> Void = { _ in }
+    /// the caret must stay put mid-typing). NotesView's writeNote, threaded
+    /// through; returns the created relativePath so the link targets ITS stem.
+    var onCreateNote: (String) -> String? = { _ in nil }
     @Environment(NoteIndexService.self) private var noteIndex
     @Environment(\.scenePhase) private var scenePhase
 
@@ -54,6 +55,14 @@ struct NoteEditorView: View {
 
     private var isDirty: Bool { text != diskText }
 
+    /// Autocomplete candidates: display title + the filename stem links resolve by.
+    private var linkCandidates: [WikilinkAutocomplete.LinkCandidate] {
+        entries.map {
+            WikilinkAutocomplete.LinkCandidate(
+                title: $0.title, stem: WikilinkAutocomplete.stem(ofPath: $0.relativePath))
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -68,7 +77,7 @@ struct NoteEditorView: View {
                     formatBar: $formatBar,
                     hoverLink: $hoverLink,
                     autocomplete: $autocomplete,
-                    noteTitles: entries.map(\.title),
+                    noteCandidates: linkCandidates,
                     onCreateNote: onCreateNote,
                     onBlockRectsChange: { blockRects = $0 },
                     proxy: editorProxy
@@ -250,7 +259,7 @@ struct NoteEditorView: View {
                 WikilinkAutocompleteView(
                     query: menu.query,
                     selectedIndex: menu.selectedIndex,
-                    titles: entries.map(\.title),
+                    candidates: linkCandidates,
                     onPick: { editorProxy.pickWikilink($0) },
                     onCreate: { editorProxy.createWikilinkNote($0) }
                 )

@@ -24,10 +24,14 @@ struct NoteSearchView: View {
     }
 
     private var hits: [NoteSearchHit] {
-        NoteSearch.match(
-            entries: entries.map {
-                NoteSearchEntry(project: $0.project, relativePath: $0.relativePath,
-                                title: $0.title, content: $0.contentSnapshot)
+        // Only projects we can actually open (enabled + working directory) —
+        // a hit that Enter/click silently can't navigate to is worse than no hit.
+        let openable = workingDir
+        return NoteSearch.match(
+            entries: entries.compactMap {
+                guard openable[$0.project] != nil else { return nil }
+                return NoteSearchEntry(project: $0.project, relativePath: $0.relativePath,
+                                       title: $0.title, content: $0.contentSnapshot)
             },
             query: query)
     }

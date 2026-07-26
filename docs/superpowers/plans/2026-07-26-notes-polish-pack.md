@@ -1131,3 +1131,24 @@ Note for Leon: right-click a note in the sidebar → Rename… (updates its titl
 ## Out of scope (do not build here)
 
 Neighborhood / typed relationships / graph (slice 2); rich rendering (code highlighting, LaTeX, image thumbnails); git version history; iOS view wiring (logic is shared and ready); fuzzy search scoring; move-between-folders drag; tag browsing.
+
+---
+
+## Post-review amendments (2026-07-27)
+
+The final whole-branch review corrected one plan defect and two integration gaps
+(implemented on the branch; recorded here so the plan matches what shipped):
+
+1. **Autocomplete splices STEMS, not titles** (Task 7/8 as originally written was
+   wrong): links resolve by filename stem, so candidates carry `(title, stem)`
+   (`WikilinkAutocomplete.LinkCandidate`, ranked by `rank`), and a pick splices
+   `[[stem]]` / `[[stem|title]]` via `WikilinkAutocomplete.insertion(for:)`. The
+   Create row threads `writeNote`'s returned path back and links by ITS stem.
+2. **Rename reads live files, not index snapshots** (Task 11): the vault has
+   three writers and a 300s reindex tick — `executeRename` now `io.read`s every
+   candidate note at execution time so a stale snapshot can't clobber external edits.
+3. **`NoteRename.plan` also rewrites self-links** inside the renamed note.
+
+Deferred to follow-up: surfacing rename/delete IO failures to the user (currently
+silent no-ops with safety snapshots), and an explicit editor-flush hook instead of
+the unmount-then-async ordering in `performRename`/`performDelete`.

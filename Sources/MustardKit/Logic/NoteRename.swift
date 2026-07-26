@@ -39,8 +39,13 @@ public enum NoteRename {
                 edits.append(LinkEdit(relativePath: note.relativePath, newContent: rewritten))
             }
         }
+        // The renamed note's own content: retitle, then rewrite SELF-links too
+        // ([[Old]] inside Old.md dangles after the move otherwise — final-review #5).
+        let renamedContent = rewrite(content: retitle(content: oldContent, newTitle: newTitle),
+                                     resolve: resolve, oldPath: oldRelativePath,
+                                     newTarget: newTarget)
         return Plan(oldRelativePath: oldRelativePath, newRelativePath: newRelativePath,
-                    renamedNoteContent: retitle(content: oldContent, newTitle: newTitle),
+                    renamedNoteContent: renamedContent,
                     linkEdits: edits)
     }
 
