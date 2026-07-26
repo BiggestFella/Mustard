@@ -17,11 +17,17 @@ public enum NoteRename {
         public let linkEdits: [LinkEdit]
     }
 
+    /// `existingPaths` MUST exclude `oldRelativePath` (the caller drops it), so a
+    /// pure retitle of the same note doesn't collide-suffix against itself.
     public static func plan(oldRelativePath: String, oldContent: String, newTitle: String,
                             others: [(relativePath: String, content: String)],
                             existingPaths: [String]) -> Plan {
         let newRelativePath = NoteCreation.relativePath(title: newTitle, existing: existingPaths)
-        let newTarget = NoteCreation.displayName(newTitle)
+        // Links resolve by FILENAME STEM, not the display title — so the rewrite target
+        // is the actual new file's stem (which carries any collision counter/sanitization
+        // NoteCreation applied). Using displayName here would misroute links on a name
+        // collision or break them on sanitized/wikilink-illegal titles (review C1).
+        let newTarget = ((newRelativePath as NSString).lastPathComponent as NSString).deletingPathExtension
         // Resolver over the CURRENT path set (old path + others) identifies inbound links.
         let allPaths = [oldRelativePath] + others.map(\.relativePath)
         let resolve = WikilinkIndex.resolver(paths: allPaths)
@@ -38,21 +44,52 @@ public enum NoteRename {
                     linkEdits: edits)
     }
 
-    /// Updates the renamed note's own frontmatter `title:` and first ATX heading.
+    /// Updates the renamed note's own frontmatter `title:` and first body ATX heading.
+    /// Frontmatter- and fence-aware and CRLF-tolerant, so the heading scan matches
+    /// `WikilinkIndex.firstHeading` (which titles off the stripped body) rather than
+    /// clobbering a `#` line inside frontmatter or a leading code fence (review I2/I3).
     public static func retitle(content: String, newTitle: String) -> String {
         let name = NoteCreation.displayName(newTitle)
         var lines = content.components(separatedBy: "\n")
-        if lines.first == "---" {
+
+        // Frontmatter block only when the first line is exactly "---" (CRLF-tolerant).
+        var bodyStart = 0
+        if lineIsFence(lines.first) {
             var i = 1
-            while i < lines.count, lines[i] != "---" {
-                if lines[i].hasPrefix("title:") { lines[i] = "title: \(NoteCreation.yamlEscaped(name))"; break }
+            var closed = false
+            var titleSet = false
+            while i < lines.count {
+                if lineIsFence(lines[i]) { closed = true; i += 1; break }
+                if !titleSet, lines[i].hasPrefix("title:") {
+                    let cr = lines[i].hasSuffix("\r") ? "\r" : ""
+                    lines[i] = "title: \(NoteCreation.yamlEscaped(name))\(cr)"
+                    titleSet = true
+                }
                 i += 1
             }
+            bodyStart = closed ? i : lines.count   // unterminated frontmatter → no body scan
         }
-        for i in lines.indices {
-            if let hashes = atxHeadingPrefix(lines[i]) { lines[i] = "\(hashes) \(name)"; break }
+
+        // First ATX heading in the BODY, skipping fenced code (trimmed like firstHeading).
+        var inFence = false
+        var j = bodyStart
+        while j < lines.count {
+            let trimmed = lines[j].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { inFence.toggle(); j += 1; continue }
+            if !inFence, let hashes = atxHeadingPrefix(trimmed) {
+                let cr = lines[j].hasSuffix("\r") ? "\r" : ""
+                lines[j] = "\(hashes) \(name)\(cr)"
+                break
+            }
+            j += 1
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// A "---" frontmatter fence line, tolerating a trailing CR from CRLF files.
+    private static func lineIsFence(_ line: String?) -> Bool {
+        guard let line else { return false }
+        return line == "---" || line == "---\r"
     }
 
     /// Rewrites wikilink occurrences whose target resolves to `oldPath`, swapping only

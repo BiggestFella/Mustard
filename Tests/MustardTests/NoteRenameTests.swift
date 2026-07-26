@@ -40,6 +40,47 @@ final class NoteRenameTests: XCTestCase {
         XCTAssertTrue(out.contains("body [[keep]]"))
     }
 
+    func test_rewrite_target_is_new_file_stem_on_collision() {
+        // notes/New.md already exists → renamed file becomes notes/New 2.md, and inbound
+        // links must point at the *stem* "New 2" (not the display title "New", which would
+        // resolve to the pre-existing New.md). Review C1.
+        let others = [(relativePath: "notes/Ref.md", content: "see [[Old]] here")]
+        let plan = NoteRename.plan(
+            oldRelativePath: "notes/Old.md",
+            oldContent: "# Old\n",
+            newTitle: "New",
+            others: others,
+            existingPaths: ["notes/New.md", "notes/Ref.md"]) // New.md already taken
+        XCTAssertEqual(plan.newRelativePath, "notes/New 2.md")
+        XCTAssertEqual(plan.linkEdits.first?.newContent, "see [[New 2]] here")
+    }
+
+    func test_rewrite_target_is_sanitized_stem() {
+        // "A/B" sanitizes to file stem "A-B"; links must use the resolvable stem.
+        let others = [(relativePath: "notes/Ref.md", content: "x [[Old]] y")]
+        let plan = NoteRename.plan(
+            oldRelativePath: "notes/Old.md", oldContent: "# Old\n", newTitle: "A/B",
+            others: others, existingPaths: ["notes/Ref.md"])
+        XCTAssertEqual(plan.newRelativePath, "notes/A-B.md")
+        XCTAssertEqual(plan.linkEdits.first?.newContent, "x [[A-B]] y")
+    }
+
+    func test_retitle_ignores_hash_in_frontmatter_and_leading_fence() {
+        let content = "---\ntitle: Old\n# reserved for phase B\n---\n\n```\n# not a heading\n```\n\n# Real\n"
+        let out = NoteRename.retitle(content: content, newTitle: "Fresh")
+        XCTAssertTrue(out.contains("title: Fresh"))
+        XCTAssertTrue(out.contains("# reserved for phase B"), "frontmatter comment left intact")
+        XCTAssertTrue(out.contains("# not a heading"), "fenced code line left intact")
+        XCTAssertTrue(out.contains("# Fresh"), "the real body H1 is the one retitled")
+    }
+
+    func test_retitle_updates_frontmatter_title_on_crlf() {
+        let content = "---\r\ntitle: Old\r\n---\r\n\r\n# Old\r\n"
+        let out = NoteRename.retitle(content: content, newTitle: "Fresh Name")
+        XCTAssertTrue(out.contains("title: Fresh Name"), "CRLF frontmatter title still updated")
+        XCTAssertTrue(out.contains("# Fresh Name"))
+    }
+
     func test_plan_composes_newpath_retitle_and_linkedits() {
         let others = [
             (relativePath: "notes/Ref.md", content: "see [[Old]] here"),
