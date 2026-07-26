@@ -40,9 +40,10 @@ struct NoteEditorView: View {
     /// Imperative bridge overlay clicks/drags use to reach the coordinator.
     @State private var editorProxy = MarkdownEditorProxy()
 
-    /// Comfortable long-form reading measure (Craft mockups) — the document column
-    /// is centered at this width; the surface behind stays full-bleed `bg`.
-    private static let readingMeasure: CGFloat = 720
+    /// Reading-measure setting (Notes polish pack A) — global, persisted; replaces
+    /// the old fixed 720pt measure. `NoteEditorWidth` owns the pt values.
+    @AppStorage("noteEditorWidth") private var widthRaw = NoteEditorWidth.comfortable.rawValue
+    private var editorWidth: NoteEditorWidth { NoteEditorWidth(rawValue: widthRaw) ?? .comfortable }
 
     private var isDirty: Bool { text != diskText }
 
@@ -83,7 +84,7 @@ struct NoteEditorView: View {
                 BacklinksPanel(current: ref, entries: entries, onNavigate: onNavigate)
             }
         }
-        .frame(maxWidth: Self.readingMeasure)
+        .frame(maxWidth: editorWidth.maxWidth ?? .infinity)
         .frame(maxWidth: .infinity)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.Palette.bg)
@@ -139,6 +140,26 @@ struct NoteEditorView: View {
                 }
 
                 Spacer(minLength: 12)
+
+                Menu {
+                    ForEach(NoteEditorWidth.allCases) { option in
+                        Button {
+                            widthRaw = option.rawValue
+                        } label: {
+                            HStack {
+                                Text(option.label)
+                                if option == editorWidth { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.left.and.right")
+                        .font(Theme.Fonts.meta)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Editor width")
 
                 Button("Save") { save() }
                     .keyboardShortcut("s", modifiers: .command)
