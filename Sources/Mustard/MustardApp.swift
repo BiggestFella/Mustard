@@ -134,7 +134,7 @@ struct MustardApp: App {
     @State private var hoverPanel: HoverPanel?
     @State private var notch: NotchController?
     @State private var notchNav = NotchNavigation()
-    @State private var voiceCapture: VoiceCaptureController?
+    @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     init() {
         let container = MustardContainer.make()
         let executionGate = AgentExecutionGate()
@@ -205,7 +205,7 @@ struct MustardApp: App {
                     if voiceCapture == nil {
                         // Push-to-talk capture (F25): hold ⌃⌥Space anywhere, speak,
                         // release → raw Inbox task for the cleanup queue.
-                        let capture = VoiceCaptureController(context: container.mainContext)
+                        let capture = VoiceTaskCaptureCoordinator(context: container.mainContext)
                         capture.activate()
                         voiceCapture = capture
                     }

@@ -32,6 +32,24 @@ public enum VoiceCapture {
         return .commit(title: title)
     }
 
+    // MARK: - Segment → text (modern engine, Capture Task 3)
+
+    /// The verbatim raw transcript a commit stores: FINAL segments only,
+    /// ordered by start time (id breaks ties), texts joined with one space.
+    public static func transcript(from segments: [VoiceTranscriptSegment]) -> String {
+        liveTranscript(segments.filter(\.isFinal))
+    }
+
+    /// The live pill text while recording: every segment's latest revision
+    /// (the caller replaces same-id provisionals), same ordering and joining.
+    public static func liveTranscript(_ segments: [VoiceTranscriptSegment]) -> String {
+        segments
+            .sorted { ($0.startSeconds, $0.id) < ($1.startSeconds, $1.id) }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     /// Transcript → title: trim, collapse whitespace runs (incl. newlines) to single
     /// spaces, drop one trailing full stop (SFSpeech punctuates most utterances with
     /// "." — noise in a title; "?"/"!" are kept), and capitalize the first letter.

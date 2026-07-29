@@ -2,13 +2,13 @@
 import SwiftUI
 
 /// The floating push-to-talk pill (F25 v1): live transcript while the hotkey is
-/// held, then a brief committed/cancelled flash. Renders `VoiceCaptureController`
+/// held, then a brief committed/cancelled flash. Renders `VoiceTaskCaptureCoordinator`
 /// state only — every decision lives in the pure `VoiceCapture`.
 public struct VoiceCapturePillView: View {
-    private let controller: VoiceCaptureController
+    private let controller: VoiceTaskCaptureCoordinator
     @State private var pulsing = false
 
-    public init(controller: VoiceCaptureController) {
+    public init(controller: VoiceTaskCaptureCoordinator) {
         self.controller = controller
     }
 

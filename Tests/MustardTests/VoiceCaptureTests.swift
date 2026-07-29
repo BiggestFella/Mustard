@@ -88,6 +88,35 @@ final class VoiceCaptureTests: XCTestCase {
         XCTAssertEqual(release(after: 1.0, transcript: "  email   Matt the action points. "),
                        .commit(title: "Email Matt the action points"))
     }
+
+    // MARK: - Segment → text (modern engine, Capture Task 3)
+
+    private func seg(_ id: String, _ text: String, start: Double, final: Bool) -> VoiceTranscriptSegment {
+        VoiceTranscriptSegment(
+            id: id, text: text, startSeconds: start, endSeconds: start + 1,
+            isFinal: final, confidence: nil, source: .microphone)
+    }
+
+    func test_transcript_joinsFinalSegmentsInStartOrder_excludingProvisionals() {
+        let segments = [
+            seg("b", "and eggs", start: 2, final: true),
+            seg("a", "buy milk", start: 0, final: true),
+            seg("c", "maybe bre", start: 4, final: false),
+        ]
+        XCTAssertEqual(VoiceCapture.transcript(from: segments), "buy milk and eggs")
+    }
+
+    func test_transcript_emptyWhenOnlyProvisionals() {
+        XCTAssertEqual(VoiceCapture.transcript(from: [seg("a", "buy mi", start: 0, final: false)]), "")
+    }
+
+    func test_liveTranscript_includesProvisionalsInStartOrder() {
+        let segments = [
+            seg("b", "and eg", start: 2, final: false),
+            seg("a", "buy milk", start: 0, final: true),
+        ]
+        XCTAssertEqual(VoiceCapture.liveTranscript(segments), "buy milk and eg")
+    }
 }
 
 /// The `MustardTask` capture columns round-trip through their raw storage (ADR-0011:

@@ -1,3 +1,13 @@
+import Foundation
+
+/// The outcome of claiming the push-to-talk chord (Capture Task 3): another
+/// app may already own it, and that must never fail silently — the setup
+/// surface shows the failed shortcut and a route to change it.
+public enum HotKeyRegistration: Equatable, Sendable {
+    case registered
+    case conflict(OSStatus)
+}
+
 #if os(macOS)
 import AppKit
 import Carbon.HIToolbox
@@ -29,10 +39,12 @@ public final class PushToTalkHotKey {
         self.modifiers = modifiers
     }
 
-    /// Install the Carbon handler and claim the chord. Safe to call once; a chord
-    /// another app already owns fails quietly (the rest of Mustard is unaffected).
-    public func register() {
-        guard hotKeyRef == nil else { return }
+    /// Install the Carbon handler and claim the chord. Safe to call repeatedly.
+    /// A chord another app already owns is reported as `.conflict` — never
+    /// silently (the rest of Mustard is unaffected either way).
+    @discardableResult
+    public func register() -> HotKeyRegistration {
+        guard hotKeyRef == nil else { return .registered }
         var eventSpecs = [
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
@@ -63,7 +75,12 @@ public final class PushToTalkHotKey {
             Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
 
         let id = EventHotKeyID(signature: Self.signature, id: Self.hotKeyID)
-        RegisterEventHotKey(keyCode, modifiers, id, GetEventDispatcherTarget(), 0, &hotKeyRef)
+        let status = RegisterEventHotKey(keyCode, modifiers, id, GetEventDispatcherTarget(), 0, &hotKeyRef)
+        guard status == noErr, hotKeyRef != nil else {
+            hotKeyRef = nil
+            return .conflict(status)
+        }
+        return .registered
     }
 
     public func unregister() {
