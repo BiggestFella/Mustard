@@ -6,6 +6,11 @@ Things 3 calm — warm off-white, hairline dividers, one blue accent.
 
 ## Run
 
+Requires **macOS 26+** to run and the **Xcode 27 beta** toolchain to build (the
+voice suite uses the modern Apple speech stack — SpeechAnalyzer and Foundation
+Models). Select the beta per-shell with
+`export DEVELOPER_DIR=/path/to/Xcode-beta.app/Contents/Developer`.
+
 ```bash
 swift test          # full suite: models, Logic, agent loop, parsers, voice capture
 ./build-app.sh      # builds build/Mustard.app (signed, double-clickable)
