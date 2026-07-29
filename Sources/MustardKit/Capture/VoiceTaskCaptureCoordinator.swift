@@ -352,7 +352,7 @@ public final class VoiceTaskCaptureCoordinator {
             task.isTimed = false
             PersonalBoard.normalizePlacement(task)
         }
-        if let areaName = merged.areaName { stampArea(task, named: areaName) }
+        if let areaName = merged.areaName { task.stampArea(named: areaName, in: context) }
         if !merged.urls.isEmpty {
             task.links = merged.urls.map {
                 TaskLink(label: $0.host ?? $0.absoluteString, url: $0.absoluteString)
@@ -361,20 +361,6 @@ public final class VoiceTaskCaptureCoordinator {
         task.captureState = .cleaned
         task.captureNextAttemptAt = nil
         try? context.save()
-    }
-
-    /// Find-or-create the named area + its list and stamp the task — the
-    /// sibling of `AgentService.ensureArea(_:named:)`. No known-area re-check:
-    /// the generator already validated the name against `allowedAreas`.
-    private func stampArea(_ task: MustardTask, named areaName: String) {
-        guard task.list == nil else { return }
-        let area = (try? context.fetch(FetchDescriptor<Area>()))?.first { $0.name == areaName }
-            ?? { let a = Area(name: areaName); context.insert(a); return a }()
-        if let list = (try? context.fetch(FetchDescriptor<TaskList>()))?.first(where: { $0.area?.name == areaName }) {
-            task.list = list
-        } else {
-            let list = TaskList(name: areaName, area: area); context.insert(list); task.list = list
-        }
     }
 
     // MARK: - Recording
