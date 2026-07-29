@@ -126,7 +126,7 @@ public enum VoiceTaskDrafting {
     /// Resolve a model-supplied ISO 8601 string via the injected calendar — never
     /// the ambient clock/zone. Two shapes are accepted:
     /// - `"YYYY-MM-DD"` → that day at 09:00 in the calendar's zone (the
-    ///   quick-capture date-only convention, cf. `CaptureCleanup.resolveSchedule`).
+    ///   quick-capture date-only convention).
     ///   Rollover dates (e.g. Feb 30) are rejected via a round-trip check.
     /// - a full internet timestamp with an explicit offset → the exact instant.
     /// Anything else (relative words, other formats) is rejected: the task stays

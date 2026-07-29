@@ -2,8 +2,9 @@ import Foundation
 
 /// Pure press-to-talk capture decisions (F25 v1, ADR-0011): whether a hotkey
 /// release commits a task, and how a spoken transcript becomes a task title.
-/// The impure edges (Carbon hotkey, SFSpeech) live in `Capture/` and only call
-/// through here, so every decision stays unit-tested.
+/// The impure edges (Carbon hotkey, the SpeechAnalyzer session) live in
+/// `Capture/`/`Voice/` and only call through here, so every decision stays
+/// unit-tested.
 public enum VoiceCapture {
     /// Holds shorter than this cancel — swallows accidental hotkey taps.
     public static let minimumHold: TimeInterval = 0.3
@@ -51,8 +52,8 @@ public enum VoiceCapture {
     }
 
     /// Transcript → title: trim, collapse whitespace runs (incl. newlines) to single
-    /// spaces, drop one trailing full stop (SFSpeech punctuates most utterances with
-    /// "." — noise in a title; "?"/"!" are kept), and capitalize the first letter.
+    /// spaces, drop one trailing full stop (recognizers punctuate most utterances
+    /// with "." — noise in a title; "?"/"!" are kept), and capitalize the first letter.
     public static func normalizeTitle(_ transcript: String) -> String {
         var text = transcript
             .components(separatedBy: .whitespacesAndNewlines)

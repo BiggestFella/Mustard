@@ -14,7 +14,7 @@ final class VoiceTaskDraftGeneratorTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         // Pin the locale so weekdaySymbols are stable full English names
-        // (same convention as CaptureCleanupTests).
+        // (house convention for date-grounded prompt tests).
         calendar.locale = Locale(identifier: "en_US")
         return calendar
     }
@@ -152,7 +152,7 @@ final class VoiceTaskDraftGeneratorTests: XCTestCase {
         XCTAssertTrue(prompt.contains("book flights to Sydney"), "prompt must carry the raw transcript")
         XCTAssertTrue(prompt.contains("\"Code Heroes\""), "prompt must list allowed areas")
         XCTAssertTrue(prompt.contains("Wednesday 2026-07-29"), "prompt must pin today via the injected calendar")
-        // The UTC fixture zone surfaces as GMT on some OS builds (cf. CaptureCleanupTests).
+        // The UTC fixture zone surfaces as GMT on some OS builds.
         XCTAssertTrue(prompt.contains("GMT") || prompt.contains("UTC"), "prompt must name the injected timezone")
         XCTAssertEqual(stub.recorder.instructions, "INSTRUCTIONS-27")
     }

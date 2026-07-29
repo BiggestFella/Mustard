@@ -50,13 +50,15 @@ open build/Mustard.app
   current focus (or what the agent is executing) and how many items wait on you.
   Expands on hover.
 - **Voice capture** — hold **⌃⌥Space** anywhere on the Mac, speak a task, release: a
-  floating pill shows the live transcript (on-device speech, no audio leaves the Mac)
-  and the words land as an Inbox task instantly. The agent then tidies it in the
-  background — inferring a short title, description, schedule ("…on the 9th of
-  August"), and area — and, when you asked it to *do* something ("email the action
-  points to Matt"), proposes it in the Agent triage deck for your approval (email/
-  Slack/tickets stay gated). First launch asks for Microphone + Speech permission.
-  Spec: ADR-0011.
+  floating pill shows the live transcript (SpeechAnalyzer, fully on-device — no
+  audio leaves the Mac) and the words land as an Inbox task instantly, verbatim
+  transcript retained. A quick-edit card opens below the notch (title, notes,
+  links, area, schedule; ⌘Return saves, Esc keeps the task, Open Fully jumps to
+  the task drawer) while Apple Intelligence drafts structure on-device — a late
+  result never overwrites a field you've edited. If the model is unavailable the
+  task simply stays raw and editable. First launch asks for the Microphone;
+  drafting needs Apple Intelligence enabled. Spec: ADR-0011 + the 2026-07-29
+  voice-suite specs.
 
 Agents run through your **Claude subscription** (`claude -p`, headless) — no API
 key, no metered billing. If runs fail with 401, run `/login` inside `claude`

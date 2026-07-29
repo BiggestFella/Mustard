@@ -110,7 +110,7 @@ public struct VoiceTaskDraftGenerator: Sendable {
 
     /// The per-request prompt: pinned "today" + timezone (so relative spoken
     /// dates resolve deterministically), the allowed areas verbatim, and the
-    /// raw transcript. Mirrors `CaptureCleanup.prompt`'s date-grounding style.
+    /// raw transcript, in the house date-grounding style.
     static func prompt(
         transcript: String, allowedAreas: [String], now: Date, calendar: Calendar
     ) -> String {

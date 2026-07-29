@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 import SwiftData
 import Observation
+import AVFoundation
 
 /// What the coordinator needs from the quick-edit card (Capture Task 4
 /// implements the real panel; tests inject a stub). The editor owns per-field
@@ -42,8 +43,8 @@ public final class VoiceTaskCaptureCoordinator {
 
     // MARK: - Seams
 
-    /// The speech engine seam. Live wiring adapts the F25 `SpeechTranscribing`
-    /// engine until Task 5 swaps in `AppleSpeechSession`; tests inject stubs.
+    /// The speech engine seam. Live wiring is `liveMicrophone` (a fresh
+    /// `AppleSpeechSession` per capture, fed by the mic); tests inject stubs.
     public struct Speech {
         public var authorize: @MainActor () async -> Bool
         public var begin: @MainActor () async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error>
@@ -62,31 +63,20 @@ public final class VoiceTaskCaptureCoordinator {
             self.cancel = cancel
         }
 
-        /// Bridges the F25 SFSpeech engine into segment shape: partials become
-        /// one rolling provisional segment, stop() one final segment. Deleted
-        /// with the legacy engine in Task 5.
+        /// The production bundle: a fresh transcription session per capture
+        /// (`AppleSpeechSession` is one-shot by design), fed by the built-in
+        /// microphone. Only the mic TCC grant is requested — SpeechAnalyzer
+        /// transcription is on-device and needs no speech-recognition grant.
         @MainActor
-        public static func legacy(_ transcriber: any SpeechTranscribing) -> Speech {
-            Speech(
-                authorize: { await transcriber.requestAuthorization() },
-                begin: {
-                    AsyncThrowingStream { continuation in
-                        transcriber.onPartial = { text in
-                            continuation.yield(VoiceTranscriptSegment(
-                                id: "live", text: text, startSeconds: 0, endSeconds: 0,
-                                isFinal: false, confidence: nil, source: .microphone))
-                        }
-                        do { try transcriber.start() } catch { continuation.finish(throwing: error) }
-                    }
-                },
-                end: {
-                    let text = await transcriber.stop()
-                    guard !text.isEmpty else { return [] }
-                    return [VoiceTranscriptSegment(
-                        id: "final", text: text, startSeconds: 0, endSeconds: 0,
-                        isFinal: true, confidence: nil, source: .microphone)]
-                },
-                cancel: { transcriber.cancel() })
+        public static func liveMicrophone(
+            makeSession: @escaping @MainActor () throws -> any VoiceTranscribing
+        ) -> Speech {
+            let feed = MicrophoneFeed(makeSession: makeSession)
+            return Speech(
+                authorize: { await AVCaptureDevice.requestAccess(for: .audio) },
+                begin: { try await feed.begin() },
+                end: { try await feed.end() },
+                cancel: { await feed.cancel() })
         }
     }
 
@@ -190,18 +180,38 @@ public final class VoiceTaskCaptureCoordinator {
         self.now = now
     }
 
-    /// F25-equivalent wiring: legacy SFSpeech engine, the real Carbon hotkey,
-    /// the floating pill, no quick editor, and no on-device drafting (the
-    /// legacy cleanup queue keeps that job until Task 5 rewires the app).
-    public convenience init(context: ModelContext) {
+    /// Production wiring (Capture Task 5): SpeechAnalyzer transcription (a
+    /// fresh `AppleSpeechSession` per capture — macOS 27's live driver; on a
+    /// macOS 26 floor install the capture path reports itself unavailable
+    /// instead of failing silently), Apple Intelligence drafting, the Carbon
+    /// hotkey, the floating pill, and the notch-adjacent quick editor.
+    public convenience init(context: ModelContext, navigation: NotchNavigation? = nil) {
+        let editor = VoiceTaskQuickEditController(context: context, navigation: navigation)
+        let generator = VoiceTaskDraftGenerator(
+            service: OnDeviceLanguageService.live(),
+            calendar: .current,
+            loadPrompt: VoiceTaskDraftGenerator.bundledPrompt)
         self.init(
             context: context,
-            speech: .legacy(SpeechTranscriber()),
+            speech: .liveMicrophone {
+                guard #available(macOS 27.0, *) else {
+                    throw VoiceSessionError.notReady(
+                        .unavailable("Voice capture needs macOS 27"))
+                }
+                return AppleSpeechSession.live()
+            },
             hotKey: .live(PushToTalkHotKey()),
             pill: .panel(),
-            draft: { _, _, _ in .failure(.model(.unavailable("On-device drafting is wired in Capture Task 5"))) },
-            allowedAreas: { MeetingTaskSync.defaultAreaMap.values.sorted() },
-            presentEditor: { _ in nil })
+            draft: { transcript, areas, now in
+                await generator.draft(transcript: transcript, allowedAreas: areas, now: now)
+            },
+            allowedAreas: {
+                // Every area the user actually has, plus the known client map —
+                // both are "areas the model may pick", never invent.
+                let existing = ((try? context.fetch(FetchDescriptor<Area>())) ?? []).map(\.name)
+                return Set(existing).union(MeetingTaskSync.defaultAreaMap.values).sorted()
+            },
+            presentEditor: { task in editor.present(for: task) })
     }
 
     // MARK: - Lifecycle
@@ -378,6 +388,101 @@ public final class VoiceTaskCaptureCoordinator {
             self?.pill.hide()
             self?.phase = .idle
         }
+    }
+}
+
+// MARK: - Live microphone feed
+
+/// Owns the AVAudioEngine mic tap for one capture at a time and pumps buffers
+/// into a fresh transcription session. The tap runs on the audio thread and
+/// reuses its buffer after each callback, so buffers are deep-copied and then
+/// consumed by ONE serial task — analyzer input must keep arrival order.
+@MainActor
+private final class MicrophoneFeed {
+    private let makeSession: @MainActor () throws -> any VoiceTranscribing
+    private let engine = AVAudioEngine()
+    private var session: (any VoiceTranscribing)?
+    private var pump: Task<Void, Never>?
+    private var chunks: AsyncStream<AudioChunk>.Continuation?
+
+    init(makeSession: @escaping @MainActor () throws -> any VoiceTranscribing) {
+        self.makeSession = makeSession
+    }
+
+    func begin() async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error> {
+        let session = try makeSession()
+        self.session = session
+        let stream = try await session.start(source: .microphone)
+
+        let (buffers, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
+        chunks = continuation
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, when in
+            guard let copy = buffer.deepCopy() else { return }
+            continuation.yield(AudioChunk(buffer: copy, time: when))
+        }
+        engine.prepare()
+        try engine.start()
+        pump = Task {
+            for await chunk in buffers {
+                try? await session.append(chunk.buffer, at: chunk.time)
+            }
+        }
+        return stream
+    }
+
+    func end() async throws -> [VoiceTranscriptSegment] {
+        stopAudio()
+        chunks?.finish()
+        chunks = nil
+        await pump?.value   // drain queued audio before finalizing
+        pump = nil
+        guard let session else { return [] }
+        self.session = nil
+        return try await session.finish()
+    }
+
+    func cancel() async {
+        stopAudio()
+        chunks?.finish()
+        chunks = nil
+        pump?.cancel()
+        pump = nil
+        if let session {
+            self.session = nil
+            await session.cancel()
+        }
+    }
+
+    private func stopAudio() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
+}
+
+/// One copied mic buffer crossing from the audio thread into async land.
+private struct AudioChunk: @unchecked Sendable {
+    let buffer: AVAudioPCMBuffer
+    let time: AVAudioTime?
+}
+
+private extension AVAudioPCMBuffer {
+    /// The tap's buffer is reused once the callback returns; anything that
+    /// outlives it needs its own copy.
+    func deepCopy() -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {
+            return nil
+        }
+        copy.frameLength = frameLength
+        let source = UnsafeMutableAudioBufferListPointer(mutableAudioBufferList)
+        let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+        for (from, to) in zip(source, destination) {
+            guard let fromData = from.mData, let toData = to.mData else { continue }
+            memcpy(toData, fromData, Int(min(from.mDataByteSize, to.mDataByteSize)))
+        }
+        return copy
     }
 }
 
