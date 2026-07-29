@@ -231,27 +231,4 @@ public final class VoiceTaskQuickEditController {
     }
 }
 
-// MARK: - Area stamping (shared by the capture coordinator and the editor)
-
-extension MustardTask {
-    /// Find-or-create the named area + its list and stamp this task — the
-    /// sibling of `AgentService.ensureArea(_:named:)` for voice callers whose
-    /// area name was already validated against the allowed list. Passing
-    /// `overriding: true` re-stamps a task that already has a list (an
-    /// explicit user pick in the editor); the default never overrides.
-    @MainActor
-    func stampArea(named areaName: String, in context: ModelContext, overriding: Bool = false) {
-        guard overriding || list == nil else { return }
-        guard list?.area?.name != areaName else { return }
-        let area = (try? context.fetch(FetchDescriptor<Area>()))?.first { $0.name == areaName }
-            ?? { let a = Area(name: areaName); context.insert(a); return a }()
-        if let existing = (try? context.fetch(FetchDescriptor<TaskList>()))?.first(where: { $0.area?.name == areaName }) {
-            list = existing
-        } else {
-            let created = TaskList(name: areaName, area: area)
-            context.insert(created)
-            list = created
-        }
-    }
-}
 #endif

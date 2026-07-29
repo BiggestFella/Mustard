@@ -30,6 +30,10 @@ public final class MeetingCaptureCoordinator {
     private let store: MeetingAudioStore
     private let makeWriter: (String, Date) throws -> MeetingAudioWriter
     private let transcription: MeetingTranscriptionService
+    /// Digest generation seam (Task 7's service; nil = no digest step). A
+    /// digest failure never degrades the recording — it marks the digest
+    /// failed and retryable.
+    private let generateDigest: ((_ segments: [VoiceTranscriptSegment], _ now: Date) async -> Result<MeetingDigest, MeetingDigestFailure>)?
     private let now: () -> Date
 
     private var pendingTitle = ""
@@ -44,6 +48,7 @@ public final class MeetingCaptureCoordinator {
         store: MeetingAudioStore,
         makeWriter: @escaping (String, Date) throws -> MeetingAudioWriter,
         transcription: MeetingTranscriptionService,
+        generateDigest: ((_ segments: [VoiceTranscriptSegment], _ now: Date) async -> Result<MeetingDigest, MeetingDigestFailure>)? = nil,
         now: @escaping () -> Date = { .now }
     ) {
         self.context = context
@@ -51,6 +56,7 @@ public final class MeetingCaptureCoordinator {
         self.store = store
         self.makeWriter = makeWriter
         self.transcription = transcription
+        self.generateDigest = generateDigest
         self.now = now
     }
 
@@ -198,11 +204,39 @@ public final class MeetingCaptureCoordinator {
         writer = nil
         stampAudioPaths(on: record)
         record.audioFinalized = true
-        // Digest generation is Task 7 — until then the meeting is reviewable
-        // raw, with the digest explicitly pending.
+
+        // Digest (Task 7's service): success fills summary + proposals; any
+        // failure is marked retryable and never degrades the recording.
+        if let generateDigest {
+            record.digestStatus = .generating
+            try? context.save()
+            switch await generateDigest(segments, now()) {
+            case .success(let digest): applyDigest(digest, to: record)
+            case .failure: record.digestStatus = .failed
+            }
+        } else {
+            record.digestStatus = .pending
+        }
         apply(.digestReady)
-        record.digestStatus = .pending
         record.endedAt = now()
+        try? context.save()
+    }
+
+    /// Re-run digest generation for a finished meeting whose digest failed
+    /// (or was never generated) — reads the persisted transcript back,
+    /// preferring user corrections over raw text.
+    public func retryDigest(for record: MeetingRecord) async {
+        guard let generateDigest, record.status == .ready,
+              record.digestStatus == .failed || record.digestStatus == .pending else { return }
+        record.digestStatus = .generating
+        try? context.save()
+        let segments = (record.segments ?? [])
+            .sorted { ($0.startSeconds, $0.uid) < ($1.startSeconds, $1.uid) }
+            .map(Self.transcriptSegment(from:))
+        switch await generateDigest(segments, now()) {
+        case .success(let digest): applyDigest(digest, to: record)
+        case .failure: record.digestStatus = .failed
+        }
         try? context.save()
     }
 
@@ -277,6 +311,52 @@ public final class MeetingCaptureCoordinator {
         record.status = .partial
         record.errorMessage = reason
         try? context.save()
+    }
+
+    /// Land a validated digest: summary/decisions/questions on the record,
+    /// pending proposals replaced (approved/rejected ones are Leon's history
+    /// and stay), traceability stamped.
+    private func applyDigest(_ digest: MeetingDigest, to record: MeetingRecord) {
+        record.summaryText = digest.summary
+        record.decisions = digest.decisions
+        record.unresolvedQuestions = digest.unresolvedQuestions
+        record.promptVersion = digest.promptVersion
+        record.osBuild = digest.osBuild
+        for old in record.proposals ?? [] where old.state == .pending {
+            context.delete(old)
+        }
+        for action in digest.actions {
+            let proposal = MeetingActionProposal(
+                title: action.title,
+                owner: action.owner,
+                scheduledFor: action.due,
+                supportingSegmentUIDs: action.evidenceSegmentIDs)
+            proposal.meeting = record
+            context.insert(proposal)
+        }
+        record.digestStatus = .ready
+        try? context.save()
+    }
+
+    /// Rebuild a transcript segment from its persisted row. The persisted uid
+    /// is the source-namespaced persistent id; stripping the namespace keeps
+    /// `MeetingTranscriptMerge.persistentID` reproducing it exactly (evidence
+    /// validation depends on that round trip). Corrections win over raw text
+    /// for digestion; the raw text remains untouched evidence.
+    static func transcriptSegment(from persisted: MeetingTranscriptSegment) -> VoiceTranscriptSegment {
+        let source: VoiceAudioSource = persisted.source == .meeting ? .meeting : .microphone
+        let namespace = source.rawValue + ":"
+        let rawID = persisted.uid.hasPrefix(namespace)
+            ? String(persisted.uid.dropFirst(namespace.count))
+            : persisted.uid
+        return VoiceTranscriptSegment(
+            id: rawID,
+            text: persisted.correctedText ?? persisted.rawText,
+            startSeconds: persisted.startSeconds,
+            endSeconds: persisted.endSeconds,
+            isFinal: true,
+            confidence: persisted.confidence,
+            source: source)
     }
 
     private func stampAudioPaths(on record: MeetingRecord) {

@@ -49,32 +49,6 @@ public struct GeneratedMeetingDigest: Sendable {
     }
 }
 
-/// Why digest generation failed — always locally retryable; the meeting
-/// stays recorded and transcribed regardless (spec: a digest failure never
-/// degrades the recording).
-public enum MeetingDigestFailure: Error, Equatable, Sendable {
-    case model(LocalModelFailure)
-    case missingPrompt
-}
-
-/// The validated digest: every action's evidence verified against the real
-/// transcript, dates resolved deterministically, stamped for traceability.
-public struct MeetingDigest: Equatable, Sendable {
-    public struct Action: Equatable, Sendable {
-        public var title: String
-        public var owner: String?
-        public var due: Date?
-        public var evidenceSegmentIDs: [String]
-    }
-
-    public var summary: String
-    public var decisions: [String]
-    public var unresolvedQuestions: [String]
-    public var actions: [Action]
-    public var promptVersion: String
-    public var osBuild: String
-}
-
 /// Hierarchical, evidence-backed digest generation over the shared on-device
 /// seam (meeting recorder Task 7, BAK-299): chunk to the runtime context
 /// budget → one fresh generation per chunk → reduce partial digests → strict

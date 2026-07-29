@@ -101,7 +101,8 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         context: ModelContext,
         capturing: StubCapturing,
         transcription service: MeetingTranscriptionService? = nil,
-        writerThrows: Bool = false
+        writerThrows: Bool = false,
+        digest: ((_ segments: [VoiceTranscriptSegment], _ now: Date) async -> Result<MeetingDigest, MeetingDigestFailure>)? = nil
     ) -> MeetingCaptureCoordinator {
         struct DiskFull: Error {}
         let store = self.store!
@@ -114,6 +115,7 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
                 return try MeetingAudioWriter(store: store, meetingUID: uid, startedAt: startedAt)
             },
             transcription: service ?? transcription(),
+            generateDigest: digest,
             now: { self.t0 })
     }
 
@@ -282,6 +284,78 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(coordinator.sourceState(.microphone), .streaming)
         XCTAssertEqual(coordinator.state, .recording(startedAt: t0), "one source failing never kills the meeting")
+    }
+
+    // MARK: - Digest generation (Task 8 wiring)
+
+    private func digestResult(evidence: [String]) -> MeetingDigest {
+        MeetingDigest(
+            summary: "We planned the release.",
+            decisions: ["Ship Friday"],
+            unresolvedQuestions: [],
+            actions: [.init(
+                title: "Ship the release", owner: "me", due: nil,
+                evidenceSegmentIDs: evidence)],
+            promptVersion: "voice-core-1",
+            osBuild: "27A5194q")
+    }
+
+    func test_stopPipeline_runsTheDigest_andCreatesPendingProposals() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let you = seg("y1", "ship it friday")
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [you]),
+            digest: { segments, _ in
+                .success(self.digestResult(
+                    evidence: segments.map { MeetingTranscriptMerge.persistentID(for: $0) }))
+            })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.digestStatus, .ready)
+        XCTAssertEqual(record.summaryText, "We planned the release.")
+        XCTAssertEqual(record.decisions, ["Ship Friday"])
+        let proposals = try context.fetch(FetchDescriptor<MeetingActionProposal>())
+        XCTAssertEqual(proposals.count, 1)
+        XCTAssertEqual(proposals.first?.state, .pending, "every proposal is approval-gated")
+        XCTAssertEqual(proposals.first?.supportingSegmentUIDs, ["microphone:y1"])
+        XCTAssertEqual(record.promptVersion, "voice-core-1")
+    }
+
+    func test_digestFailure_isRetryable_withoutDegradingTheMeeting() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        var digestWorks = false
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]),
+            digest: { segments, _ in
+                digestWorks
+                    ? .success(self.digestResult(
+                        evidence: segments.map { MeetingTranscriptMerge.persistentID(for: $0) }))
+                    : .failure(.model(.modelNotReady))
+            })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.status, .ready, "a digest failure never degrades the recording")
+        XCTAssertEqual(record.digestStatus, .failed)
+
+        digestWorks = true
+        await coordinator.retryDigest(for: record)
+
+        XCTAssertEqual(record.digestStatus, .ready)
+        XCTAssertEqual(record.summaryText, "We planned the release.")
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<MeetingActionProposal>()).count, 1,
+            "the retry reads the persisted transcript back")
     }
 
     // MARK: - Recovery on launch

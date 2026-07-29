@@ -129,7 +129,8 @@ struct MustardApp: App {
     @State private var notchNav = NotchNavigation()
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
-    @State private var meetingRecorder: MeetingCaptureCoordinator?
+    @State private var meetingRecorder: MeetingCaptureCoordinator
+    @State private var didRecoverMeetings = false
     init() {
         let container = MustardContainer.make()
         let executionGate = AgentExecutionGate()
@@ -159,6 +160,33 @@ struct MustardApp: App {
             noteIndex: noteIndex,
             calendar: calendar
         ))
+
+        // Manual meeting recorder (Meetings Tasks 6–8): consent-gated
+        // two-source capture with the on-device digest. Built here so both
+        // the main window (review/retry) and the notch share one instance.
+        let recordings = URL.applicationSupportDirectory
+            .appending(path: "Mustard/Recordings", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(
+            at: recordings, withIntermediateDirectories: true)
+        let meetingStore = MeetingAudioStore(recordingsRoot: recordings)
+        let digestService = MeetingDigestService(
+            service: OnDeviceLanguageService.live(),
+            calendar: .current,
+            loadPrompt: VoiceTaskDraftGenerator.bundledPrompt,
+            // ~4 chars per token is the standard conservative estimate; the
+            // chunker only needs a budget-shaped bound, not exact counts.
+            tokenCount: { $0.count / 4 + 1 })
+        self._meetingRecorder = State(initialValue: MeetingCaptureCoordinator(
+            context: container.mainContext,
+            capturing: ScreenCaptureMeetingAudio(),
+            store: meetingStore,
+            makeWriter: { uid, startedAt in
+                try MeetingAudioWriter(store: meetingStore, meetingUID: uid, startedAt: startedAt)
+            },
+            transcription: .liveMeeting(),
+            generateDigest: { segments, now in
+                await digestService.digest(segments: segments, now: now)
+            }))
     }
 
     var body: some Scene {
@@ -169,6 +197,7 @@ struct MustardApp: App {
                 .environment(noteIndex)
                 .environment(calendar)
                 .environment(notchNav)
+                .environment(meetingRecorder)
                 .frame(minWidth: 640, minHeight: 520)
                 .task {
                     let container = container
@@ -184,27 +213,12 @@ struct MustardApp: App {
                             )
                         }
                     }
-                    if meetingRecorder == nil {
-                        // Manual meeting recorder (Meetings Task 6): consent-gated
-                        // two-source capture; crash-left partials surface on launch.
-                        let recordings = URL.applicationSupportDirectory
-                            .appending(path: "Mustard/Recordings", directoryHint: .isDirectory)
-                        try? FileManager.default.createDirectory(
-                            at: recordings, withIntermediateDirectories: true)
-                        let store = MeetingAudioStore(recordingsRoot: recordings)
-                        let recorder = MeetingCaptureCoordinator(
-                            context: container.mainContext,
-                            capturing: ScreenCaptureMeetingAudio(),
-                            store: store,
-                            makeWriter: { uid, startedAt in
-                                try MeetingAudioWriter(
-                                    store: store, meetingUID: uid, startedAt: startedAt)
-                            },
-                            transcription: .liveMeeting())
-                        recorder.recoverOnLaunch()
-                        meetingRecorder = recorder
+                    if !didRecoverMeetings {
+                        // Crash-left partials surface once per launch.
+                        meetingRecorder.recoverOnLaunch()
+                        didRecoverMeetings = true
                     }
-                    if notch == nil, let meetingRecorder {
+                    if notch == nil {
                         let controller = NotchController { onHover in
                             AnyView(
                                 NotchView(onHoverChange: onHover)

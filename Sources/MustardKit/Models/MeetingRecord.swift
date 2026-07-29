@@ -46,6 +46,11 @@ public final class MeetingRecord {
     public var errorMessage: String?
     /// Serialized recovery breadcrumb when a crash left partials.
     public var recoveryStateRaw: String?
+    /// The generated digest's content (additive; nil/empty until Task 7's
+    /// service ran successfully — proposals live in `proposals`).
+    public var summaryText: String?
+    public var decisions: [String] = []
+    public var unresolvedQuestions: [String] = []
     public var createdAt: Date = Date.now
 
     public var calendarEvent: CalendarEvent?
