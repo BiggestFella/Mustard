@@ -11,7 +11,14 @@ BIN_DIR="$(swift build -c release --package-path "$DIR" --show-bin-path)"
 BIN="$BIN_DIR/Mustard"
 RESOURCE_BUNDLE="$BIN_DIR/Mustard_MustardKit.bundle"
 
-if [[ ! -r "$RESOURCE_BUNDLE/MustardAgentContract.md" ]]; then
+# The contract sits at the bundle root under SwiftPM's native build system and
+# under Contents/Resources with Swift Build (tools 6.x). Runtime lookup uses
+# Bundle APIs, which resolve either; these checks must accept both too.
+contract_in_bundle() {
+  [[ -r "$1/MustardAgentContract.md" || -r "$1/Contents/Resources/MustardAgentContract.md" ]]
+}
+
+if ! contract_in_bundle "$RESOURCE_BUNDLE"; then
   echo "Missing MustardKit resource bundle: $RESOURCE_BUNDLE" >&2
   exit 1
 fi
@@ -49,7 +56,7 @@ PLIST
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
-if [[ ! -r "$APP/Contents/Resources/Mustard_MustardKit.bundle/MustardAgentContract.md" ]]; then
+if ! contract_in_bundle "$APP/Contents/Resources/Mustard_MustardKit.bundle"; then
   echo "Assembled app is missing the worker contract resource" >&2
   exit 1
 fi

@@ -41,6 +41,11 @@ open build/Mustard.app
 - **Command bar** — ⌘K: type to capture a task (Enter), or run "Go to Today / Board / Week / Agent" / "Sweep now" — arrow keys + Enter, Esc closes.
 - **Notch** — auto-shows on the built-in display: black notch-hugging strip rotating focus → waiting count; hover expands into the agent tray (inline Approve/Deny) + quick capture. ⌘⇧N toggles.
 - **Scheduled sweeps** — "Auto" menu in the Agent console (hourly / 4h / daily); the app checks every minute and sweeps when due.
+- **Voice Setup** — Settings → Voice Setup…: reports the five voice permissions
+  (microphone, speech recognition, accessibility, system audio, calendar)
+  independently, with a Request or Open Settings route per row, plus on-device
+  speech model install. Nothing is requested at launch; a denial degrades only
+  the feature that needs it.
 - **Hover panel** — ⌘⇧H: always-on-top, non-activating mini panel showing your
   current focus (or what the agent is executing) and how many items wait on you.
   Expands on hover.

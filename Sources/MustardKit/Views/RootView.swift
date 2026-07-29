@@ -10,10 +10,12 @@ public enum MustardScreen: String, CaseIterable, Identifiable {
     case agent = "Agent"
     case lists = "Lists"
     case settings = "Settings"
+    case voiceSetup = "Voice Setup"
     public var id: String { rawValue }
 
     /// Screens shown as top-level sidebar buttons. `.lists` is intentionally
     /// excluded — it's reached by selecting an area/list/unfiled row below.
+    /// `.voiceSetup` is reached from Settings (BAK-280).
     static let primary: [MustardScreen] = [.today, .board, .week, .notes, .agent]
 
     var systemImage: String {
@@ -25,6 +27,7 @@ public enum MustardScreen: String, CaseIterable, Identifiable {
         case .agent: "sparkles"
         case .lists: "tray.full"
         case .settings: "gearshape"
+        case .voiceSetup: "waveform"
         }
     }
 }
@@ -77,11 +80,12 @@ public struct RootView: View {
                     case .notes: NotesView()
                     case .agent: AgentConsoleView()
                     case .lists: ListContentView(scope: selectedScope ?? .unfiled)
-                    case .settings: SettingsView()
+                    case .settings: SettingsView(onVoiceSetup: { screen = .voiceSetup })
+                    case .voiceSetup: VoiceSetupView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if screen != .agent && screen != .settings { copilotDock }
+                if screen != .agent && screen != .settings && screen != .voiceSetup { copilotDock }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
