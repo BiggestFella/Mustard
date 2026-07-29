@@ -8,7 +8,7 @@ let package = Package(
         .target(
             name: "MustardKit",
             path: "Sources/MustardKit",
-            resources: [.process("Agent/Prompts")]
+            resources: [.process("Agent/Prompts"), .process("Voice/Prompts")]
         ),
         .executableTarget(
             name: "Mustard",
