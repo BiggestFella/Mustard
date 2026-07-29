@@ -130,6 +130,7 @@ struct MustardApp: App {
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
     @State private var meetingRecorder: MeetingCaptureCoordinator
+    @State private var meetingSuggestions: MeetingSuggestionMonitor
     @State private var didRecoverMeetings = false
     init() {
         let container = MustardContainer.make()
@@ -187,6 +188,11 @@ struct MustardApp: App {
             generateDigest: { segments, now in
                 await digestService.digest(segments: segments, now: now)
             }))
+        let recorder = _meetingRecorder.wrappedValue
+        self._meetingSuggestions = State(initialValue: MeetingSuggestionMonitor(
+            events: { (try? container.mainContext.fetch(FetchDescriptor<CalendarEvent>())) ?? [] },
+            signals: { MeetingAppSignals.current() },
+            isRecording: { recorder.state != .idle }))
     }
 
     var body: some Scene {
@@ -216,6 +222,7 @@ struct MustardApp: App {
                     if !didRecoverMeetings {
                         // Crash-left partials surface once per launch.
                         meetingRecorder.recoverOnLaunch()
+                        meetingSuggestions.startPolling()
                         didRecoverMeetings = true
                     }
                     if notch == nil {
@@ -226,6 +233,7 @@ struct MustardApp: App {
                                     .environment(taskAgent)
                                     .environment(notchNav)
                                     .environment(meetingRecorder)
+                                    .environment(meetingSuggestions)
                                     .modelContainer(container)
                             )
                         }
