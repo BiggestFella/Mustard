@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import SwiftUI
 import Observation
 
 /// Where a system-wide dictation hold is, phase by phase (Dictation Task 4).
@@ -24,18 +25,33 @@ public enum SystemDictationPhase: Equatable, Sendable {
 @MainActor
 @Observable
 public final class SystemDictationCoordinator {
-    /// The dictation pill seam (Task 5 builds the real panel).
+    /// The dictation pill seam. `.panel()` is the real nonactivating panel;
+    /// tests inject `.none()`.
     public struct PillPresentation {
-        public var show: @MainActor () -> Void
+        public var show: @MainActor (SystemDictationCoordinator) -> Void
         public var hide: @MainActor () -> Void
 
-        public init(show: @escaping @MainActor () -> Void, hide: @escaping @MainActor () -> Void) {
+        public init(
+            show: @escaping @MainActor (SystemDictationCoordinator) -> Void,
+            hide: @escaping @MainActor () -> Void
+        ) {
             self.show = show
             self.hide = hide
         }
 
         public static func none() -> PillPresentation {
-            PillPresentation(show: {}, hide: {})
+            PillPresentation(show: { _ in }, hide: {})
+        }
+
+        /// The real floating pill: nonactivating (dictation must never steal
+        /// focus from the field being dictated into), top-centre under the
+        /// notch/menu bar — the capture pill's pattern.
+        @MainActor
+        public static func panel() -> PillPresentation {
+            let holder = DictationPillHolder()
+            return PillPresentation(
+                show: { coordinator in holder.show(for: coordinator) },
+                hide: { holder.hide() })
         }
     }
 
@@ -117,7 +133,7 @@ public final class SystemDictationCoordinator {
         liveTranscript = ""
         recoveredTranscript = nil
         phase = .listening
-        pill.show()
+        pill.show(self)
         consumeTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -177,11 +193,41 @@ public final class SystemDictationCoordinator {
         }
     }
 
+    /// The recoverable pill's "Try Current Field": re-attempt insertion of the
+    /// preserved transcript into whatever is focused NOW — a fresh snapshot,
+    /// fresh whitespace, the same fail-closed rules. The transcript survives
+    /// another failure, so retries can keep coming.
+    public func retryIntoCurrentField() {
+        guard case .recoverable = phase, let transcript = recoveredTranscript else { return }
+        dismissTask?.cancel()
+        phase = .inserting
+        finalizeTask = Task { [weak self] in
+            guard let self else { return }
+            let fresh: FocusedTextTarget
+            do {
+                fresh = try self.snapshotFocus()
+            } catch {
+                return self.recover(transcript: transcript, reason: "No text field is focused — click where the words should go, then retry.")
+            }
+            guard let text = DictationWhitespace.insertion(text: transcript, target: fresh) else {
+                return self.recover(transcript: transcript, reason: "Dictation never types into password fields.")
+            }
+            switch await self.insert(text, fresh) {
+            case .insertedDirectly, .insertedByPaste:
+                self.recoveredTranscript = nil
+                self.phase = .inserted
+                self.scheduleIdle(after: 1.2)
+            case .recoverable(let reason):
+                self.recover(transcript: transcript, reason: reason)
+            }
+        }
+    }
+
     // MARK: - Internals
 
     private func refuse(_ refusal: SystemDictationPhase) {
         phase = refusal
-        pill.show()
+        pill.show(self)
         scheduleIdle(after: 2.5)
     }
 
@@ -206,6 +252,69 @@ public final class SystemDictationCoordinator {
             self?.pill.hide()
             self?.phase = .idle
         }
+    }
+}
+
+// MARK: - Live wiring (Dictation Task 5)
+
+extension SystemDictationCoordinator {
+    /// Production dictation: the live Accessibility reader + inserter, a
+    /// fresh SpeechAnalyzer session per hold (macOS 27's live driver — on a
+    /// macOS 26 install the pill reports dictation unavailable instead of
+    /// failing silently), and the ⌃⌥D chord.
+    public static func live() -> SystemDictationCoordinator {
+        let reader = AccessibilityFocusReader.live()
+        let inserter = TextInserter.live(reader: reader)
+        return SystemDictationCoordinator(
+            snapshotFocus: { try reader.snapshot() },
+            speech: .liveMicrophone {
+                guard #available(macOS 27.0, *) else {
+                    throw VoiceSessionError.notReady(
+                        .unavailable("Dictation needs macOS 27"))
+                }
+                return AppleSpeechSession.live()
+            },
+            hotKey: .live(PushToTalkHotKey.dictation()),
+            insert: { text, target in await inserter.insert(text, into: target) },
+            pill: .panel())
+    }
+}
+
+/// Owns the one floating `NSPanel` for the dictation pill.
+@MainActor
+private final class DictationPillHolder {
+    private var panel: NSPanel?
+
+    func show(for coordinator: SystemDictationCoordinator) {
+        if panel == nil {
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 420, height: 64),
+                styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            panel.level = .floating
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hidesOnDeactivate = false
+            panel.isMovableByWindowBackground = false
+            panel.contentView = NSHostingView(rootView: SystemDictationPillView(coordinator: coordinator))
+            self.panel = panel
+        }
+        if let screen = NSScreen.main, let panel {
+            let frame = screen.visibleFrame
+            panel.setFrameTopLeftPoint(NSPoint(
+                x: frame.midX - panel.frame.width / 2,
+                y: frame.maxY - 8))
+        }
+        panel?.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
     }
 }
 #endif

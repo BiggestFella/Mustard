@@ -48,7 +48,7 @@ public enum VoiceCapability: String, CaseIterable, Identifiable, Equatable, Send
         switch self {
         case .microphone: "Hear you during push-to-talk capture, dictation, and meetings."
         case .speech: "Transcribe what you say on this Mac. Audio never leaves the device."
-        case .accessibility: "Insert dictated text into other apps at the cursor."
+        case .accessibility: "Insert dictated text into other apps at the cursor (hold ⌃⌥D)."
         case .systemAudio: "Record the other side of a meeting playing through this Mac."
         case .calendar: "Suggest starting a recording when a meeting begins."
         }

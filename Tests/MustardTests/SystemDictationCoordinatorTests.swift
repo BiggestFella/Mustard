@@ -244,6 +244,58 @@ final class SystemDictationCoordinatorTests: XCTestCase {
         XCTAssertNil(harness.insertedText)
     }
 
+    // MARK: - Retry from recovery (the pill's "Try Current Field")
+
+    func test_retryIntoCurrentField_insertsThePreservedTranscript() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello world", final: true)]
+        harness.insertOutcome = .recoverable("The text field lost focus before the transcript was ready.")
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+        guard case .recoverable = coordinator.phase else {
+            return XCTFail("precondition: expected recoverable, got \(coordinator.phase)")
+        }
+
+        // The user focuses a new field and clicks Try Current Field.
+        harness.insertOutcome = .insertedDirectly
+        coordinator.retryIntoCurrentField()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertEqual(coordinator.phase, .inserted)
+        XCTAssertEqual(harness.insertedText, " hello world", "whitespace re-normalizes against the fresh snapshot")
+    }
+
+    func test_retryIntoCurrentField_withoutARecoveredTranscript_doesNothing() async {
+        let harness = Harness(target: target())
+        let coordinator = harness.makeCoordinator(clock: Clock([t0]))
+
+        coordinator.retryIntoCurrentField()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertNil(harness.insertedText)
+    }
+
+    func test_retryIntoCurrentField_refusesASecureTarget() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello", final: true)]
+        harness.insertOutcome = .recoverable("lost focus")
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+
+        // Focus moved to a password field before the retry.
+        harness.snapshotResult = .success(target(secure: true))
+        harness.insertOutcome = .insertedDirectly
+        harness.insertedText = nil
+        coordinator.retryIntoCurrentField()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertNil(harness.insertedText, "secure fields never receive dictation, retries included")
+        XCTAssertEqual(coordinator.recoveredTranscript, "hello", "the words survive the refusal")
+    }
+
     // MARK: - Hotkey & data isolation
 
     func test_hotKeyConflict_isSurfaced() async {

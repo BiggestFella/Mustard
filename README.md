@@ -41,6 +41,13 @@ open build/Mustard.app
 - **Command bar** — ⌘K: type to capture a task (Enter), or run "Go to Today / Board / Week / Agent" / "Sweep now" — arrow keys + Enter, Esc closes.
 - **Notch** — auto-shows on the built-in display: black notch-hugging strip rotating focus → waiting count; hover expands into the agent tray (inline Approve/Deny) + quick capture. ⌘⇧N toggles.
 - **Scheduled sweeps** — "Auto" menu in the Agent console (hourly / 4h / daily); the app checks every minute and sweeps when due.
+- **System-wide dictation** — hold **⌃⌥D** in any app, speak, release: the words
+  land at the cursor (direct Accessibility insertion, or a lossless ⌘V fallback
+  that restores your clipboard unless something newer replaced it). The field is
+  snapshotted before audio starts, so text never lands in the wrong place;
+  password fields are always refused; if insertion can't happen the pill keeps
+  the transcript with Copy / Try Current Field. Needs Accessibility (Voice
+  Setup → Open Settings).
 - **Voice Setup** — Settings → Voice Setup…: reports the five voice permissions
   (microphone, speech recognition, accessibility, system audio, calendar)
   independently, with a Request or Open Settings route per row, plus on-device

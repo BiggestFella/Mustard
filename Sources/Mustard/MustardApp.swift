@@ -128,6 +128,7 @@ struct MustardApp: App {
     @State private var notch: NotchController?
     @State private var notchNav = NotchNavigation()
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
+    @State private var dictation: SystemDictationCoordinator?
     init() {
         let container = MustardContainer.make()
         let executionGate = AgentExecutionGate()
@@ -204,6 +205,14 @@ struct MustardApp: App {
                             context: container.mainContext, navigation: notchNav)
                         capture.activate()
                         voiceCapture = capture
+                    }
+                    if dictation == nil {
+                        // System-wide dictation: hold ⌃⌥D in any app, speak, release
+                        // → the words land at the cursor (never in secure fields,
+                        // never in Mustard's store).
+                        let coordinator = SystemDictationCoordinator.live()
+                        coordinator.activate()
+                        dictation = coordinator
                     }
                 }
         }
