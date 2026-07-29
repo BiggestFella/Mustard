@@ -8,6 +8,22 @@ public enum HotKeyRegistration: Equatable, Sendable {
     case conflict(OSStatus)
 }
 
+/// Pure chord formatting for the setup surface (raw Carbon values so the
+/// formatter stays platform-free): "⌃⌥Space", "⌃⌥D", …
+public enum HotKeyChord {
+    /// Carbon modifier masks (Events.h): cmdKey/shiftKey/optionKey/controlKey.
+    private static let masks: [(UInt32, String)] = [
+        (0x1000, "⌃"), (0x800, "⌥"), (0x200, "⇧"), (0x100, "⌘"),
+    ]
+    /// The key codes Mustard's chords actually use, plus a readable fallback.
+    private static let keyNames: [UInt32: String] = [49: "Space", 2: "D"]
+
+    public static func description(keyCode: UInt32, modifiers: UInt32) -> String {
+        let mods = masks.filter { modifiers & $0.0 != 0 }.map(\.1).joined()
+        return mods + (keyNames[keyCode] ?? "key #\(keyCode)")
+    }
+}
+
 #if os(macOS)
 import AppKit
 import Carbon.HIToolbox
@@ -31,6 +47,10 @@ public final class PushToTalkHotKey {
     private static let signature: OSType = {
         "MSTD".utf8.reduce(0) { ($0 << 8) + OSType($1) }
     }()
+
+    /// Registration outcomes by purpose, read by Voice Setup's SHORTCUTS
+    /// section — a chord conflict must be visible somewhere, never silent.
+    public private(set) static var registrationBoard: [String: (chord: String, registration: HotKeyRegistration)] = [:]
 
     public init(
         id: UInt32 = 1,
@@ -94,11 +114,18 @@ public final class PushToTalkHotKey {
 
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
-        guard status == noErr, hotKeyRef != nil else {
+        let result: HotKeyRegistration
+        if status == noErr, hotKeyRef != nil {
+            result = .registered
+        } else {
             hotKeyRef = nil
-            return .conflict(status)
+            result = .conflict(status)
         }
-        return .registered
+        let purpose = id == 2 ? "Dictation" : "Task capture"
+        Self.registrationBoard[purpose] = (
+            chord: HotKeyChord.description(keyCode: keyCode, modifiers: modifiers),
+            registration: result)
+        return result
     }
 
     public func unregister() {

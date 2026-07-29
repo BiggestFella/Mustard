@@ -72,6 +72,10 @@ public final class SystemDictationCoordinator {
     private let now: () -> Date
 
     private var authorized = false
+    /// Hold generation: bumped on every new hold (and retry), captured by
+    /// every spawned task — a stale finalize/consume/dismiss can never mutate
+    /// a newer hold's state.
+    private var holdEpoch = 0
     private var target: FocusedTextTarget?
     private var pressedAt: Date?
     private var segmentsByID: [String: VoiceTranscriptSegment] = [:]
@@ -108,6 +112,7 @@ public final class SystemDictationCoordinator {
 
     func beginDictation() {
         guard phase != .listening else { return }   // key auto-repeat / re-entry
+        holdEpoch += 1
         dismissTask?.cancel()
 
         // The target is captured BEFORE any audio starts — the words go where
@@ -134,17 +139,27 @@ public final class SystemDictationCoordinator {
         recoveredTranscript = nil
         phase = .listening
         pill.show(self)
+        let epoch = holdEpoch
         consumeTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let stream = try await self.speech.begin()
                 for try await segment in stream {
+                    guard self.holdEpoch == epoch else { return }
                     self.record(segment)
                 }
             } catch {
-                guard self.phase == .listening else { return }
-                self.phase = .recoverable(error.localizedDescription)
-                self.scheduleIdle(after: 2.5)
+                // Speech failed mid-hold: stop the feed (the mic must never
+                // stay hot) and preserve whatever stable text already landed.
+                guard self.holdEpoch == epoch, self.phase == .listening else { return }
+                await self.speech.cancel()
+                guard self.holdEpoch == epoch else { return }
+                self.pressedAt = nil
+                let stable = VoiceCapture.transcript(
+                    from: self.segmentsByID.values.filter(\.isFinal))
+                self.recover(
+                    transcript: stable.isEmpty ? nil : stable,
+                    reason: error.localizedDescription)
             }
         }
     }
@@ -155,12 +170,14 @@ public final class SystemDictationCoordinator {
         // must not count toward the minimum hold.
         let releasedAt = now()
         self.pressedAt = nil
+        let epoch = holdEpoch
         if releasedAt.timeIntervalSince(pressedAt) < VoiceCapture.minimumHold {
             finalizeTask = Task { [weak self] in
                 await self?.speech.cancel()   // an accidental tap
-                self?.consumeTask?.cancel()
-                self?.pill.hide()
-                self?.phase = .idle
+                guard let self, self.holdEpoch == epoch else { return }
+                self.consumeTask?.cancel()
+                self.pill.hide()
+                self.phase = .idle
             }
             return
         }
@@ -173,17 +190,28 @@ public final class SystemDictationCoordinator {
                 // Preserve whatever stable text already streamed.
                 finals = self.segmentsByID.values.filter(\.isFinal)
             }
+            guard self.holdEpoch == epoch else { return }
             let transcript = VoiceCapture.transcript(from: finals)
             guard !transcript.isEmpty else {
                 return self.recover(transcript: nil, reason: "Nothing was heard — the field is untouched.")
             }
             self.phase = .inserting
+            // Strict release-time revalidation: the fresh snapshot must equal
+            // the press-time one (same field, same cursor, same surroundings)
+            // or the words go to safe recovery, never the wrong place.
+            guard (try? self.snapshotFocus()) == target else {
+                return self.recover(
+                    transcript: transcript,
+                    reason: "The field or cursor moved during dictation — the words are kept for you.")
+            }
             // Contextual whitespace is decided against the PRESS-time snapshot;
             // nil means insertion must not happen at all (secure).
             guard let text = DictationWhitespace.insertion(text: transcript, target: target) else {
                 return self.recover(transcript: transcript, reason: "Dictation never types into password fields.")
             }
-            switch await self.insert(text, target) {
+            let outcome = await self.insert(text, target)
+            guard self.holdEpoch == epoch else { return }
+            switch outcome {
             case .insertedDirectly, .insertedByPaste:
                 self.phase = .inserted
                 self.scheduleIdle(after: 1.2)
@@ -199,6 +227,8 @@ public final class SystemDictationCoordinator {
     /// another failure, so retries can keep coming.
     public func retryIntoCurrentField() {
         guard case .recoverable = phase, let transcript = recoveredTranscript else { return }
+        holdEpoch += 1
+        let epoch = holdEpoch
         dismissTask?.cancel()
         phase = .inserting
         finalizeTask = Task { [weak self] in
@@ -212,7 +242,9 @@ public final class SystemDictationCoordinator {
             guard let text = DictationWhitespace.insertion(text: transcript, target: fresh) else {
                 return self.recover(transcript: transcript, reason: "Dictation never types into password fields.")
             }
-            switch await self.insert(text, fresh) {
+            let outcome = await self.insert(text, fresh)
+            guard self.holdEpoch == epoch else { return }
+            switch outcome {
             case .insertedDirectly, .insertedByPaste:
                 self.recoveredTranscript = nil
                 self.phase = .inserted
@@ -246,11 +278,12 @@ public final class SystemDictationCoordinator {
 
     private func scheduleIdle(after seconds: TimeInterval) {
         dismissTask?.cancel()
+        let epoch = holdEpoch
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
-            guard !Task.isCancelled else { return }
-            self?.pill.hide()
-            self?.phase = .idle
+            guard let self, !Task.isCancelled, self.holdEpoch == epoch else { return }
+            self.pill.hide()
+            self.phase = .idle
         }
     }
 }

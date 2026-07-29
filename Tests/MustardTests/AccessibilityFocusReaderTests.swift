@@ -125,6 +125,23 @@ final class AccessibilityFocusReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - Paste-delivery check (review fix)
+
+    func test_focusedValueContains_trueWhenTheTextLanded() {
+        let reader = reader { self.probe(value: "hello world") }
+        XCTAssertEqual(reader.focusedValueContains("hello"), true)
+    }
+
+    func test_focusedValueContains_falseWhenTheTextIsMissing() {
+        let reader = reader { self.probe(value: "something else") }
+        XCTAssertEqual(reader.focusedValueContains("hello"), false)
+    }
+
+    func test_focusedValueContains_nilWhenTheValueIsWithheld() {
+        let reader = reader { self.probe(value: nil) }
+        XCTAssertNil(reader.focusedValueContains("hello"), "unknowable is not failure")
+    }
+
     // MARK: - Revalidation
 
     func test_isStillFocused_trueForTheSameElement() throws {

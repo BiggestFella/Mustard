@@ -15,9 +15,19 @@ public protocol VoiceTaskQuickEditing: AnyObject {
     var draft: VoiceTaskDraft { get }
     /// Monotonic per-field edit counters, bumped by user edits only.
     var revisions: VoiceTaskFieldRevisions { get }
+    /// True once the card was dismissed. Edits made after that (drawer,
+    /// inbox) are not revision-tracked, so a closed card ENDS the drafting
+    /// window — a late model result must not land anywhere.
+    var isClosed: Bool { get }
+    /// The card's retry affordance when a draft fails (spec: cleanup is
+    /// retryable from the card); the coordinator installs it.
+    var retryDraft: (() -> Void)? { get set }
     /// Reflect a merged draft in the UI.
     func apply(_ merged: VoiceTaskDraft)
-    /// Dismiss the card (a newer capture replaces it).
+    /// Save the current values to the task and dismiss (a newer capture
+    /// COMMITS the previous card — its edits are never discarded).
+    func commit()
+    /// Dismiss without applying pending edits.
     func close()
 }
 
@@ -251,12 +261,23 @@ public final class VoiceTaskCaptureCoordinator {
                     self.record(segment)
                 }
             } catch {
-                // Engine failure while (or before) recording — never mid-capture
-                // silence: the pill explains, and any stable text is kept for
-                // the release path.
+                // Engine failure mid-recording. Never leave the mic feed hot,
+                // and never discard stable text: whatever already finalized
+                // commits as a task (spec §Error handling); only a capture
+                // with nothing stable surfaces as unavailable.
                 guard self.phase == .recording else { return }
-                self.phase = .unavailable(error.localizedDescription)
-                self.scheduleDismiss(after: 2.5)
+                await self.speech.cancel()
+                self.pressedAt = nil
+                let stable = VoiceCapture.transcript(
+                    from: self.segmentsByID.values.filter(\.isFinal))
+                if stable.isEmpty {
+                    self.phase = .unavailable(error.localizedDescription)
+                    self.scheduleDismiss(after: 2.5)
+                } else {
+                    self.finalizeTask = Task { [weak self] in
+                        self?.commitCapture(transcript: stable)
+                    }
+                }
             }
         }
     }
@@ -290,19 +311,32 @@ public final class VoiceTaskCaptureCoordinator {
             switch VoiceCapture.outcome(
                 pressedAt: pressedAt, releasedAt: releasedAt, transcript: transcript
             ) {
-            case .commit(let title):
-                let task = self.insertCapture(title: title, transcript: transcript)
-                self.activeEditor?.close()   // one visible card: newest capture wins
-                let editor = self.presentEditor(task)
-                self.activeEditor = editor
-                self.phase = .committed(title)
-                self.scheduleDismiss(after: 1.6)
-                self.requestDrafting(for: task, transcript: transcript, editor: editor)
+            case .commit:
+                self.commitCapture(transcript: transcript)
             case .cancelled:
                 self.phase = .cancelled
                 self.scheduleDismiss(after: 0.8)
             }
         }
+    }
+
+    /// Land one finalized transcript: insert the raw task, COMMIT the previous
+    /// card's current values (spec: a new capture never discards them), open
+    /// the new card, and kick drafting.
+    private func commitCapture(transcript: String) {
+        let title = VoiceCapture.normalizeTitle(transcript)
+        guard !title.isEmpty else {
+            phase = .cancelled
+            scheduleDismiss(after: 0.8)
+            return
+        }
+        let task = insertCapture(title: title, transcript: transcript)
+        activeEditor?.commit()   // one visible card; its edits are saved, not lost
+        let editor = presentEditor(task)
+        activeEditor = editor
+        phase = .committed(title)
+        scheduleDismiss(after: 1.6)
+        requestDrafting(for: task, transcript: transcript, editor: editor)
     }
 
     // MARK: - Drafting
@@ -314,13 +348,25 @@ public final class VoiceTaskCaptureCoordinator {
     private func requestDrafting(
         for task: MustardTask, transcript: String, editor: (any VoiceTaskQuickEditing)?
     ) {
+        editor?.retryDraft = nil
         let requestRevisions = editor?.revisions ?? VoiceTaskFieldRevisions()
         let requestedAt = now()
         draftingTask = Task { [weak self] in
             guard let self else { return }
             guard case .success(let generated) = await self.draftGenerator(
                 transcript, self.allowedAreas(), requestedAt
-            ) else { return }
+            ) else {
+                // Retryable from the card (spec): the task stays .raw and the
+                // card offers Draft Again while it is still open.
+                editor?.retryDraft = { [weak self] in
+                    self?.requestDrafting(for: task, transcript: transcript, editor: editor)
+                }
+                return
+            }
+            // A closed card ends the drafting window: edits made afterwards
+            // (drawer, inbox) are not revision-tracked, so a late result must
+            // not overwrite them.
+            if let editor, editor.isClosed { return }
             let current = editor?.draft ?? VoiceTaskDraft(
                 title: task.title,
                 notes: task.notes.isEmpty ? nil : task.notes,

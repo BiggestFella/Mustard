@@ -25,6 +25,7 @@ final class TextInserterTests: XCTestCase {
         var stillFocused = true
         var directInsertSucceeds = true
         var pasteSucceeds = true
+        var verifySucceeds = true
         var externalBumpAfterWrite = false
 
         var directInsertReceived: (FocusedTextTarget, String)?
@@ -58,7 +59,8 @@ final class TextInserterTests: XCTestCase {
                     self.pastedToPID = pid
                     return self.pasteSucceeds
                 },
-                settle: {})
+                settle: {},
+                verifyInserted: { _, _ in self.verifySucceeds })
         }
     }
 
@@ -110,6 +112,19 @@ final class TextInserterTests: XCTestCase {
             return XCTFail("expected recoverable, got \(outcome)")
         }
         XCTAssertEqual(harness.restored, harness.snapshot)
+    }
+
+    func test_unverifiedPasteDelivery_isRecoverable_soTheTranscriptIsNeverLost() async {
+        let harness = Harness()
+        harness.directInsertSucceeds = false
+        harness.verifySucceeds = false
+
+        let outcome = await harness.inserter.insert("hello", into: target())
+
+        guard case .recoverable = outcome else {
+            return XCTFail("expected recoverable, got \(outcome)")
+        }
+        XCTAssertEqual(harness.restored, harness.snapshot, "the clipboard still restores")
     }
 
     // MARK: - Refusals (fail closed)

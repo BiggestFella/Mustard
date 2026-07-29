@@ -25,6 +25,11 @@ public struct TextInserter {
     public var sendPaste: (pid_t) -> Bool
     /// Gives the target app time to process ⌘V before restoration.
     public var settle: () async -> Void
+    /// Best-effort delivery check after the paste settled: posting CGEvents
+    /// proves nothing about the target servicing them, so an unverified paste
+    /// must never silently discard the transcript. True = confirmed or
+    /// unknowable; false = verified missing.
+    public var verifyInserted: (FocusedTextTarget, String) -> Bool
 
     public init(
         stillFocused: @escaping (FocusedTextTarget) -> Bool,
@@ -34,7 +39,8 @@ public struct TextInserter {
         currentChangeCount: @escaping () -> Int,
         restorePasteboard: @escaping (PasteboardSnapshot) -> Void,
         sendPaste: @escaping (pid_t) -> Bool,
-        settle: @escaping () async -> Void
+        settle: @escaping () async -> Void,
+        verifyInserted: @escaping (FocusedTextTarget, String) -> Bool
     ) {
         self.stillFocused = stillFocused
         self.directInsert = directInsert
@@ -44,6 +50,7 @@ public struct TextInserter {
         self.restorePasteboard = restorePasteboard
         self.sendPaste = sendPaste
         self.settle = settle
+        self.verifyInserted = verifyInserted
     }
 
     public func insert(_ text: String, into target: FocusedTextTarget) async -> TextInsertionOutcome {
@@ -66,11 +73,12 @@ public struct TextInserter {
         let writeCount = writeTranscript(text)
         let pasted = sendPaste(target.applicationPID)
         if pasted { await settle() }
+        let delivered = pasted && verifyInserted(target, text)
         if PasteboardSnapshot.shouldRestore(
             currentCount: currentChangeCount(), mustardWriteCount: writeCount) {
             restorePasteboard(snapshot)
         }
-        return pasted
+        return delivered
             ? .insertedByPaste
             : .recoverable("The app didn't accept the paste — the text is kept for you.")
     }
@@ -128,6 +136,11 @@ extension TextInserter {
             settle: {
                 // Give the target app time to service ⌘V before restoration.
                 try? await Task.sleep(for: .milliseconds(350))
+            },
+            verifyInserted: { _, text in
+                // Readable value missing the text = verified failure; an
+                // unreadable value (web areas) is unknowable, not failure.
+                reader.focusedValueContains(text) ?? true
             })
     }
 }

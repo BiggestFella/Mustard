@@ -42,7 +42,14 @@ public struct VoiceSetupProbes {
                     microphone: GrantState(av: AVCaptureDevice.authorizationStatus(for: .audio)),
                     speech: GrantState(sf: SFSpeechRecognizer.authorizationStatus()),
                     accessibility: AXIsProcessTrusted() ? .granted : .denied,
-                    systemAudio: CGPreflightScreenCaptureAccess() ? .granted : .notDetermined,
+                    // The OS exposes only a boolean here and prompts at most
+                    // once; a persisted asked-flag disambiguates "never asked"
+                    // (Request may prompt) from "refused" (only System
+                    // Settings can fix it).
+                    systemAudio: CGPreflightScreenCaptureAccess()
+                        ? .granted
+                        : (UserDefaults.standard.bool(forKey: "voiceRequestedScreenCapture")
+                            ? .denied : .notDetermined),
                     calendar: GrantState(ek: EKEventStore.authorizationStatus(for: .event))
                 )
             },
@@ -60,6 +67,7 @@ public struct VoiceSetupProbes {
                     // No in-app grant exists; the row shows Open Settings instead.
                     return AXIsProcessTrusted() ? .granted : .denied
                 case .systemAudio:
+                    UserDefaults.standard.set(true, forKey: "voiceRequestedScreenCapture")
                     return CGRequestScreenCaptureAccess() ? .granted : .denied
                 case .calendar:
                     let granted = (try? await EKEventStore().requestFullAccessToEvents()) ?? false
@@ -119,6 +127,15 @@ public struct VoiceSetupView: View {
                     sectionHeader("ON-DEVICE SPEECH ASSETS")
                     assetRow
                 }
+
+                if !PushToTalkHotKey.registrationBoard.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionHeader("SHORTCUTS")
+                        ForEach(PushToTalkHotKey.registrationBoard.keys.sorted(), id: \.self) { purpose in
+                            shortcutRow(purpose: purpose)
+                        }
+                    }
+                }
             }
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,6 +147,37 @@ public struct VoiceSetupView: View {
         // grants flipped there show up without a refresh control.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { status = await probes.readStatus() }
+        }
+    }
+
+    /// One chord's registration outcome — a conflict is shown with the failed
+    /// shortcut and the route to change it (spec: never silent).
+    @ViewBuilder
+    private func shortcutRow(purpose: String) -> some View {
+        if let entry = PushToTalkHotKey.registrationBoard[purpose] {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(purpose) — \(entry.chord)")
+                        .font(Theme.Fonts.body)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                    if case .conflict = entry.registration {
+                        Text("Another app already owns \(entry.chord). Change Mustard's chord (defaults: voiceHotKeyCode / dictationHotKeyCode) and relaunch, or free it in the other app.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                }
+                Spacer(minLength: 12)
+                switch entry.registration {
+                case .registered:
+                    Label("Active", systemImage: "checkmark")
+                        .foregroundStyle(Theme.Palette.done)
+                        .font(Theme.Fonts.meta)
+                case .conflict:
+                    Label("In use by another app", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(Theme.Palette.warning)
+                        .font(Theme.Fonts.meta)
+                }
+            }
         }
     }
 

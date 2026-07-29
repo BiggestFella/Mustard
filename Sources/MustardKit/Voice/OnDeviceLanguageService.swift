@@ -151,7 +151,12 @@ public actor OnDeviceLanguageService: OnDeviceGenerating {
     public func generate<Output: Generable & Sendable>(
         _ type: Output.Type, instructions: String, prompt: String
     ) async throws -> Output {
-        let session = session(for: instructions)
+        // One-shot: a live session is a stateful multi-turn transcript, so
+        // reusing one across drafts accumulates context until every request
+        // overflows (and concurrent drafts would interleave turns). Each
+        // generate gets a fresh session; prewarming still keeps the model
+        // itself resident via `prepareForLikelyUse`.
+        let session = makeSession(instructions)
         do {
             return try await session.respond(prompt: prompt, type: type)
         } catch {

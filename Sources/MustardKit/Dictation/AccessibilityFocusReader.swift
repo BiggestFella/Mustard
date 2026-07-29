@@ -95,6 +95,14 @@ public struct AccessibilityFocusReader: FocusedTextReading {
             && Self.identity(of: probe) == target.elementIdentifier
     }
 
+    /// Best-effort paste-delivery check: true/false when the focused
+    /// element's value is readable, nil when it isn't (web areas often
+    /// withhold it) — unknowable is not the same as failed.
+    public func focusedValueContains(_ text: String) -> Bool? {
+        guard isTrusted(), let probe = try? probe(), let value = probe.value else { return nil }
+        return value.contains(text)
+    }
+
     // MARK: - Pure mapping
 
     /// Stable identity: PID anchored, plus the element token and role/window

@@ -1,3 +1,7 @@
+// Voice-task drafting is a Mac feature: the iOS companion compiles MustardKit
+// sources directly at an iOS 17 floor where FoundationModels (and @Generable)
+// do not exist, so this whole unit is macOS-only.
+#if os(macOS)
 import Foundation
 import FoundationModels
 
@@ -152,3 +156,4 @@ public struct VoiceTaskDraftGenerator: Sendable {
         #endif
     }
 }
+#endif

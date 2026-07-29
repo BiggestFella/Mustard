@@ -48,6 +48,15 @@ public struct VoiceTaskQuickEditView: View {
                     .buttonStyle(.plain)
                     .font(Theme.Fonts.meta)
                     .foregroundStyle(Theme.Palette.accent)
+                if let retry = state.retryDraft {
+                    Button("Draft Again") {
+                        state.retryDraft = nil
+                        retry()
+                    }
+                    .buttonStyle(.plain)
+                    .font(Theme.Fonts.meta)
+                    .foregroundStyle(Theme.Palette.accent)
+                }
                 Spacer()
                 Button("Close") { state.handle(.escape) }
                     .buttonStyle(.plain)

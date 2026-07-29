@@ -205,9 +205,9 @@ final class OnDeviceLanguageServiceTests: XCTestCase {
         XCTAssertEqual(box.prewarmCounts, [1, 1])
     }
 
-    // MARK: - Guided generation & session reuse
+    // MARK: - Guided generation (one-shot sessions)
 
-    func test_generate_returnsTypedOutput_andReusesSessionForSameInstructions() async throws {
+    func test_generate_returnsTypedOutput_andUsesAFreshSessionPerRequest() async throws {
         guard #available(macOS 26.0, *) else { throw XCTSkip("Requires macOS 26") }
         let box = StubSessionBox()
         box.respondResult = GeneratedContent("structured")
@@ -223,13 +223,16 @@ final class OnDeviceLanguageServiceTests: XCTestCase {
 
         XCTAssertEqual(String(describing: first.kind), String(describing: GeneratedContent("structured").kind))
         XCTAssertEqual(String(describing: second.kind), String(describing: GeneratedContent("structured").kind))
-        XCTAssertEqual(box.sessionsCreated, 1,
-                       "Same instructions must reuse the live session.")
+        // Live sessions are stateful multi-turn transcripts: reusing one
+        // across drafts accumulates context until every draft overflows.
+        // Every generate() is one-shot on a fresh session.
+        XCTAssertEqual(box.sessionsCreated, 2,
+                       "Each draft must run in its own session — transcripts never accumulate.")
         XCTAssertEqual(box.respondedPrompts, ["buy milk", "call dentist"])
-        XCTAssertEqual(box.createdInstructions, ["Extract a task."])
+        XCTAssertEqual(box.createdInstructions, ["Extract a task.", "Extract a task."])
     }
 
-    func test_generate_rotatesSessionWhenInstructionsChange() async throws {
+    func test_generate_freshSessionCarriesTheRequestInstructions() async throws {
         guard #available(macOS 26.0, *) else { throw XCTSkip("Requires macOS 26") }
         let box = StubSessionBox()
         box.respondResult = GeneratedContent("ok")

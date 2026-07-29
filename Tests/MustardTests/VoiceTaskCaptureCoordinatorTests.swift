@@ -61,8 +61,12 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
         var revisions = VoiceTaskFieldRevisions()
         var applied: VoiceTaskDraft?
         var closed = false
+        var committed = false
+        var retryDraft: (() -> Void)?
+        var isClosed: Bool { closed }
         init(draft: VoiceTaskDraft) { self.draft = draft }
         func apply(_ merged: VoiceTaskDraft) { applied = merged; draft = merged }
+        func commit() { committed = true; closed = true }
         func close() { closed = true }
     }
 
@@ -276,9 +280,112 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(editor.applied?.title, "Buy oat milk")
     }
 
+    // MARK: - Mid-capture stream failure (review fixes)
+
+    func test_streamFailureAfterStableText_commitsIt_andStopsTheFeed() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        let coordinator = makeCoordinator(context: context, speech: speech, clock: Clock([t0]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginCapture()
+        await Task.yield()
+        speech.continuation?.yield(seg("a", "buy milk", start: 0, final: true))
+        for _ in 0..<10 { await Task.yield() }
+        speech.continuation?.finish(throwing: VoiceSessionError.audioFormatUnavailable)
+        for _ in 0..<25 { await Task.yield() }
+        await coordinator.finalizeTask?.value
+
+        XCTAssertTrue(speech.cancelled, "the mic feed must never stay hot after a failure")
+        let task = try XCTUnwrap(try tasks(in: context).first, "stable text still becomes a task")
+        XCTAssertEqual(task.title, "Buy milk")
+        XCTAssertEqual(task.captureTranscript, "buy milk")
+        XCTAssertEqual(coordinator.phase, .committed("Buy milk"))
+    }
+
+    func test_streamFailureWithNothingStable_reportsUnavailable_andStopsTheFeed() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        let coordinator = makeCoordinator(context: context, speech: speech, clock: Clock([t0]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginCapture()
+        await Task.yield()
+        speech.continuation?.yield(seg("a", "buy mi", start: 0, final: false))
+        for _ in 0..<10 { await Task.yield() }
+        speech.continuation?.finish(throwing: VoiceSessionError.audioFormatUnavailable)
+        for _ in 0..<25 { await Task.yield() }
+        await coordinator.finalizeTask?.value
+
+        XCTAssertTrue(speech.cancelled)
+        XCTAssertEqual(try tasks(in: context).count, 0, "provisional-only text never commits")
+        guard case .unavailable = coordinator.phase else {
+            return XCTFail("expected unavailable, got \(coordinator.phase)")
+        }
+    }
+
     // MARK: - Editor lifecycle
 
-    func test_secondCapture_closesThePreviousEditor() async throws {
+    func test_lateDraft_afterTheCardClosed_neverTouchesTheTask() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        speech.finals = [seg("a", "buy milk", start: 0, final: true)]
+        let editor = StubEditor(draft: VoiceTaskDraft(title: "Buy milk"))
+        let gate = DraftGate()
+        let coordinator = makeCoordinator(
+            context: context, speech: speech,
+            clock: Clock([t0, t0.addingTimeInterval(2)]),
+            draft: { _, _, _ in await gate.wait() },
+            presentEditor: { _ in editor })
+
+        await capture(coordinator, speech: speech)
+
+        // Leon closes the card (or Open Fully hands off) while the model is
+        // still thinking — edits made after that are not revision-tracked,
+        // so the late result must not land anywhere.
+        editor.close()
+        await gate.resume(.success(VoiceTaskDraft(title: "Buy milk from Coles")))
+        await coordinator.draftingTask?.value
+
+        let task = try XCTUnwrap(try tasks(in: context).first)
+        XCTAssertEqual(task.title, "Buy milk", "a closed card ends the drafting window")
+        XCTAssertEqual(task.captureState, .raw)
+        XCTAssertNil(editor.applied)
+    }
+
+    func test_failedDraft_offersRetryFromTheCard() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        speech.finals = [seg("a", "buy milk", start: 0, final: true)]
+        let editor = StubEditor(draft: VoiceTaskDraft(title: "Buy milk"))
+        var attempts = 0
+        let coordinator = makeCoordinator(
+            context: context, speech: speech,
+            clock: Clock([t0, t0.addingTimeInterval(2)]),
+            draft: { _, _, _ in
+                attempts += 1
+                return attempts == 1
+                    ? .failure(.model(.modelNotReady))
+                    : .success(VoiceTaskDraft(title: "Buy milk from Coles"))
+            },
+            presentEditor: { _ in editor })
+
+        await capture(coordinator, speech: speech)
+        await coordinator.draftingTask?.value
+
+        let retry = try XCTUnwrap(editor.retryDraft, "a failed draft is retryable from the card")
+        retry()
+        await coordinator.draftingTask?.value
+
+        let task = try XCTUnwrap(try tasks(in: context).first)
+        XCTAssertEqual(task.title, "Buy milk from Coles")
+        XCTAssertEqual(task.captureState, .cleaned)
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func test_secondCapture_commitsThePreviousEditor() async throws {
         let context = try ctx()
         let speech = StubSpeech()
         speech.finals = [seg("a", "buy milk", start: 0, final: true)]
@@ -301,7 +408,10 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
         await capture(coordinator, speech: speech)
 
         XCTAssertEqual(editors.count, 2)
-        XCTAssertTrue(editors[0].closed, "a second capture closes the previous editor")
+        XCTAssertTrue(
+            editors[0].committed,
+            "a new capture COMMITS the previous card's current values (spec), never discards them")
+        XCTAssertTrue(editors[0].closed)
         XCTAssertFalse(editors[1].closed)
         XCTAssertEqual(try tasks(in: context).count, 2)
     }

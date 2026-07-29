@@ -50,6 +50,9 @@ final class SystemDictationCoordinatorTests: XCTestCase {
         var insertedText: String?
         var continuation: AsyncThrowingStream<VoiceTranscriptSegment, Error>.Continuation?
         var speechCancelled = false
+        /// When set, insert() suspends on a continuation handed to this
+        /// closure until the test resumes it.
+        var insertGateWaiter: ((CheckedContinuation<Void, Never>) -> Void)?
 
         init(target: FocusedTextTarget) {
             snapshotResult = .success(target)
@@ -92,6 +95,9 @@ final class SystemDictationCoordinatorTests: XCTestCase {
                     self.events.append("insert")
                     self.insertedText = text
                     _ = target
+                    if let waiter = self.insertGateWaiter {
+                        await withCheckedContinuation { waiter($0) }
+                    }
                     return self.insertOutcome
                 },
                 pill: .none(),
@@ -242,6 +248,86 @@ final class SystemDictationCoordinatorTests: XCTestCase {
             return XCTFail("expected recoverable, got \(coordinator.phase)")
         }
         XCTAssertNil(harness.insertedText)
+    }
+
+    // MARK: - Mid-hold failures & stale-task isolation (review fixes)
+
+    func test_speechFailureMidHold_stopsTheFeed_andPreservesStableText() async {
+        let harness = Harness(target: target())
+        let coordinator = harness.makeCoordinator(clock: Clock([t0]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginDictation()
+        await Task.yield()
+        harness.continuation?.yield(seg("a", "hello world", final: true))
+        for _ in 0..<10 { await Task.yield() }
+        harness.continuation?.finish(throwing: VoiceSessionError.audioFormatUnavailable)
+        for _ in 0..<25 { await Task.yield() }
+
+        XCTAssertTrue(harness.speechCancelled, "the mic feed must never stay hot after a failure")
+        guard case .recoverable = coordinator.phase else {
+            return XCTFail("expected recoverable, got \(coordinator.phase)")
+        }
+        XCTAssertEqual(coordinator.recoveredTranscript, "hello world", "stable text survives the failure")
+    }
+
+    func test_newHoldDuringInsert_isNeverClobberedByTheStaleFinalize() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "first sentence", final: true)]
+        var gate: CheckedContinuation<Void, Never>?
+        harness.insertGateWaiter = { gate = $0 }
+        let coordinator = harness.makeCoordinator(
+            clock: Clock([t0, t0.addingTimeInterval(2), t0.addingTimeInterval(10)]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginDictation()
+        await Task.yield()
+        coordinator.endDictation()
+        // Let the finalize task reach the gated insert (phase .inserting).
+        for _ in 0..<25 { await Task.yield() }
+        XCTAssertEqual(coordinator.phase, .inserting)
+
+        // A new hold starts while the old insert is still in flight.
+        harness.insertGateWaiter = nil
+        coordinator.beginDictation()
+        await Task.yield()
+        XCTAssertEqual(coordinator.phase, .listening)
+
+        // The stale finalize resumes — it must not touch the new hold.
+        gate?.resume()
+        await coordinator.finalizeTask?.value
+        for _ in 0..<25 { await Task.yield() }
+
+        XCTAssertEqual(coordinator.phase, .listening, "a stale finalize must never stomp a live hold")
+    }
+
+    func test_releaseAfterCursorMoved_recoversInsteadOfInserting() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello", final: true)]
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginDictation()
+        await Task.yield()
+        // The cursor moved within the same field during the hold.
+        harness.snapshotResult = .success(FocusedTextTarget(
+            applicationPID: 42,
+            elementIdentifier: "42#token#AXTextField#Notes",
+            selectedRange: NSRange(location: 9, length: 0),
+            precedingCharacter: "x",
+            followingCharacter: nil,
+            isSecure: false))
+        coordinator.endDictation()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertNil(harness.insertedText, "a moved cursor means the snapshot no longer holds")
+        guard case .recoverable = coordinator.phase else {
+            return XCTFail("expected recoverable, got \(coordinator.phase)")
+        }
+        XCTAssertEqual(coordinator.recoveredTranscript, "hello")
     }
 
     // MARK: - Retry from recovery (the pill's "Try Current Field")

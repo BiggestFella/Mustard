@@ -30,6 +30,9 @@ public final class VoiceTaskQuickEditState: VoiceTaskQuickEditing {
     public var draft: VoiceTaskDraft
     public private(set) var revisions = VoiceTaskFieldRevisions()
     public private(set) var isClosed = false
+    /// Installed by the capture coordinator when a draft fails — the card
+    /// shows Draft Again while it is open (spec: retryable from the card).
+    public var retryDraft: (() -> Void)?
     /// Area names offered by the picker, fetched once — the panel-hosted view
     /// has no SwiftData environment, so `@Query` is not an option there.
     public let areaNames: [String]
