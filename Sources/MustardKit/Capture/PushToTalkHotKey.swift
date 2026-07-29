@@ -12,16 +12,18 @@ public enum HotKeyRegistration: Equatable, Sendable {
 import AppKit
 import Carbon.HIToolbox
 
-/// System-wide push-to-talk hotkey (F25 v1, ADR-0011) via Carbon
+/// System-wide push-to-talk hotkey (ADR-0011) via Carbon
 /// `RegisterEventHotKey` — the one API that delivers both *pressed* and
 /// *released* events globally without an Accessibility/Input Monitoring grant
-/// (the app is ad-hoc signed, ADR-0004). Default chord: ⌃⌥Space, overridable
-/// through UserDefaults (`voiceHotKeyCode` / `voiceHotKeyModifiers`).
+/// (the app is ad-hoc signed, ADR-0004). One instance per chord, each with a
+/// distinct `id`: task capture is ID 1 / ⌃⌥Space, dictation is ID 2 / ⌃⌥D,
+/// both overridable through UserDefaults.
 @MainActor
 public final class PushToTalkHotKey {
     public var onPress: (() -> Void)?
     public var onRelease: (() -> Void)?
 
+    private let id: UInt32
     private let keyCode: UInt32
     private let modifiers: UInt32
     private var hotKeyRef: EventHotKeyRef?
@@ -29,14 +31,28 @@ public final class PushToTalkHotKey {
     private static let signature: OSType = {
         "MSTD".utf8.reduce(0) { ($0 << 8) + OSType($1) }
     }()
-    private static let hotKeyID: UInt32 = 1
 
     public init(
+        id: UInt32 = 1,
         keyCode: UInt32 = UInt32(UserDefaults.standard.object(forKey: "voiceHotKeyCode") as? Int ?? kVK_Space),
         modifiers: UInt32 = UInt32(UserDefaults.standard.object(forKey: "voiceHotKeyModifiers") as? Int ?? (controlKey | optionKey))
     ) {
+        self.id = id
         self.keyCode = keyCode
         self.modifiers = modifiers
+    }
+
+    /// The task-capture chord (⌃⌥Space by default).
+    public static func capture() -> PushToTalkHotKey {
+        PushToTalkHotKey(id: 1)
+    }
+
+    /// The system-wide dictation chord (⌃⌥D by default).
+    public static func dictation() -> PushToTalkHotKey {
+        PushToTalkHotKey(
+            id: 2,
+            keyCode: UInt32(UserDefaults.standard.object(forKey: "dictationHotKeyCode") as? Int ?? kVK_ANSI_D),
+            modifiers: UInt32(UserDefaults.standard.object(forKey: "dictationHotKeyModifiers") as? Int ?? (controlKey | optionKey)))
     }
 
     /// Install the Carbon handler and claim the chord. Safe to call repeatedly.
@@ -61,10 +77,12 @@ public final class PushToTalkHotKey {
                     event, EventParamName(kEventParamDirectObject),
                     EventParamType(typeEventHotKeyID), nil,
                     MemoryLayout<EventHotKeyID>.size, nil, &hkID)
-                guard hkID.signature == PushToTalkHotKey.signature,
-                      hkID.id == PushToTalkHotKey.hotKeyID else { return noErr }
                 let kind = GetEventKind(event)
                 let owner = Unmanaged<PushToTalkHotKey>.fromOpaque(userData).takeUnretainedValue()
+                // Every registered handler sees every hotkey event; each
+                // instance answers only for its own chord.
+                guard hkID.signature == PushToTalkHotKey.signature,
+                      hkID.id == owner.id else { return noErr }
                 DispatchQueue.main.async {
                     if kind == UInt32(kEventHotKeyPressed) { owner.onPress?() }
                     if kind == UInt32(kEventHotKeyReleased) { owner.onRelease?() }
@@ -74,8 +92,8 @@ public final class PushToTalkHotKey {
             2, &eventSpecs,
             Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
 
-        let id = EventHotKeyID(signature: Self.signature, id: Self.hotKeyID)
-        let status = RegisterEventHotKey(keyCode, modifiers, id, GetEventDispatcherTarget(), 0, &hotKeyRef)
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
+        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
         guard status == noErr, hotKeyRef != nil else {
             hotKeyRef = nil
             return .conflict(status)
