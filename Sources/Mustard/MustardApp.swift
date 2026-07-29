@@ -129,6 +129,7 @@ struct MustardApp: App {
     @State private var notchNav = NotchNavigation()
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
+    @State private var meetingRecorder: MeetingCaptureCoordinator?
     init() {
         let container = MustardContainer.make()
         let executionGate = AgentExecutionGate()
@@ -183,13 +184,34 @@ struct MustardApp: App {
                             )
                         }
                     }
-                    if notch == nil {
+                    if meetingRecorder == nil {
+                        // Manual meeting recorder (Meetings Task 6): consent-gated
+                        // two-source capture; crash-left partials surface on launch.
+                        let recordings = URL.applicationSupportDirectory
+                            .appending(path: "Mustard/Recordings", directoryHint: .isDirectory)
+                        try? FileManager.default.createDirectory(
+                            at: recordings, withIntermediateDirectories: true)
+                        let store = MeetingAudioStore(recordingsRoot: recordings)
+                        let recorder = MeetingCaptureCoordinator(
+                            context: container.mainContext,
+                            capturing: ScreenCaptureMeetingAudio(),
+                            store: store,
+                            makeWriter: { uid, startedAt in
+                                try MeetingAudioWriter(
+                                    store: store, meetingUID: uid, startedAt: startedAt)
+                            },
+                            transcription: .liveMeeting())
+                        recorder.recoverOnLaunch()
+                        meetingRecorder = recorder
+                    }
+                    if notch == nil, let meetingRecorder {
                         let controller = NotchController { onHover in
                             AnyView(
                                 NotchView(onHoverChange: onHover)
                                     .environment(agent)
                                     .environment(taskAgent)
                                     .environment(notchNav)
+                                    .environment(meetingRecorder)
                                     .modelContainer(container)
                             )
                         }

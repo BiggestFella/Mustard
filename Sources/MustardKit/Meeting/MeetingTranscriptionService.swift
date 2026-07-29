@@ -92,3 +92,55 @@ public final class MeetingTranscriptionService {
         return MeetingTranscriptMerge.merged(you: youFinals, meeting: meetingFinals)
     }
 }
+
+// MARK: - Live wiring (macOS; exercised in the meeting matrix)
+
+#if os(macOS)
+extension MeetingTranscriptionService {
+    /// Production transcription: fresh SpeechAnalyzer sessions per source
+    /// (macOS 27's live driver — earlier installs get a clear failure), a
+    /// resource-exhaustion fallback on the second session, and the
+    /// after-Stop file transcriber.
+    @MainActor
+    public static func liveMeeting() -> MeetingTranscriptionService {
+        MeetingTranscriptionService(
+            makeSession: {
+                guard #available(macOS 27.0, *) else {
+                    throw VoiceSessionError.notReady(
+                        .unavailable("Meeting transcription needs macOS 27"))
+                }
+                return AppleSpeechSession.live()
+            },
+            isInsufficientResources: { error in
+                // Readiness/permission problems must propagate (no silent
+                // degradation); runtime allocation failures on the second
+                // session select the sequential fallback instead.
+                if case VoiceSessionError.notReady = error { return false }
+                return true
+            },
+            transcribeFile: { url in
+                guard #available(macOS 27.0, *) else { return [] }
+                return try await transcribeAudioFile(url)
+            })
+    }
+
+    /// Post-process one finalized audio file through a fresh session —
+    /// the sequential fallback's second half.
+    @available(macOS 27.0, *)
+    @MainActor
+    static func transcribeAudioFile(_ url: URL) async throws -> [VoiceTranscriptSegment] {
+        let session = AppleSpeechSession.live()
+        _ = try await session.start(source: .meeting)
+        let file = try AVAudioFile(forReading: url)
+        let chunkFrames: AVAudioFrameCount = 48_000
+        while file.framePosition < file.length {
+            guard let buffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat, frameCapacity: chunkFrames) else { break }
+            try file.read(into: buffer)
+            guard buffer.frameLength > 0 else { break }
+            try await session.append(buffer, at: nil)
+        }
+        return try await session.finish()
+    }
+}
+#endif
