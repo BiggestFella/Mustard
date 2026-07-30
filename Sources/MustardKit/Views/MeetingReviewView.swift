@@ -57,6 +57,10 @@ public struct MeetingReviewView: View {
     @State private var selectedUID: String?
     @State private var playback = MeetingPlaybackController()
     @State private var highlightedSegmentUID: String?
+    @State private var confirmingAudioDelete: String?
+    @State private var confirmingMeetingDelete: String?
+    @State private var exportConflicts: [String]?
+    @State private var pendingExportDestination: URL?
 
     public init() {}
 
@@ -175,7 +179,7 @@ public struct MeetingReviewView: View {
     }
 
     private func header(_ meeting: MeetingRecord) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(meeting.title.isEmpty ? "Untitled meeting" : meeting.title)
                 .font(Theme.Fonts.header)
                 .foregroundStyle(Theme.Palette.textPrimary)
@@ -189,7 +193,102 @@ public struct MeetingReviewView: View {
             }
             .font(Theme.Fonts.caption)
             .foregroundStyle(Theme.Palette.textTertiary)
+            actionsRow(meeting)
         }
+    }
+
+    /// Pin (retention exemption), export, and the two deletion tiers
+    /// (meeting recorder Task 10).
+    private func actionsRow(_ meeting: MeetingRecord) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                meeting.pinned.toggle()
+                try? context.save()
+            } label: {
+                Label(meeting.pinned ? "Pinned" : "Pin",
+                      systemImage: meeting.pinned ? "pin.fill" : "pin")
+            }
+            .help("Pinned meetings keep their audio past the 30-day retention")
+            Button("Export…") { runExport(meeting, overwrite: false) }
+            if meeting.youAudioPath != nil || meeting.playbackAudioPath != nil {
+                Button("Delete Audio") { confirmingAudioDelete = meeting.uid }
+                    .help("Removes the audio now; transcript and digest stay")
+            }
+            Button("Delete Meeting…") { confirmingMeetingDelete = meeting.uid }
+                .foregroundStyle(Theme.Palette.warning)
+            Spacer()
+        }
+        .buttonStyle(.plain)
+        .font(Theme.Fonts.meta)
+        .foregroundStyle(Theme.Palette.textSecondary)
+        .confirmationDialog(
+            "Delete this meeting's audio? The transcript and digest stay.",
+            isPresented: Binding(
+                get: { confirmingAudioDelete == meeting.uid },
+                set: { if !$0 { confirmingAudioDelete = nil } })
+        ) {
+            Button("Delete Audio", role: .destructive) {
+                try? MeetingRetention.deleteAudio(
+                    for: meeting, store: recordingsStore, context: context)
+            }
+        }
+        .confirmationDialog(
+            "Move this meeting to the Trash? Audio, transcript, digest and proposals all go — approved tasks stay on your board.",
+            isPresented: Binding(
+                get: { confirmingMeetingDelete == meeting.uid },
+                set: { if !$0 { confirmingMeetingDelete = nil } })
+        ) {
+            Button("Delete Meeting", role: .destructive) {
+                try? MeetingRetention.deleteMeeting(
+                    meeting, store: recordingsStore, context: context,
+                    trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) })
+                selectedUID = nil
+            }
+        }
+        .confirmationDialog(
+            "Files with these names already exist. Replace them?",
+            isPresented: Binding(
+                get: { exportConflicts != nil },
+                set: { if !$0 { exportConflicts = nil } })
+        ) {
+            Button("Replace", role: .destructive) {
+                if let destination = pendingExportDestination {
+                    exportConflicts = nil
+                    export(meeting, to: destination, overwrite: true)
+                }
+            }
+        }
+    }
+
+    /// The user picks the destination; existing files are never replaced
+    /// without the confirmation dialog above.
+    private func runExport(_ meeting: MeetingRecord, overwrite: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        export(meeting, to: destination, overwrite: overwrite)
+    }
+
+    private func export(_ meeting: MeetingRecord, to destination: URL, overwrite: Bool) {
+        do {
+            _ = try MeetingExportService.export(
+                meeting, store: recordingsStore, to: destination, overwrite: overwrite)
+        } catch MeetingExportError.wouldOverwrite(let conflicts) {
+            pendingExportDestination = destination
+            exportConflicts = conflicts
+        } catch {
+            // Surfaced on the record so it's visible in the header.
+            meeting.errorMessage = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// The app's real Recordings root (matches MustardApp's wiring).
+    private var recordingsStore: MeetingAudioStore {
+        MeetingAudioStore(recordingsRoot: URL.applicationSupportDirectory
+            .appending(path: "Mustard/Recordings", directoryHint: .isDirectory))
     }
 
     @ViewBuilder

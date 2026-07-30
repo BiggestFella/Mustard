@@ -103,4 +103,30 @@ public struct MeetingAudioStore {
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
+
+    // MARK: - Deletion (Task 10 — retention & Trash)
+
+    /// Permanently remove the validated meeting directory (retention's audio
+    /// cleanup). Idempotent: already-gone files are success, not failure —
+    /// but a traversal UID still throws before anything is touched.
+    public func deleteAudio(forMeetingUID uid: String) throws {
+        let url = try directoryURL(forMeetingUID: uid)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
+    }
+
+    /// Move the exact validated meeting directory to the system Trash — the
+    /// user-recoverable Delete Meeting path. The `trash` operation is
+    /// injectable so tests never touch the real Trash. A missing directory
+    /// is success (only metadata remains to delete).
+    public func trashMeetingDirectory(
+        forMeetingUID uid: String,
+        trash: (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
+    ) throws {
+        let url = try directoryURL(forMeetingUID: uid)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try trash(url)
+    }
 }

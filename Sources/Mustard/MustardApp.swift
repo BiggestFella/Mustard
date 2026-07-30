@@ -220,8 +220,18 @@ struct MustardApp: App {
                         }
                     }
                     if !didRecoverMeetings {
-                        // Crash-left partials surface once per launch.
+                        // Crash-left partials surface once per launch, and
+                        // audio past the 30-day retention (pinned exempt)
+                        // is cleared — transcripts and digests stay.
                         meetingRecorder.recoverOnLaunch()
+                        MeetingRetention.sweep(
+                            meetings: (try? container.mainContext.fetch(
+                                FetchDescriptor<MeetingRecord>())) ?? [],
+                            store: MeetingAudioStore(
+                                recordingsRoot: URL.applicationSupportDirectory
+                                    .appending(path: "Mustard/Recordings", directoryHint: .isDirectory)),
+                            context: container.mainContext,
+                            now: .now)
                         meetingSuggestions.startPolling()
                         didRecoverMeetings = true
                     }
