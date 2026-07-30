@@ -191,9 +191,14 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
         drafting), `VoiceTaskCaptureCoordinator` (segment stream, revision-gated
         merge), notch-adjacent quick-edit card, legacy SFSpeech engine + claude
         cleanup queue removed. Remaining: Task 6 macOS 27 acceptance pass (BAK-286).
-      - **Dictation (BAK-273):** system-wide push-to-talk insertion — in progress.
-      - **Meeting recorder (BAK-274):** two-source capture → evidence-backed
-        digests — in progress.
+      - **✅ Dictation (BAK-273 Tasks 1–5):** AX focus snapshots, direct/verified-
+        paste insertion, hold-⌃⌥D coordinator, nonactivating pill with recovery.
+        Remaining: cross-app matrix (BAK-292, Leon).
+      - **✅ Meeting recorder (BAK-274 Tasks 1–10):** consent-gated two-source
+        capture, crash-recoverable storage, merged transcripts, evidence-backed
+        digests, review/approval, suggestions, retention/Trash/export.
+        Remaining: real-call matrix (BAK-303, Leon). A 25-agent adversarial
+        review confirmed 20 findings mid-suite; all fixed (`c4ebabc`).
 
 *(Previous: B1 shipped as **F17**, the multi-source foundation as **F18**, and I1
 delegation as **F19**. Other unblocked candidate: **I2 Trust that earns itself** —

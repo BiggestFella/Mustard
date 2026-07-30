@@ -48,6 +48,15 @@ open build/Mustard.app
   password fields are always refused; if insertion can't happen the pill keeps
   the transcript with Copy / Try Current Field. Needs Accessibility (Voice
   Setup → Open Settings).
+- **Meeting recorder** — hover the notch → **Start Meeting** (or accept a
+  suggestion when a Zoom/Meet/Teams call looks like it's starting): explicit
+  consent first, then two-source recording (your mic + everything playing on
+  the Mac) with a persistent red indicator, live on-device transcription, and
+  an evidence-backed digest (summary, decisions, approval-gated task
+  proposals). Review in **Meetings**: playback with timestamp seeking,
+  searchable/correctable transcript, approve/reject proposals, export to
+  Markdown + audio. Audio expires after 30 days (pin to keep); everything
+  stays on this Mac. Crash recovery keeps safely written partials.
 - **Voice Setup** — Settings → Voice Setup…: reports the five voice permissions
   (microphone, speech recognition, accessibility, system audio, calendar)
   independently, with a Request or Open Settings route per row, plus on-device

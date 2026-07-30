@@ -67,6 +67,20 @@ Mustard/
       Agent/                     ClaudeRunner (Process shell), VaultSweep (prompt+parser),
                                    AgentService (@Observable orchestrator), FileVaultIO
                                    (MeetingVaultIO + NoteVaultIO), NoteIndexService (notes reindex)
+      Dictation/                  system-wide dictation (⌃⌥D, voice suite):
+                                   AccessibilityFocusReader (AX focus snapshots, fail-closed),
+                                   TextInserter + PasteboardSnapshot (direct AX insert or
+                                   lossless verified ⌘V fallback), SystemDictationCoordinator
+                                   (hold-epoch guarded; transcript never lost)
+      Meeting/                    meeting recorder (voice suite): MeetingAudioStore/-Writer
+                                   (validated Recordings/<uid>/ layout, crash-recoverable),
+                                   ScreenCaptureMeetingAudio + MeetingAudioCapture (two-source,
+                                   consent-gated), MeetingTranscriptionService (dual-live or
+                                   file fallback), MeetingDigestService (evidence-backed),
+                                   MeetingCaptureCoordinator, MeetingAppSignals + suggestions,
+                                   MeetingExportService; pure rules in Logic/ (MeetingRecordingState,
+                                   MeetingTranscriptMerge, MeetingDigestChunker, MeetingDetection,
+                                   MeetingActionApproval, MeetingRetention)
       Voice/                     shared Apple voice core (2026-07-29 voice suite):
                                    VoiceTypes/VoiceServices (contracts), AppleSpeechSession
                                    (SpeechAnalyzer adapter), VoiceAssetReadiness,
@@ -124,7 +138,7 @@ explicit dark hex, not `Theme`.
 ## Build & run
 
 ```bash
-swift test            # full suite (~1,300 at the voice-suite capture milestone)
+swift test            # full suite (~1,400 at the voice-suite meetings milestone)
 swift build           # compile check
 ./build-app.sh        # → build/Mustard.app (ad-hoc signed, double-clickable)
 open build/Mustard.app
