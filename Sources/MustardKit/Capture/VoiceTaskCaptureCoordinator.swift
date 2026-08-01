@@ -45,6 +45,9 @@ public final class VoiceTaskCaptureCoordinator {
     public enum Phase: Equatable {
         case idle
         case recording
+        /// Between release and the recognizer's final answer. Distinct from
+        /// `.recording` so a slow finalize reads as progress, not a freeze.
+        case finalizing
         case committed(String)   // flashed briefly: "Added — <title>"
         case cancelled           // too short / nothing heard
         case denied              // mic or speech permission missing
@@ -161,6 +164,8 @@ public final class VoiceTaskCaptureCoordinator {
     private let draftGenerator: (String, [String], Date) async -> Result<VoiceTaskDraft, VoiceTaskDraftFailure>
     private let allowedAreas: () -> [String]
     private let presentEditor: @MainActor (MustardTask) -> (any VoiceTaskQuickEditing)?
+    /// Hard ceiling on waiting for the recognizer's final answer.
+    private let finalizeTimeout: TimeInterval
     private let now: () -> Date
 
     private var pressedAt: Date?
@@ -169,6 +174,7 @@ public final class VoiceTaskCaptureCoordinator {
     private var consumeTask: Task<Void, Never>?
     private var dismissTask: Task<Void, Never>?
     private var activeEditor: (any VoiceTaskQuickEditing)?
+    private var finalizeContinuation: CheckedContinuation<[VoiceTranscriptSegment]?, Never>?
 
     public init(
         context: ModelContext,
@@ -178,6 +184,7 @@ public final class VoiceTaskCaptureCoordinator {
         draft: @escaping (String, [String], Date) async -> Result<VoiceTaskDraft, VoiceTaskDraftFailure>,
         allowedAreas: @escaping () -> [String],
         presentEditor: @escaping @MainActor (MustardTask) -> (any VoiceTaskQuickEditing)?,
+        finalizeTimeout: TimeInterval = 4,
         now: @escaping () -> Date = { .now }
     ) {
         self.context = context
@@ -187,6 +194,7 @@ public final class VoiceTaskCaptureCoordinator {
         self.draftGenerator = draft
         self.allowedAreas = allowedAreas
         self.presentEditor = presentEditor
+        self.finalizeTimeout = finalizeTimeout
         self.now = now
     }
 
@@ -240,7 +248,9 @@ public final class VoiceTaskCaptureCoordinator {
     }
 
     func beginCapture() {
-        guard phase != .recording else { return }   // key auto-repeat / re-entry
+        // Auto-repeat, and re-press while the previous capture is still
+        // finalizing (bounded below, so the window is short and self-clearing).
+        guard phase != .recording, phase != .finalizing else { return }
         dismissTask?.cancel()
         pressedAt = now()
         segmentsByID = [:]
@@ -299,14 +309,8 @@ public final class VoiceTaskCaptureCoordinator {
         }
         finalizeTask = Task { [weak self] in
             guard let self else { return }
-            let finals: [VoiceTranscriptSegment]
-            do {
-                finals = try await self.speech.end()
-            } catch {
-                // Finalization failed: preserve the best stable transcript the
-                // stream already delivered (spec §Error handling).
-                finals = self.segmentsByID.values.filter(\.isFinal)
-            }
+            self.phase = .finalizing
+            let finals = await self.boundedFinals()
             let transcript = VoiceCapture.transcript(from: finals)
             switch VoiceCapture.outcome(
                 pressedAt: pressedAt, releasedAt: releasedAt, transcript: transcript
@@ -317,6 +321,63 @@ public final class VoiceTaskCaptureCoordinator {
                 self.phase = .cancelled
                 self.scheduleDismiss(after: 0.8)
             }
+        }
+    }
+
+    /// Wait for the recognizer's final answer, but never forever. A wedged
+    /// analyzer — one whose result stream never finishes, which happens when
+    /// the session never truly started — used to leave `speech.end()`
+    /// suspended indefinitely: the phase stayed `.recording`, the pill sat on
+    /// "Listening…", and the microphone stayed live with no way out. After
+    /// `finalizeTimeout` we fall back to the stable segments already streamed
+    /// and tear the feed down.
+    private func boundedFinals() async -> [VoiceTranscriptSegment] {
+        let stable = Array(segmentsByID.values.filter(\.isFinal))
+        let raced: [VoiceTranscriptSegment]? = await withCheckedContinuation { continuation in
+            finalizeContinuation = continuation
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let finals = try? await self.speech.end()
+                self.resumeFinalize(finals ?? stable)
+            }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(self?.finalizeTimeout ?? 4))
+                self?.resumeFinalize(nil)
+            }
+        }
+        guard let raced else {
+            // Timed out: release the microphone rather than leaving it hot.
+            // (The suspended end() unblocks once the driver is cancelled.)
+            await speech.cancel()
+            consumeTask?.cancel()
+            return stable
+        }
+        return raced
+    }
+
+    /// Resume the finalize race exactly once, whichever arm gets there first.
+    private func resumeFinalize(_ value: [VoiceTranscriptSegment]?) {
+        guard let continuation = finalizeContinuation else { return }
+        finalizeContinuation = nil
+        continuation.resume(returning: value)
+    }
+
+    /// The pill's escape hatch: throw away whatever is in flight, release the
+    /// microphone, and dismiss. Nothing is saved — a capture the user chose to
+    /// abandon should leave no trace.
+    public func abandon() {
+        guard phase != .idle else { return }
+        finalizeTask = Task { [weak self] in
+            await self?.speech.cancel()
+            guard let self else { return }
+            self.resumeFinalize(nil)
+            self.consumeTask?.cancel()
+            self.dismissTask?.cancel()
+            self.pressedAt = nil
+            self.segmentsByID = [:]
+            self.liveTranscript = ""
+            self.pill.hide()
+            self.phase = .idle
         }
     }
 
@@ -456,6 +517,13 @@ private final class MicrophoneFeed {
     }
 
     func begin() async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error> {
+        // Always start from a clean slate. A capture that ended abnormally
+        // (wedged finalize, error path, abandon) can leave a live analyzer
+        // session and an unfinished pump behind; overwriting them orphaned
+        // both and left the analyzer holding resources, which made the NEXT
+        // capture transcribe nothing.
+        await cancel()
+
         let session = try makeSession()
         self.session = session
         let stream = try await session.start(source: .microphone)
@@ -464,6 +532,14 @@ private final class MicrophoneFeed {
         chunks = continuation
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        // A device mid-switch (Bluetooth connecting, input changing) reports a
+        // degenerate format; installing a tap on it yields silence at best.
+        // Fail loudly so the pill says so instead of recording nothing.
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            await session.cancel()
+            self.session = nil
+            throw VoiceSessionError.audioFormatUnavailable
+        }
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, when in
             guard let copy = buffer.deepCopy() else { return }

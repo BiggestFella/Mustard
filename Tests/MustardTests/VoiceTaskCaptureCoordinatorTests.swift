@@ -43,6 +43,8 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
         var finals: [VoiceTranscriptSegment] = []
         var cancelled = false
         var authorized = true
+        /// Reproduces a wedged analyzer: `end()` never returns.
+        var endHangs = false
 
         var seam: VoiceTaskCaptureCoordinator.Speech {
             VoiceTaskCaptureCoordinator.Speech(
@@ -50,6 +52,7 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
                 begin: { AsyncThrowingStream { self.continuation = $0 } },
                 end: {
                     self.continuation?.finish()
+                    if self.endHangs { try? await Task.sleep(for: .seconds(3600)) }
                     return self.finals
                 },
                 cancel: { self.cancelled = true })
@@ -101,6 +104,7 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
             draft: draft,
             allowedAreas: { ["Code Heroes", "Personal"] },
             presentEditor: presentEditor,
+            finalizeTimeout: 0.05,
             now: { clock.next() })
     }
 
@@ -278,6 +282,70 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(task.title, "Buy oat milk", "a late generated title must not overwrite a user edit")
         XCTAssertEqual(task.notes, "Generated note", "untouched fields still receive generated values")
         XCTAssertEqual(editor.applied?.title, "Buy oat milk")
+    }
+
+    // MARK: - A capture must always end (stuck-pill regressions)
+
+    func test_hungFinalization_commitsTheStableTextInsteadOfStranding() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        speech.endHangs = true   // analyzer never finishes its result stream
+        let coordinator = makeCoordinator(
+            context: context, speech: speech,
+            clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginCapture()
+        await Task.yield()
+        speech.continuation?.yield(seg("a", "buy milk", start: 0, final: true))
+        for _ in 0..<10 { await Task.yield() }
+        coordinator.endCapture()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertNotEqual(coordinator.phase, .recording, "the pill must never strand on Listening")
+        let task = try XCTUnwrap(try tasks(in: context).first, "stable text still becomes a task")
+        XCTAssertEqual(task.title, "Buy milk")
+        XCTAssertTrue(speech.cancelled, "a wedged analyzer is torn down so the mic is released")
+    }
+
+    func test_hungFinalization_withNothingStable_cancelsAndReleasesTheMic() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        speech.endHangs = true
+        let coordinator = makeCoordinator(
+            context: context, speech: speech,
+            clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginCapture()
+        await Task.yield()
+        coordinator.endCapture()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertEqual(coordinator.phase, .cancelled)
+        XCTAssertEqual(try tasks(in: context).count, 0)
+        XCTAssertTrue(speech.cancelled)
+    }
+
+    func test_abandon_dismissesAStuckCapture_andReleasesTheMic() async throws {
+        let context = try ctx()
+        let speech = StubSpeech()
+        let coordinator = makeCoordinator(context: context, speech: speech, clock: Clock([t0]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginCapture()
+        await Task.yield()
+        XCTAssertEqual(coordinator.phase, .recording)
+
+        coordinator.abandon()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertEqual(coordinator.phase, .idle, "the user can always dismiss the pill")
+        XCTAssertTrue(speech.cancelled)
+        XCTAssertEqual(try tasks(in: context).count, 0, "abandoning keeps nothing")
     }
 
     // MARK: - Mid-capture stream failure (review fixes)

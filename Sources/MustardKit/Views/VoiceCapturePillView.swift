@@ -23,6 +23,12 @@ public struct VoiceCapturePillView: View {
         .elevation(.float, cornerRadius: 28)   // bg ground + hairline + soft shadow
         .padding(8)
         .animation(Theme.Motion.settle, value: controller.phase)
+        // Escape hatch: the panel is non-activating (it must never steal focus
+        // mid-capture), so a click is the only input it can reliably take.
+        // Whatever goes wrong, one click always dismisses and frees the mic.
+        .contentShape(Rectangle())
+        .onTapGesture { controller.abandon() }
+        .help("Click to cancel this capture")
     }
 
     @ViewBuilder private var icon: some View {
@@ -34,6 +40,8 @@ public struct VoiceCapturePillView: View {
                 .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulsing)
                 .onAppear { pulsing = true }
                 .onDisappear { pulsing = false }
+        case .finalizing:
+            ProgressView().controlSize(.small)
         case .committed:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.Palette.done)
         case .cancelled:
@@ -53,6 +61,10 @@ public struct VoiceCapturePillView: View {
                 .foregroundStyle(controller.liveTranscript.isEmpty
                                  ? Theme.Palette.textTertiary : Theme.Palette.textPrimary)
                 .lineLimit(2)
+        case .finalizing:
+            Text("Finishing…")
+                .font(Theme.Fonts.body)
+                .foregroundStyle(Theme.Palette.textSecondary)
         case .committed(let title):
             Text("Added — \(title)")
                 .font(Theme.Fonts.body)
