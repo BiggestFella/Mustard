@@ -4,6 +4,14 @@ import SwiftUI
 import SwiftData
 import Observation
 import AVFoundation
+import os
+
+/// Voice-capture diagnostics. `.notice` so it persists without enabling
+/// debug logging: stream it with
+/// `log stream --predicate 'subsystem == "com.cavehole.mustard"'`.
+/// The live speech path can only be observed on real hardware, so a capture
+/// leaves a trail rather than requiring a rebuild to investigate.
+let voiceLog = Logger(subsystem: "com.cavehole.mustard", category: "voice")
 
 /// What the coordinator needs from the quick-edit card (Capture Task 4
 /// implements the real panel; tests inject a stub). The editor owns per-field
@@ -263,6 +271,7 @@ public final class VoiceTaskCaptureCoordinator {
         }
         phase = .recording
         pill.show(self)
+        voiceLog.notice("capture: begin")
         consumeTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -310,8 +319,11 @@ public final class VoiceTaskCaptureCoordinator {
         finalizeTask = Task { [weak self] in
             guard let self else { return }
             self.phase = .finalizing
+            voiceLog.notice("capture: finalizing (streamed \(self.segmentsByID.count, privacy: .public) segments)")
             let finals = await self.boundedFinals()
             let transcript = VoiceCapture.transcript(from: finals)
+            voiceLog.notice(
+                "capture: finals=\(finals.count, privacy: .public) transcriptChars=\(transcript.count, privacy: .public)")
             switch VoiceCapture.outcome(
                 pressedAt: pressedAt, releasedAt: releasedAt, transcript: transcript
             ) {
@@ -485,6 +497,8 @@ public final class VoiceTaskCaptureCoordinator {
     private func record(_ segment: VoiceTranscriptSegment) {
         segmentsByID[segment.id] = segment
         liveTranscript = VoiceCapture.liveTranscript(Array(segmentsByID.values))
+        voiceLog.notice(
+            "segment id=\(segment.id, privacy: .public) final=\(segment.isFinal, privacy: .public) chars=\(segment.text.count, privacy: .public) live=\(self.liveTranscript.count, privacy: .public)")
     }
 
     private func scheduleDismiss(after seconds: TimeInterval) {
@@ -547,10 +561,22 @@ private final class MicrophoneFeed {
         }
         engine.prepare()
         try engine.start()
+        voiceLog.notice(
+            "feed: tap installed rate=\(format.sampleRate, privacy: .public) ch=\(format.channelCount, privacy: .public)")
         pump = Task {
+            var appended = 0
             for await chunk in buffers {
-                try? await session.append(chunk.buffer, at: chunk.time)
+                do {
+                    try await session.append(chunk.buffer, at: chunk.time)
+                    appended += 1
+                    if appended == 1 || appended % 50 == 0 {
+                        voiceLog.notice("feed: appended \(appended, privacy: .public) buffers")
+                    }
+                } catch {
+                    voiceLog.error("feed: append failed \(error.localizedDescription, privacy: .public)")
+                }
             }
+            voiceLog.notice("feed: pump ended after \(appended, privacy: .public) buffers")
         }
         return stream
     }
