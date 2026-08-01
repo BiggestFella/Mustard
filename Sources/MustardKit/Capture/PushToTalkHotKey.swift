@@ -31,6 +31,50 @@ public enum HotKeyDispatch: Equatable, Sendable {
     }
 }
 
+/// A snapshot of the physically-held keys for one chord.
+public struct HotKeyChordState: Equatable, Sendable {
+    public var keyDown: Bool
+    public var control: Bool
+    public var option: Bool
+    public var shift: Bool
+    public var command: Bool
+
+    public init(
+        keyDown: Bool, control: Bool = false, option: Bool = false,
+        shift: Bool = false, command: Bool = false
+    ) {
+        self.keyDown = keyDown
+        self.control = control
+        self.option = option
+        self.shift = shift
+        self.command = command
+    }
+}
+
+/// Whether a push-to-talk chord is still held. Carbon only delivers
+/// `kEventHotKeyReleased` reliably while the modifiers are still down, so
+/// lifting Control/Option before the key strands a capture in "Listening…"
+/// with a live microphone and no way out. The hold is therefore decided from
+/// physical key state — pure, so both release orders are unit-tested.
+public enum HotKeyHold {
+    /// Held only while the key AND every modifier the chord requires are
+    /// down. Extra modifiers are tolerated: a stray Shift never cancels.
+    public static func isHeld(_ state: HotKeyChordState, carbonModifiers: UInt32) -> Bool {
+        guard state.keyDown else { return false }
+        // Carbon masks (Events.h): cmdKey 0x100, shiftKey 0x200,
+        // optionKey 0x800, controlKey 0x1000.
+        let required: [(UInt32, Bool)] = [
+            (0x1000, state.control),
+            (0x0800, state.option),
+            (0x0200, state.shift),
+            (0x0100, state.command),
+        ]
+        return required.allSatisfy { mask, isDown in
+            carbonModifiers & mask == 0 || isDown
+        }
+    }
+}
+
 /// Pure chord formatting for the setup surface (raw Carbon values so the
 /// formatter stays platform-free): "⌃⌥Space", "⌃⌥D", …
 public enum HotKeyChord {
@@ -67,6 +111,10 @@ public final class PushToTalkHotKey {
     private let modifiers: UInt32
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
+    /// One hold at a time; guards double-firing between the Carbon release
+    /// event and the physical-state watchdog.
+    private var isHolding = false
+    private var holdWatchdog: Task<Void, Never>?
     private static let signature: OSType = {
         "MSTD".utf8.reduce(0) { ($0 << 8) + OSType($1) }
     }()
@@ -133,8 +181,8 @@ public final class PushToTalkHotKey {
                     expectedSignature: PushToTalkHotKey.signature, ownerID: owner.id
                 ) == .handle else { return fallThrough }
                 DispatchQueue.main.async {
-                    if kind == UInt32(kEventHotKeyPressed) { owner.onPress?() }
-                    if kind == UInt32(kEventHotKeyReleased) { owner.onRelease?() }
+                    if kind == UInt32(kEventHotKeyPressed) { owner.beginHold() }
+                    if kind == UInt32(kEventHotKeyReleased) { owner.endHold() }
                 }
                 return noErr
             },
@@ -157,7 +205,62 @@ public final class PushToTalkHotKey {
         return result
     }
 
+    // MARK: - Hold lifecycle
+
+    /// Begin a hold (Carbon press). Re-entrant presses while already holding
+    /// are ignored — the watchdog below is what ends a hold.
+    func beginHold() {
+        guard !isHolding else { return }
+        isHolding = true
+        onPress?()
+        startHoldWatchdog()
+    }
+
+    /// End a hold exactly once, whichever arrives first: Carbon's release
+    /// event or the watchdog noticing the chord is physically up.
+    func endHold() {
+        guard isHolding else { return }
+        isHolding = false
+        holdWatchdog?.cancel()
+        holdWatchdog = nil
+        onRelease?()
+    }
+
+    /// Carbon drops `kEventHotKeyReleased` when the modifiers go up before
+    /// the key, which would strand the capture with a live microphone. Poll
+    /// the physical chord so the release order simply doesn't matter. These
+    /// are plain state reads (no event tap) — no Accessibility or Input
+    /// Monitoring grant is involved, which is why Carbon was chosen in the
+    /// first place (ADR-0011).
+    private func startHoldWatchdog() {
+        holdWatchdog?.cancel()
+        holdWatchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(70))
+                guard let self, self.isHolding else { return }
+                guard !HotKeyHold.isHeld(
+                    self.physicalChordState(), carbonModifiers: self.modifiers
+                ) else { continue }
+                self.endHold()
+                return
+            }
+        }
+    }
+
+    private func physicalChordState() -> HotKeyChordState {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        return HotKeyChordState(
+            keyDown: CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(keyCode)),
+            control: flags.contains(.maskControl),
+            option: flags.contains(.maskAlternate),
+            shift: flags.contains(.maskShift),
+            command: flags.contains(.maskCommand))
+    }
+
     public func unregister() {
+        holdWatchdog?.cancel()
+        holdWatchdog = nil
+        isHolding = false
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         hotKeyRef = nil
         if let handlerRef { RemoveEventHandler(handlerRef) }
