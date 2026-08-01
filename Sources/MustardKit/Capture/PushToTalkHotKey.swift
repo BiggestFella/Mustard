@@ -8,6 +8,29 @@ public enum HotKeyRegistration: Equatable, Sendable {
     case conflict(OSStatus)
 }
 
+/// What one Carbon hotkey handler must do with one hotkey event. Every
+/// handler installed on the dispatcher target receives EVERY hotkey event, and
+/// Carbon treats `noErr` as "handled — stop propagating": a handler that
+/// claims an event it doesn't own silently kills the other chord. Pure so the
+/// rule is unit-tested rather than eyeballed.
+public enum HotKeyDispatch: Equatable, Sendable {
+    /// This instance owns the chord: fire its callbacks and stop propagation.
+    case handle
+    /// Another instance owns it — MUST fall through to the next handler.
+    case passToNextHandler
+
+    public static func decide(
+        eventSignature: OSType,
+        eventID: UInt32,
+        expectedSignature: OSType,
+        ownerID: UInt32
+    ) -> HotKeyDispatch {
+        (eventSignature == expectedSignature && eventID == ownerID)
+            ? .handle
+            : .passToNextHandler
+    }
+}
+
 /// Pure chord formatting for the setup surface (raw Carbon values so the
 /// formatter stays platform-free): "⌃⌥Space", "⌃⌥D", …
 public enum HotKeyChord {
@@ -91,7 +114,8 @@ public final class PushToTalkHotKey {
         InstallEventHandler(
             GetEventDispatcherTarget(),
             { _, event, userData in
-                guard let event, let userData else { return noErr }
+                let fallThrough = OSStatus(eventNotHandledErr)
+                guard let event, let userData else { return fallThrough }
                 var hkID = EventHotKeyID()
                 GetEventParameter(
                     event, EventParamName(kEventParamDirectObject),
@@ -99,10 +123,15 @@ public final class PushToTalkHotKey {
                     MemoryLayout<EventHotKeyID>.size, nil, &hkID)
                 let kind = GetEventKind(event)
                 let owner = Unmanaged<PushToTalkHotKey>.fromOpaque(userData).takeUnretainedValue()
-                // Every registered handler sees every hotkey event; each
-                // instance answers only for its own chord.
-                guard hkID.signature == PushToTalkHotKey.signature,
-                      hkID.id == owner.id else { return noErr }
+                // Every handler on the dispatcher target sees EVERY hotkey
+                // event, and `noErr` means "handled — stop propagating". A
+                // foreign chord MUST fall through or the instance that owns it
+                // never hears its own key (BAK-290 regression: ⌃⌥D's handler
+                // silently swallowed ⌃⌥Space).
+                guard HotKeyDispatch.decide(
+                    eventSignature: hkID.signature, eventID: hkID.id,
+                    expectedSignature: PushToTalkHotKey.signature, ownerID: owner.id
+                ) == .handle else { return fallThrough }
                 DispatchQueue.main.async {
                     if kind == UInt32(kEventHotKeyPressed) { owner.onPress?() }
                     if kind == UInt32(kEventHotKeyReleased) { owner.onRelease?() }
