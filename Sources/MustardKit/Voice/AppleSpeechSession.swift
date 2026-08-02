@@ -283,8 +283,14 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
     public func start() async throws -> AsyncThrowingStream<SpeechAnalysisResult, Error> {
         let transcriber = Speech.SpeechTranscriber(
             locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: [.volatileResults, .alternativeTranscriptions],
+            // `.fastResults` is load-bearing, not a tuning knob: WITHOUT it the
+            // transcriber batches everything and emits nothing until input is
+            // finished, so a live surface shows an empty pill for the whole
+            // capture and the entire transcript lands in one burst at the end.
+            // With it, volatile updates arrive roughly every second while audio
+            // keeps arriving. Verified against a file-fed harness on macOS 27:
+            // results at 1.2s/2.1s/3.1s of a 4s feed, versus nothing until 6.1s.
+            reportingOptions: [.volatileResults, .alternativeTranscriptions, .fastResults],
             attributeOptions: [.audioTimeRange, .transcriptionConfidence])
         let detector = SpeechDetector()
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(
