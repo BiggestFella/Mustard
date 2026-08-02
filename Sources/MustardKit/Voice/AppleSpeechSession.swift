@@ -283,6 +283,7 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
     public func start() async throws -> AsyncThrowingStream<SpeechAnalysisResult, Error> {
         let transcriber = Speech.SpeechTranscriber(
             locale: locale,
+            transcriptionOptions: [],
             // `.fastResults` is load-bearing, not a tuning knob: WITHOUT it the
             // transcriber batches everything and emits nothing until input is
             // finished, so a live surface shows an empty pill for the whole
