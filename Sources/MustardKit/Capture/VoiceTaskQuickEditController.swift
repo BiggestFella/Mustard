@@ -128,9 +128,11 @@ public final class VoiceTaskQuickEditState: VoiceTaskQuickEditing {
     }
 }
 
-/// Owns the one visible quick-edit card (Capture Task 4): an activating
-/// floating panel below the chosen notch display. A newer capture replaces
-/// the visible card. `presentsPanel: false` keeps tests panel-free.
+/// Owns the one visible quick-edit card (Capture Task 4): a floating,
+/// key-accepting but NON-activating panel below the chosen notch display —
+/// capturing from another app must never pull Mustard's window forward.
+/// A newer capture replaces the visible card; `presentsPanel: false` keeps
+/// tests panel-free.
 @MainActor
 public final class VoiceTaskQuickEditController {
     private let context: ModelContext
@@ -165,11 +167,14 @@ public final class VoiceTaskQuickEditController {
 
     private func showPanel(for state: VoiceTaskQuickEditState) {
         dismissPanel()
-        // Activating (unlike the capture pill): the card is for typing, so it
-        // must take key focus the moment it appears.
-        let panel = NSPanel(
+        // The card needs KEY focus (you type into it) but must NOT activate
+        // Mustard — a capture taken from another app should never yank the
+        // main window forward. `.nonactivatingPanel` grants exactly that: the
+        // panel becomes key while the owning app stays in the background.
+        // Only "Open Fully" activates, because that is what it is for.
+        let panel = KeyableNonactivatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 360),
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false)
         panel.level = .floating
@@ -190,7 +195,6 @@ public final class VoiceTaskQuickEditController {
         }
         self.panel = panel
         panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         // Clicking outside moves key focus away → commit. `close()` flips
         // `isClosed` before the panel resigns key, so programmatic dismissal
         // (Escape, replacement) never re-enters as a commit.
@@ -229,6 +233,14 @@ public final class VoiceTaskQuickEditController {
         }
         return screens[index]
     }
+}
+
+/// A floating panel that accepts keyboard input WITHOUT activating its app.
+/// `NSPanel` declines key status for a non-activating style by default, so
+/// this override is what lets you type into the card while Mustard stays in
+/// the background and your current app keeps its window frontmost.
+private final class KeyableNonactivatingPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
 
 #endif
