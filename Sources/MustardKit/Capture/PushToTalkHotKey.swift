@@ -54,16 +54,25 @@ public struct HotKeyChordState: Equatable, Sendable {
     }
 }
 
-/// Whether a push-to-talk chord is still held. Carbon only delivers
-/// `kEventHotKeyReleased` reliably while the modifiers are still down, so
-/// lifting Control/Option before the key strands a capture in "Listening…"
-/// with a live microphone and no way out. The hold is therefore decided from
-/// physical key state — pure, so both release orders are unit-tested.
+/// Whether a push-to-talk chord is still held, judged from the MODIFIERS
+/// alone. Two hardware facts force this shape (both observed on macOS 27):
+///
+/// - Carbon delivers `kEventHotKeyReleased` reliably only while the chord's
+///   modifiers are still down; lift Control/Option first and it never comes,
+///   which used to strand a capture with a live microphone.
+/// - `CGEventSource.keyState` does NOT report the hotkey's own key as down
+///   once Carbon claims the chord — it read `key=false` 200ms into a hold the
+///   user was still physically holding, which made an earlier key-based poll
+///   cancel every capture instantly.
+///
+/// So the key is unobservable and only the modifiers can be polled. Carbon's
+/// event covers "key released first"; this covers "modifiers released first".
 public enum HotKeyHold {
-    /// Held only while the key AND every modifier the chord requires are
-    /// down. Extra modifiers are tolerated: a stray Shift never cancels.
-    public static func isHeld(_ state: HotKeyChordState, carbonModifiers: UInt32) -> Bool {
-        guard state.keyDown else { return false }
+    /// True while every modifier the chord requires is still down. Extra
+    /// modifiers are tolerated (a stray Shift never cancels), and the key is
+    /// deliberately ignored. A chord with no modifiers has nothing pollable,
+    /// so it always reads as held and Carbon's event is the only signal.
+    public static func modifiersHeld(_ state: HotKeyChordState, carbonModifiers: UInt32) -> Bool {
         // Carbon masks (Events.h): cmdKey 0x100, shiftKey 0x200,
         // optionKey 0x800, controlKey 0x1000.
         let required: [(UInt32, Bool)] = [
@@ -245,7 +254,7 @@ public final class PushToTalkHotKey {
                 try? await Task.sleep(for: .milliseconds(70))
                 guard let self, self.isHolding else { return }
                 let state = self.physicalChordState()
-                let held = HotKeyHold.isHeld(state, carbonModifiers: self.modifiers)
+                let held = HotKeyHold.modifiersHeld(state, carbonModifiers: self.modifiers)
                 ticks += 1
                 if ticks == 1 || ticks % 14 == 0 || !held {
                     hotKeyLog.notice(

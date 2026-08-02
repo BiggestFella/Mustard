@@ -530,6 +530,11 @@ private final class MicrophoneFeed {
     private var session: (any VoiceTranscribing)?
     private var pump: Task<Void, Never>?
     private var chunks: AsyncStream<AudioChunk>.Continuation?
+    /// Bumped by every begin and every cancel. `begin` is async, so a cancel
+    /// can land mid-setup; without this the teardown runs BEFORE the tap is
+    /// installed and the microphone is left running with nothing owning it
+    /// (observed: cancel at .978, tap installed at 1.041, buffers climbing).
+    private var generation = 0
 
     init(makeSession: @escaping @MainActor () throws -> any VoiceTranscribing) {
         self.makeSession = makeSession
@@ -542,10 +547,18 @@ private final class MicrophoneFeed {
         // both and left the analyzer holding resources, which made the NEXT
         // capture transcribe nothing.
         await cancel()
+        generation += 1
+        let mine = generation
 
         let session = try makeSession()
-        self.session = session
         let stream = try await session.start(source: .microphone)
+        // A cancel that arrived during that await already ran its teardown,
+        // so finishing setup now would strand a live tap. Undo and bail.
+        guard generation == mine else {
+            await session.cancel()
+            throw CancellationError()
+        }
+        self.session = session
 
         let (buffers, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
         chunks = continuation
@@ -598,6 +611,7 @@ private final class MicrophoneFeed {
     }
 
     func cancel() async {
+        generation += 1
         stopAudio()
         chunks?.finish()
         chunks = nil
