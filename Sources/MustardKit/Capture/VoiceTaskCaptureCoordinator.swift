@@ -256,6 +256,7 @@ public final class VoiceTaskCaptureCoordinator {
     }
 
     func beginCapture() {
+        voiceLog.notice("beginCapture entered phase=\(String(describing: self.phase), privacy: .public)")
         // Auto-repeat, and re-press while the previous capture is still
         // finalizing (bounded below, so the window is short and self-clearing).
         guard phase != .recording, phase != .finalizing else { return }
@@ -302,6 +303,8 @@ public final class VoiceTaskCaptureCoordinator {
     }
 
     func endCapture() {
+        voiceLog.notice(
+            "endCapture entered phase=\(String(describing: self.phase), privacy: .public) hasPressedAt=\(self.pressedAt != nil, privacy: .public)")
         guard phase == .recording, let pressedAt else { return }
         // Stamp the release BEFORE awaiting the recognizer — its finalization
         // latency must not count toward the minimum-hold gate.
@@ -378,6 +381,7 @@ public final class VoiceTaskCaptureCoordinator {
     /// microphone, and dismiss. Nothing is saved — a capture the user chose to
     /// abandon should leave no trace.
     public func abandon() {
+        voiceLog.notice("abandon phase=\(String(describing: self.phase), privacy: .public)")
         guard phase != .idle else { return }
         finalizeTask = Task { [weak self] in
             await self?.speech.cancel()
@@ -506,6 +510,7 @@ public final class VoiceTaskCaptureCoordinator {
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
+            voiceLog.notice("dismiss -> idle")
             self?.pill.hide()
             self?.phase = .idle
         }

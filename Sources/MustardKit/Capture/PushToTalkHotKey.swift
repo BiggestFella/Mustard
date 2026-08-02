@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let hotKeyLog = Logger(subsystem: "com.cavehole.mustard", category: "hotkey")
 
 /// The outcome of claiming the push-to-talk chord (Capture Task 3): another
 /// app may already own it, and that must never fail silently — the setup
@@ -210,6 +213,7 @@ public final class PushToTalkHotKey {
     /// Begin a hold (Carbon press). Re-entrant presses while already holding
     /// are ignored — the watchdog below is what ends a hold.
     func beginHold() {
+        hotKeyLog.notice("press id=\(self.id, privacy: .public) alreadyHolding=\(self.isHolding, privacy: .public)")
         guard !isHolding else { return }
         isHolding = true
         onPress?()
@@ -219,6 +223,7 @@ public final class PushToTalkHotKey {
     /// End a hold exactly once, whichever arrives first: Carbon's release
     /// event or the watchdog noticing the chord is physically up.
     func endHold() {
+        hotKeyLog.notice("release id=\(self.id, privacy: .public) wasHolding=\(self.isHolding, privacy: .public)")
         guard isHolding else { return }
         isHolding = false
         holdWatchdog?.cancel()
@@ -235,15 +240,22 @@ public final class PushToTalkHotKey {
     private func startHoldWatchdog() {
         holdWatchdog?.cancel()
         holdWatchdog = Task { [weak self] in
+            var ticks = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(70))
                 guard let self, self.isHolding else { return }
-                guard !HotKeyHold.isHeld(
-                    self.physicalChordState(), carbonModifiers: self.modifiers
-                ) else { continue }
+                let state = self.physicalChordState()
+                let held = HotKeyHold.isHeld(state, carbonModifiers: self.modifiers)
+                ticks += 1
+                if ticks == 1 || ticks % 14 == 0 || !held {
+                    hotKeyLog.notice(
+                        "watchdog tick=\(ticks, privacy: .public) held=\(held, privacy: .public) key=\(state.keyDown, privacy: .public) ctrl=\(state.control, privacy: .public) opt=\(state.option, privacy: .public)")
+                }
+                guard !held else { continue }
                 self.endHold()
                 return
             }
+            hotKeyLog.notice("watchdog loop exited")
         }
     }
 
