@@ -90,12 +90,17 @@ final class MeetingTranscriptMergeTests: XCTestCase {
     private final class StubSession: VoiceTranscribing, @unchecked Sendable {
         let finals: [VoiceTranscriptSegment]
         let startError: Error?
+        /// A SpeechAnalyzer session that received no audio never returns from
+        /// finish() — the hang seen on hardware.
+        let finishHangs: Bool
         private(set) var appended = 0
         private(set) var finished = false
+        private(set) var cancelled = false
 
-        init(finals: [VoiceTranscriptSegment], startError: Error? = nil) {
+        init(finals: [VoiceTranscriptSegment], startError: Error? = nil, finishHangs: Bool = false) {
             self.finals = finals
             self.startError = startError
+            self.finishHangs = finishHangs
         }
 
         func readiness() async -> VoiceReadiness { .ready }
@@ -107,9 +112,12 @@ final class MeetingTranscriptMergeTests: XCTestCase {
         func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) async throws { appended += 1 }
         func finish() async throws -> [VoiceTranscriptSegment] {
             finished = true
+            if finishHangs {
+                try await Task.sleep(for: .seconds(3600))
+            }
             return finals
         }
-        func cancel() async {}
+        func cancel() async { cancelled = true }
     }
 
     private func pcm() -> AVAudioPCMBuffer {
@@ -128,7 +136,7 @@ final class MeetingTranscriptMergeTests: XCTestCase {
             isInsufficientResources: { _ in false },
             transcribeFile: { _ in XCTFail("dual-live never post-processes a file"); return [] })
 
-        try await service.start()
+        try await service.start(sources: [.microphone, .systemAudio])
         XCTAssertEqual(service.mode, .dualLive)
 
         try await service.append(pcm(), channel: .you)
@@ -154,7 +162,7 @@ final class MeetingTranscriptMergeTests: XCTestCase {
                 return [self.seg("m1", "hi", start: 0.5, end: 1.5, source: .meeting)]
             })
 
-        try await service.start()
+        try await service.start(sources: [.microphone, .systemAudio])
         XCTAssertEqual(service.mode, .liveYouThenMeetingFile)
 
         // The Meeting channel keeps RECORDING (writer's job); the service just
@@ -181,8 +189,64 @@ final class MeetingTranscriptMergeTests: XCTestCase {
             transcribeFile: { _ in [] })
 
         do {
-            try await service.start()
+            try await service.start(sources: [.microphone, .systemAudio])
             XCTFail("a non-resource failure must not silently degrade")
         } catch {}
+    }
+
+    // MARK: - Bounded finalization (hardware: stop() hung forever)
+
+    /// The exact hardware failure: Screen Recording was declined, so the
+    /// Meeting session received zero buffers and its finish() never returned.
+    /// Stop must still complete, keeping the channel that did work.
+    func test_hangingMeetingSession_stillReturnsTheYouTranscript() async throws {
+        let you = StubSession(finals: [seg("y1", "hello", start: 0, end: 1, source: .microphone)])
+        let meeting = StubSession(finals: [], finishHangs: true)
+        var handed = [you, meeting]
+        let service = MeetingTranscriptionService(
+            makeSession: { handed.removeFirst() },
+            isInsufficientResources: { _ in false },
+            transcribeFile: { _ in [] },
+            finalizeTimeout: 0.05)
+
+        try await service.start(sources: [.microphone, .systemAudio])
+        let merged = try await service.stop(meetingAudioFile: nil)
+
+        XCTAssertEqual(merged.map(\.id), ["y1"], "a hung channel must not cost the whole transcript")
+    }
+
+    func test_hangingYouSession_doesNotStrandStop() async throws {
+        let you = StubSession(finals: [], finishHangs: true)
+        let meeting = StubSession(finals: [seg("m1", "hi", start: 0, end: 1, source: .meeting)])
+        var handed = [you, meeting]
+        let service = MeetingTranscriptionService(
+            makeSession: { handed.removeFirst() },
+            isInsufficientResources: { _ in false },
+            transcribeFile: { _ in [] },
+            finalizeTimeout: 0.05)
+
+        try await service.start(sources: [.microphone, .systemAudio])
+        let merged = try await service.stop(meetingAudioFile: nil)
+
+        XCTAssertEqual(merged.map(\.id), ["m1"])
+    }
+
+    /// The cause, not just the symptom: with no system audio being captured
+    /// there is nothing to feed a Meeting session, so one is never started.
+    func test_withoutSystemAudio_noMeetingSessionIsStarted() async throws {
+        let you = StubSession(finals: [seg("y1", "hello", start: 0, end: 1, source: .microphone)])
+        let meeting = StubSession(finals: [], finishHangs: true)
+        var handed = [you, meeting]
+        let service = MeetingTranscriptionService(
+            makeSession: { handed.removeFirst() },
+            isInsufficientResources: { _ in false },
+            transcribeFile: { _ in [] },
+            finalizeTimeout: 0.05)
+
+        try await service.start(sources: [.microphone])
+
+        XCTAssertFalse(meeting.finished, "no starved Meeting session should exist to finalize")
+        let merged = try await service.stop(meetingAudioFile: nil)
+        XCTAssertEqual(merged.map(\.id), ["y1"])
     }
 }

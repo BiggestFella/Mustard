@@ -74,8 +74,11 @@ public final class MeetingCaptureCoordinator {
         do {
             available = try await capturing.availableSources()
         } catch {
+            voiceLog.notice("meeting: availableSources threw \(String(describing: error), privacy: .public)")
             return fail("Could not check audio permissions: \(error.localizedDescription)")
         }
+        voiceLog.notice(
+            "meeting: available=\(available.map(\.rawValue).joined(separator: ","), privacy: .public)")
         guard !available.isEmpty else {
             return fail("No audio source is permitted — grant the microphone and Screen & System Audio Recording in Voice Setup.")
         }
@@ -107,7 +110,7 @@ public final class MeetingCaptureCoordinator {
         do {
             let writer = try makeWriter(record.uid, startedAt)
             self.writer = writer
-            try await transcription.start()
+            try await transcription.start(sources: sources)
 
             let (feed, continuation) = AsyncStream.makeStream(
                 of: (MeetingSegmentSource, MeetingAudioSample).self)
@@ -126,7 +129,10 @@ public final class MeetingCaptureCoordinator {
             try await capture.start(sources: sources)
             self.capture = capture
             apply(.userConfirmedStart(at: startedAt))
+            voiceLog.notice(
+                "meeting: recording uid=\(record.uid, privacy: .public) sources=\(sources.map(\.rawValue).joined(separator: ","), privacy: .public)")
         } catch {
+            voiceLog.notice("meeting: start failed \(String(describing: error), privacy: .public)")
             fail("Could not start recording: \(error.localizedDescription)")
         }
     }
@@ -160,20 +166,25 @@ public final class MeetingCaptureCoordinator {
         }
         apply(.stop)
 
+        voiceLog.notice("meeting: stop entered, awaiting capture.stop")
         await capture?.stop()
         capture = nil
+        voiceLog.notice("meeting: capture stopped, draining transcription pump")
         transcriptionFeed?.finish()
         transcriptionFeed = nil
         await transcriptionPump?.value
         transcriptionPump = nil
+        voiceLog.notice("meeting: pump drained, finalizing audio sources")
 
         guard let record = activeMeeting else { return }
         do {
             try await writer?.finalizeSources()
         } catch {
+            voiceLog.notice("meeting: finalizeSources threw \(String(describing: error), privacy: .public)")
             return interrupt(record, reason: "Audio finalization failed: \(error.localizedDescription)")
         }
         apply(.audioFinalized)
+        voiceLog.notice("meeting: audio finalized, awaiting transcription.stop")
 
         let segments: [VoiceTranscriptSegment]
         do {
@@ -184,8 +195,10 @@ public final class MeetingCaptureCoordinator {
             segments = try await transcription.stop(
                 meetingAudioFile: hasMeetingTrack ? meetingFile : nil)
         } catch {
+            voiceLog.notice("meeting: transcription.stop threw \(String(describing: error), privacy: .public)")
             return interrupt(record, reason: "Transcription failed: \(error.localizedDescription)")
         }
+        voiceLog.notice("meeting: transcript segments=\(segments.count, privacy: .public)")
         for segment in segments {
             let persisted = MeetingTranscriptSegment(
                 rawText: segment.text,
@@ -202,6 +215,7 @@ public final class MeetingCaptureCoordinator {
         // Mix is best-effort; the finalized source tracks are the truth.
         try? await writer?.mixPlayback()
         writer = nil
+        voiceLog.notice("meeting: mix done, recording complete")
         stampAudioPaths(on: record)
         record.audioFinalized = true
 

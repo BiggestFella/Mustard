@@ -22,6 +22,11 @@ public final class MeetingTranscriptionService {
     private let makeSession: @MainActor () async throws -> any VoiceTranscribing
     private let isInsufficientResources: (Error) -> Bool
     private let transcribeFile: @MainActor (URL) async throws -> [VoiceTranscriptSegment]
+    /// Ceiling on ONE session's finalization. A SpeechAnalyzer session that
+    /// received no audio never returns from finish(), which stranded stop()
+    /// forever on hardware — the recording is already safe on disk by then, so
+    /// a timeout costs at most one channel's transcript.
+    private let finalizeTimeout: TimeInterval
 
     private var youSession: (any VoiceTranscribing)?
     private var meetingSession: (any VoiceTranscribing)?
@@ -29,20 +34,30 @@ public final class MeetingTranscriptionService {
     public init(
         makeSession: @escaping @MainActor () async throws -> any VoiceTranscribing,
         isInsufficientResources: @escaping (Error) -> Bool,
-        transcribeFile: @escaping @MainActor (URL) async throws -> [VoiceTranscriptSegment]
+        transcribeFile: @escaping @MainActor (URL) async throws -> [VoiceTranscriptSegment],
+        finalizeTimeout: TimeInterval = 20
     ) {
         self.makeSession = makeSession
         self.isInsufficientResources = isInsufficientResources
         self.transcribeFile = transcribeFile
+        self.finalizeTimeout = finalizeTimeout
     }
 
     /// Start the You session, then try the Meeting session; an
     /// insufficient-resources failure selects the sequential fallback, any
     /// other failure propagates (never a silent degradation).
-    public func start() async throws {
+    public func start(sources: [MeetingAudioSource]) async throws {
         let you = try await makeSession()
         _ = try await you.start(source: .microphone)
         youSession = you
+
+        // No system audio being captured means nothing will ever feed a live
+        // Meeting session, and finalizing a starved one hangs. Don't make one.
+        guard sources.contains(.systemAudio) else {
+            meetingSession = nil
+            mode = .liveYouThenMeetingFile
+            return
+        }
 
         let meeting = try await makeSession()
         do {
@@ -70,13 +85,13 @@ public final class MeetingTranscriptionService {
     /// Finalize the live session(s), post-process the meeting file when in
     /// fallback mode, and return the merged, ordered, finals-only timeline.
     public func stop(meetingAudioFile: URL?) async throws -> [VoiceTranscriptSegment] {
-        let youFinals = try await youSession?.finish() ?? []
+        let youFinals = await boundedFinish(youSession)
         youSession = nil
 
         let meetingFinals: [VoiceTranscriptSegment]
         switch mode {
         case .dualLive:
-            meetingFinals = try await meetingSession?.finish() ?? []
+            meetingFinals = await boundedFinish(meetingSession)
         case .liveYouThenMeetingFile:
             if let meetingAudioFile {
                 meetingFinals = try await transcribeFile(meetingAudioFile)
@@ -90,6 +105,34 @@ public final class MeetingTranscriptionService {
         mode = nil
 
         return MeetingTranscriptMerge.merged(you: youFinals, meeting: meetingFinals)
+    }
+
+    /// Race one session's finalization against the ceiling. On timeout the
+    /// session is cancelled to release its resources and the channel
+    /// contributes nothing, rather than stranding Stop forever.
+    private func boundedFinish(_ session: (any VoiceTranscribing)?) async -> [VoiceTranscriptSegment] {
+        guard let session else { return [] }
+        var resumed = false
+        let raced: [VoiceTranscriptSegment]? = await withCheckedContinuation { continuation in
+            let resumeOnce: @MainActor ([VoiceTranscriptSegment]?) -> Void = { value in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: value)
+            }
+            Task { @MainActor in
+                let finals = try? await session.finish()
+                resumeOnce(finals ?? [])
+            }
+            Task { @MainActor [finalizeTimeout] in
+                try? await Task.sleep(for: .seconds(finalizeTimeout))
+                resumeOnce(nil)
+            }
+        }
+        guard let raced else {
+            await session.cancel()
+            return []
+        }
+        return raced
     }
 }
 
