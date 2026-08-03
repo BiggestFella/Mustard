@@ -25,11 +25,10 @@ public struct TextInserter {
     public var sendPaste: (pid_t) -> Bool
     /// Gives the target app time to process ⌘V before restoration.
     public var settle: () async -> Void
-    /// Best-effort delivery check after the paste settled: posting CGEvents
-    /// proves nothing about the target servicing them, so an unverified paste
-    /// must never silently discard the transcript. True = confirmed or
-    /// unknowable; false = verified missing.
-    public var verifyInserted: (FocusedTextTarget, String) -> Bool
+    /// Delivery check: true = the text is present, false = readable and
+    /// absent, nil = unreadable, so unknowable. The two insertion paths hold
+    /// this to different bars — see `insert`.
+    public var verifyInserted: (FocusedTextTarget, String) -> Bool?
 
     public init(
         stillFocused: @escaping (FocusedTextTarget) -> Bool,
@@ -40,7 +39,7 @@ public struct TextInserter {
         restorePasteboard: @escaping (PasteboardSnapshot) -> Void,
         sendPaste: @escaping (pid_t) -> Bool,
         settle: @escaping () async -> Void,
-        verifyInserted: @escaping (FocusedTextTarget, String) -> Bool
+        verifyInserted: @escaping (FocusedTextTarget, String) -> Bool?
     ) {
         self.stillFocused = stillFocused
         self.directInsert = directInsert
@@ -63,7 +62,13 @@ public struct TextInserter {
         guard stillFocused(target) else {
             return .recoverable("The text field lost focus before the transcript was ready.")
         }
-        if directInsert(target, text) {
+        // A successful AX return code is not evidence: Chromium-based apps
+        // (Slack, Electron editors) report kAXSelectedText as settable and
+        // return .success while discarding the write. Only a POSITIVELY
+        // confirmed direct write is accepted — anything else falls through to
+        // the paste path, which is the whole reason that path exists. Claiming
+        // "Inserted" here on an unconfirmed write silently loses the words.
+        if directInsert(target, text), verifyInserted(target, text) == true {
             return .insertedDirectly
         }
 
@@ -73,7 +78,10 @@ public struct TextInserter {
         let writeCount = writeTranscript(text)
         let pasted = sendPaste(target.applicationPID)
         if pasted { await settle() }
-        let delivered = pasted && verifyInserted(target, text)
+        // Last resort, so an unknowable value gets the benefit of the doubt:
+        // posting CGEvents proves nothing about the target servicing them, but
+        // claiming failure when it probably worked would be worse.
+        let delivered = pasted && (verifyInserted(target, text) ?? true)
         if PasteboardSnapshot.shouldRestore(
             currentCount: currentChangeCount(), mustardWriteCount: writeCount) {
             restorePasteboard(snapshot)
@@ -138,9 +146,9 @@ extension TextInserter {
                 try? await Task.sleep(for: .milliseconds(350))
             },
             verifyInserted: { _, text in
-                // Readable value missing the text = verified failure; an
-                // unreadable value (web areas) is unknowable, not failure.
-                reader.focusedValueContains(text) ?? true
+                // Three-state by design; each call site decides what to do with
+                // nil (unreadable web areas).
+                reader.focusedValueContains(text)
             })
     }
 }

@@ -25,9 +25,15 @@ final class TextInserterTests: XCTestCase {
         var stillFocused = true
         var directInsertSucceeds = true
         var pasteSucceeds = true
-        var verifySucceeds = true
+        /// Three-state, mirroring `focusedValueContains`: true = the text is
+        /// there, false = readable and absent, nil = unreadable (web areas).
+        /// A list because one insertion can verify twice (direct, then paste)
+        /// and the answers differ — that is exactly the Slack case. The last
+        /// entry repeats for any further calls.
+        var verifyResults: [Bool?] = [true]
         var externalBumpAfterWrite = false
 
+        var verifyCallCount = 0
         var directInsertReceived: (FocusedTextTarget, String)?
         var wroteTranscript: String?
         var restored: PasteboardSnapshot?
@@ -60,7 +66,11 @@ final class TextInserterTests: XCTestCase {
                     return self.pasteSucceeds
                 },
                 settle: {},
-                verifyInserted: { _, _ in self.verifySucceeds })
+                verifyInserted: { _, _ in
+                    defer { self.verifyCallCount += 1 }
+                    return self.verifyResults[
+                        min(self.verifyCallCount, self.verifyResults.count - 1)]
+                })
         }
     }
 
@@ -74,6 +84,69 @@ final class TextInserterTests: XCTestCase {
         XCTAssertEqual(harness.directInsertReceived?.1, "hello")
         XCTAssertNil(harness.wroteTranscript, "direct insertion must not touch the clipboard")
         XCTAssertNil(harness.pastedToPID)
+    }
+
+    /// The Slack/Chromium failure seen on hardware: the AX write reports
+    /// success, the text never lands, and the old code claimed "Inserted" while
+    /// silently dropping the words. A contradicted write must fall through to
+    /// the paste path, not be trusted.
+    func test_directInsertClaimingSuccess_butTextAbsent_fallsThroughToPaste() async {
+        let harness = Harness()
+        harness.directInsertSucceeds = true        // AX said .success …
+        harness.verifyResults = [false, true]      // … the value proves otherwise, then ⌘V lands
+
+        let outcome = await harness.inserter.insert("hello", into: target())
+
+        XCTAssertEqual(outcome, .insertedByPaste, "a contradicted AX write must not be reported as inserted")
+        XCTAssertEqual(harness.pastedToPID, 42)
+    }
+
+    /// An unreadable value cannot confirm the write, so the direct path — which
+    /// has a working fallback behind it — must not be given the benefit of the
+    /// doubt. (The paste path, being last, still may: see the test below.)
+    func test_directInsert_withUnknowableVerification_fallsThroughToPaste() async {
+        let harness = Harness()
+        harness.verifyResults = [nil]
+
+        let outcome = await harness.inserter.insert("hello", into: target())
+
+        XCTAssertEqual(outcome, .insertedByPaste)
+    }
+
+    /// Neither path can place the text: the words must be preserved for the
+    /// user rather than reported as inserted.
+    func test_neitherPathDelivers_keepsTheTranscriptForRecovery() async {
+        let harness = Harness()
+        harness.verifyResults = [false, false]
+
+        let outcome = await harness.inserter.insert("hello", into: target())
+
+        guard case .recoverable = outcome else {
+            return XCTFail("expected recoverable, got \(outcome)")
+        }
+    }
+
+    /// The paste fallback is the last resort: when the value is unreadable
+    /// there is nothing better to try, so an unknowable result is accepted
+    /// rather than telling the user it failed when it probably worked.
+    func test_pasteFallback_withUnknowableVerification_isAccepted() async {
+        let harness = Harness()
+        harness.directInsertSucceeds = false
+        harness.verifyResults = [nil]
+
+        let outcome = await harness.inserter.insert("hello", into: target())
+
+        XCTAssertEqual(outcome, .insertedByPaste)
+    }
+
+    func test_confirmedDirectInsert_neverPastes() async {
+        let harness = Harness()
+        harness.verifyResults = [true]
+
+        _ = await harness.inserter.insert("hello", into: target())
+
+        XCTAssertNil(harness.pastedToPID, "a confirmed direct write must not also paste")
+        XCTAssertEqual(harness.verifyCallCount, 1, "verified once, not re-verified after a paste")
     }
 
     // MARK: - Paste fallback
@@ -117,7 +190,7 @@ final class TextInserterTests: XCTestCase {
     func test_unverifiedPasteDelivery_isRecoverable_soTheTranscriptIsNeverLost() async {
         let harness = Harness()
         harness.directInsertSucceeds = false
-        harness.verifySucceeds = false
+        harness.verifyResults = [false]
 
         let outcome = await harness.inserter.insert("hello", into: target())
 
