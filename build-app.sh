@@ -53,7 +53,24 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --sign - "$APP"
+# Signing identity. An ad-hoc signature is keyed to the binary's hash, so every
+# rebuild silently invalidates the app's TCC grants: System Settings keeps
+# showing Accessibility as enabled while AXIsProcessTrusted() returns false. A
+# real certificate is stable across rebuilds (TCC matches on identifier + team),
+# so grants persist. Hardened runtime is deliberately NOT enabled — it would
+# require a microphone entitlement and break voice capture.
+SIGN_IDENTITY="${MUSTARD_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F'"' '/Apple Development|Developer ID Application/ { print $2; exit }')
+fi
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  codesign --force --sign "$SIGN_IDENTITY" "$APP"
+  echo "Signed with: $SIGN_IDENTITY"
+else
+  codesign --force --sign - "$APP"
+  echo "Signed ad-hoc (no certificate found) — TCC grants will NOT survive rebuilds" >&2
+fi
 codesign --verify --deep --strict "$APP"
 
 if ! contract_in_bundle "$APP/Contents/Resources/Mustard_MustardKit.bundle"; then
