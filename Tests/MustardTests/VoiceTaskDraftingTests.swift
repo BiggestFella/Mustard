@@ -304,4 +304,42 @@ final class VoiceTaskDraftingTests: XCTestCase {
             requestRevisions: [:])
         XCTAssertEqual(merged.notes, "my notes")
     }
+
+    // MARK: - Generated URLs must be grounded in what was actually said
+
+    func test_groundedURLs_keepsAUrlWhoseDomainWasSpoken() {
+        XCTAssertEqual(
+            VoiceTaskDrafting.groundedURLs(
+                [URL(string: "https://coles.com.au/specials")!],
+                in: "add the coles.com.au specials page"),
+            [URL(string: "https://coles.com.au/specials")!])
+    }
+
+    func test_groundedURLs_dropsAFabricatedUrl() {
+        // Observed in real use: the model attached http://example.com to a
+        // capture that never mentioned any site. The prompt forbids inventing
+        // URLs; nothing enforced it, so a fabricated link reached the task.
+        XCTAssertTrue(
+            VoiceTaskDrafting.groundedURLs(
+                [URL(string: "http://example.com")!],
+                in: "okay this is a test to see if this is now transcribing").isEmpty,
+            "a URL nobody spoke must never reach the task")
+    }
+
+    func test_groundedURLs_matchesTheDomainNameNotThePunctuation() {
+        // Recognisers write spoken domains inconsistently ("coles dot com").
+        XCTAssertEqual(
+            VoiceTaskDrafting.groundedURLs(
+                [URL(string: "https://www.coles.com.au")!],
+                in: "check coles dot com dot au later").count,
+            1)
+    }
+
+    func test_groundedURLs_isCaseInsensitive() {
+        XCTAssertEqual(
+            VoiceTaskDrafting.groundedURLs(
+                [URL(string: "https://Coles.com.au")!], in: "COLES has it").count,
+            1)
+    }
+
 }

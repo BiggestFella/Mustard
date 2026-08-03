@@ -99,6 +99,23 @@ final class VoiceTaskDraftGeneratorTests: XCTestCase {
         XCTAssertEqual(try? result.get().areaName ?? nil, "Code Heroes")
     }
 
+    func testFabricatedURLsAreDroppedEvenWhenWellFormed() async {
+        // The failure seen in real use: a valid-looking link for a sentence
+        // that mentioned no site.
+        let stub = StubGenerating(returning: generated(urls: ["http://example.com"]))
+        let result = await draft(
+            makeGenerator(stub: stub),
+            transcript: "okay this is a test to see if this is now transcribing")
+        XCTAssertEqual(try? result.get().urls, [], "the model may not invent links")
+    }
+
+    func testSpokenURLsSurvive() async {
+        let stub = StubGenerating(returning: generated(urls: ["https://coles.com.au"]))
+        let result = await draft(
+            makeGenerator(stub: stub), transcript: "grab the coles.com.au specials")
+        XCTAssertEqual(try? result.get().urls, [URL(string: "https://coles.com.au")!])
+    }
+
     // MARK: - Invalid structured output
 
     func testMissingTitleIsInvalidOutput() async {

@@ -107,7 +107,12 @@ public struct VoiceTaskDraftGenerator: Sendable {
         ) else {
             return .failure(.invalidOutput("The model returned no usable title"))
         }
-        return .success(draft)
+        // Well-formed is not the same as true: enforce that every link was
+        // actually spoken. The prompt says never invent URLs, but only this
+        // check makes that binding.
+        var grounded = draft
+        grounded.urls = VoiceTaskDrafting.groundedURLs(draft.urls, in: transcript)
+        return .success(grounded)
     }
 
     // MARK: - Prompt assembly

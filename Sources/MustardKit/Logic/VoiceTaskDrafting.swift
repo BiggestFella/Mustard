@@ -123,6 +123,28 @@ public enum VoiceTaskDrafting {
         return urls
     }
 
+    /// Keep only URLs the speaker actually referred to. The prompt forbids
+    /// inventing links, but a prompt is not an enforcement mechanism: a real
+    /// capture came back carrying `http://example.com` for a sentence that
+    /// mentioned no site at all. Fabricated data reaching a task is worse than
+    /// a missing link, which the user can simply add.
+    ///
+    /// Matching is on the domain NAME rather than the whole host, because
+    /// recognisers write spoken domains inconsistently ("coles dot com au"):
+    /// requiring the literal host would drop legitimate links.
+    public static func groundedURLs(_ urls: [URL], in transcript: String) -> [URL] {
+        let spoken = transcript.lowercased()
+        return urls.filter { url in
+            guard let host = url.host?.lowercased() else { return false }
+            let labels = host.split(separator: ".").map(String.init)
+            // Skip "www" and the TLD; the registrable name is what gets said.
+            let name = labels
+                .filter { $0 != "www" }
+                .max(by: { $0.count < $1.count }) ?? host
+            return spoken.contains(host) || spoken.contains(name)
+        }
+    }
+
     /// Resolve a model-supplied ISO 8601 string via the injected calendar — never
     /// the ambient clock/zone. Two shapes are accepted:
     /// - `"YYYY-MM-DD"` → that day at 09:00 in the calendar's zone (the
