@@ -74,7 +74,11 @@ final class VoiceTaskDraftGeneratorTests: XCTestCase {
         let stub = StubGenerating(returning: generated(
             urls: ["https://example.com/doc", "not a url", "https://example.com/doc", "ftp://x.com/y"]
         ))
-        let result = await draft(makeGenerator(stub: stub))
+        // The transcript must mention the domain, or the grounding rule drops
+        // it before this assertion is reached — that rule is covered
+        // separately; this test is about format validation and dedup.
+        let result = await draft(
+            makeGenerator(stub: stub), transcript: "the doc is on example.com")
         XCTAssertEqual(try? result.get().urls, [URL(string: "https://example.com/doc")!])
     }
 
