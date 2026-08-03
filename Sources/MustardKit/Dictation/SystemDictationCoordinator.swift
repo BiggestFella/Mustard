@@ -69,6 +69,8 @@ public final class SystemDictationCoordinator {
     private let hotKey: VoiceTaskCaptureCoordinator.HotKeySeam
     private let insert: @MainActor (String, FocusedTextTarget) async -> TextInsertionOutcome
     private let pill: PillPresentation
+    /// Hard ceiling on waiting for the recognizer's final answer.
+    private let finalizeTimeout: TimeInterval
     private let now: () -> Date
 
     private var authorized = false
@@ -81,6 +83,7 @@ public final class SystemDictationCoordinator {
     private var segmentsByID: [String: VoiceTranscriptSegment] = [:]
     private var consumeTask: Task<Void, Never>?
     private var dismissTask: Task<Void, Never>?
+    private var finalizeContinuation: CheckedContinuation<[VoiceTranscriptSegment]?, Never>?
 
     public init(
         snapshotFocus: @escaping @MainActor () throws -> FocusedTextTarget,
@@ -88,6 +91,7 @@ public final class SystemDictationCoordinator {
         hotKey: VoiceTaskCaptureCoordinator.HotKeySeam,
         insert: @escaping @MainActor (String, FocusedTextTarget) async -> TextInsertionOutcome,
         pill: PillPresentation,
+        finalizeTimeout: TimeInterval = 4,
         now: @escaping () -> Date = { .now }
     ) {
         self.snapshotFocus = snapshotFocus
@@ -95,6 +99,7 @@ public final class SystemDictationCoordinator {
         self.hotKey = hotKey
         self.insert = insert
         self.pill = pill
+        self.finalizeTimeout = finalizeTimeout
         self.now = now
     }
 
@@ -183,13 +188,7 @@ public final class SystemDictationCoordinator {
         }
         finalizeTask = Task { [weak self] in
             guard let self else { return }
-            let finals: [VoiceTranscriptSegment]
-            do {
-                finals = try await self.speech.end()
-            } catch {
-                // Preserve whatever stable text already streamed.
-                finals = self.segmentsByID.values.filter(\.isFinal)
-            }
+            let finals = await self.boundedFinals()
             guard self.holdEpoch == epoch else { return }
             let transcript = VoiceCapture.transcript(from: finals)
             guard !transcript.isEmpty else {
@@ -252,6 +251,59 @@ public final class SystemDictationCoordinator {
             case .recoverable(let reason):
                 self.recover(transcript: transcript, reason: reason)
             }
+        }
+    }
+
+    /// Wait for the recognizer, but never forever. A wedged analyzer — one
+    /// whose result stream never finishes — would otherwise suspend
+    /// `speech.end()` indefinitely, freezing the pill mid-dictation with a
+    /// live microphone. Capture hit exactly this; dictation shares the
+    /// machinery, so it gets the same ceiling.
+    private func boundedFinals() async -> [VoiceTranscriptSegment] {
+        let stable = Array(segmentsByID.values.filter(\.isFinal))
+        let raced: [VoiceTranscriptSegment]? = await withCheckedContinuation { continuation in
+            finalizeContinuation = continuation
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let finals = try? await self.speech.end()
+                self.resumeFinalize(finals ?? stable)
+            }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(self?.finalizeTimeout ?? 4))
+                self?.resumeFinalize(nil)
+            }
+        }
+        guard let raced else {
+            await speech.cancel()   // release the microphone
+            consumeTask?.cancel()
+            return stable
+        }
+        return raced
+    }
+
+    private func resumeFinalize(_ value: [VoiceTranscriptSegment]?) {
+        guard let continuation = finalizeContinuation else { return }
+        finalizeContinuation = nil
+        continuation.resume(returning: value)
+    }
+
+    /// The pill's escape hatch: abandon whatever is in flight, release the
+    /// microphone, insert nothing. Whatever goes wrong, there is a way out.
+    public func dismiss() {
+        guard phase != .idle else { return }
+        holdEpoch += 1
+        finalizeTask = Task { [weak self] in
+            await self?.speech.cancel()
+            guard let self else { return }
+            self.resumeFinalize(nil)
+            self.consumeTask?.cancel()
+            self.dismissTask?.cancel()
+            self.pressedAt = nil
+            self.segmentsByID = [:]
+            self.liveTranscript = ""
+            self.recoveredTranscript = nil
+            self.pill.hide()
+            self.phase = .idle
         }
     }
 

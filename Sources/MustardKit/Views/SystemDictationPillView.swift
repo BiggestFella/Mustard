@@ -22,6 +22,18 @@ public struct SystemDictationPillView: View {
             icon
             text
             actions
+            // Always present: a dictation that goes wrong must be dismissable
+            // without hunting for the right state. A button rather than a tap
+            // gesture, so it cannot swallow the recovery actions' clicks.
+            Button {
+                coordinator.dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

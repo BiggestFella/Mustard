@@ -46,6 +46,8 @@ final class SystemDictationCoordinatorTests: XCTestCase {
         var snapshotResult: Result<FocusedTextTarget, FocusReadError>
         var finals: [VoiceTranscriptSegment] = []
         var endThrows = false
+        /// Reproduces a wedged analyzer: `end()` never returns.
+        var endHangs = false
         var insertOutcome: TextInsertionOutcome = .insertedDirectly
         var insertedText: String?
         var continuation: AsyncThrowingStream<VoiceTranscriptSegment, Error>.Continuation?
@@ -83,6 +85,7 @@ final class SystemDictationCoordinatorTests: XCTestCase {
                         self.events.append("speech.end")
                         self.continuation?.finish()
                         if self.endThrows { throw VoiceSessionError.notStarted }
+                        if self.endHangs { try? await Task.sleep(for: .seconds(3600)) }
                         return self.finals
                     },
                     cancel: {
@@ -101,6 +104,7 @@ final class SystemDictationCoordinatorTests: XCTestCase {
                     return self.insertOutcome
                 },
                 pill: .none(),
+                finalizeTimeout: 0.05,
                 now: { clock.next() })
         }
     }
@@ -328,6 +332,48 @@ final class SystemDictationCoordinatorTests: XCTestCase {
             return XCTFail("expected recoverable, got \(coordinator.phase)")
         }
         XCTAssertEqual(coordinator.recoveredTranscript, "hello")
+    }
+
+    // MARK: - A hold must always end (ported from the capture coordinator)
+
+    func test_hungFinalization_recoversTheStableTextInsteadOfStranding() async {
+        let harness = Harness(target: target())
+        harness.endHangs = true   // analyzer never finishes its result stream
+        let coordinator = harness.makeCoordinator(
+            clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginDictation()
+        await Task.yield()
+        harness.continuation?.yield(seg("a", "hello world", final: true))
+        for _ in 0..<10 { await Task.yield() }
+        coordinator.endDictation()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertNotEqual(coordinator.phase, .listening, "the pill must never strand")
+        XCTAssertTrue(harness.speechCancelled, "a wedged analyzer is torn down so the mic is released")
+        XCTAssertEqual(
+            harness.insertedText, " hello world",
+            "the words already transcribed are still inserted")
+    }
+
+    func test_dismiss_clearsAStuckPill_andReleasesTheMic() async {
+        let harness = Harness(target: target())
+        let coordinator = harness.makeCoordinator(clock: Clock([t0]))
+
+        coordinator.activate()
+        await coordinator.activationTask?.value
+        coordinator.beginDictation()
+        await Task.yield()
+        XCTAssertEqual(coordinator.phase, .listening)
+
+        coordinator.dismiss()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertEqual(coordinator.phase, .idle, "there is always a way out")
+        XCTAssertTrue(harness.speechCancelled)
+        XCTAssertNil(harness.insertedText, "dismissing inserts nothing")
     }
 
     // MARK: - Retry from recovery (the pill's "Try Current Field")
