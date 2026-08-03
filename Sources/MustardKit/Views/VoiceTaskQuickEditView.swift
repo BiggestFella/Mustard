@@ -58,10 +58,16 @@ public struct VoiceTaskQuickEditView: View {
                     .foregroundStyle(Theme.Palette.accent)
                 }
                 Spacer()
-                Button("Close") { state.handle(.escape) }
+                Button("Discard") { state.discard() }
+                    .buttonStyle(.plain)
+                    .font(Theme.Fonts.meta)
+                    .foregroundStyle(Theme.Palette.warning)
+                    .help("Delete this captured task — nothing is kept")
+                Button("Keep") { state.handle(.escape) }
                     .buttonStyle(.plain)
                     .font(Theme.Fonts.meta)
                     .foregroundStyle(Theme.Palette.textSecondary)
+                    .help("Close the card; the task stays in your Inbox")
                 Button("Save") { state.handle(.commandReturn) }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.Palette.accent)

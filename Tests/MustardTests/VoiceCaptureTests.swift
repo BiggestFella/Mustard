@@ -110,6 +110,28 @@ final class VoiceCaptureTests: XCTestCase {
         XCTAssertEqual(VoiceCapture.transcript(from: [seg("a", "buy mi", start: 0, final: false)]), "")
     }
 
+    // MARK: - Fallback title (the spoken words live in the description)
+
+    func test_fallbackTitle_shortTranscriptIsUsedWhole() {
+        XCTAssertEqual(VoiceCapture.fallbackTitle(from: "buy milk and eggs"), "Buy milk and eggs")
+    }
+
+    func test_fallbackTitle_longTranscriptIsTruncatedToAReadableStub() {
+        let spoken = "okay so this is a test to see if this is now transcribing and recording into a clean task"
+        XCTAssertEqual(
+            VoiceCapture.fallbackTitle(from: spoken),
+            "Okay so this is a test to see…",
+            "a long dictation must not become an unreadable title — the words go in the notes")
+    }
+
+    func test_fallbackTitle_emptyTranscriptStillNamesTheTask() {
+        XCTAssertEqual(VoiceCapture.fallbackTitle(from: "   "), "Voice note")
+    }
+
+    func test_fallbackTitle_dropsTheTrailingFullStopLikeATitle() {
+        XCTAssertEqual(VoiceCapture.fallbackTitle(from: "call the plumber."), "Call the plumber")
+    }
+
     func test_liveTranscript_includesProvisionalsInStartOrder() {
         let segments = [
             seg("b", "and eg", start: 2, final: false),

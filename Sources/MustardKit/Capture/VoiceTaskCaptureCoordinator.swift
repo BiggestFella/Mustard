@@ -401,8 +401,11 @@ public final class VoiceTaskCaptureCoordinator {
     /// card's current values (spec: a new capture never discards them), open
     /// the new card, and kick drafting.
     private func commitCapture(transcript: String) {
-        let title = VoiceCapture.normalizeTitle(transcript)
-        guard !title.isEmpty else {
+        // The spoken words are the task's CONTENT, not its name: a long
+        // dictation makes an unreadable title. They go into the notes, and the
+        // title is a readable stub until drafting proposes a real one.
+        let title = VoiceCapture.fallbackTitle(from: transcript)
+        guard !VoiceCapture.normalizeTitle(transcript).isEmpty else {
             phase = .cancelled
             scheduleDismiss(after: 0.8)
             return
@@ -433,6 +436,7 @@ public final class VoiceTaskCaptureCoordinator {
             guard case .success(let generated) = await self.draftGenerator(
                 transcript, self.allowedAreas(), requestedAt
             ) else {
+                voiceLog.error("draft failed — task stays raw")
                 // Retryable from the card (spec): the task stays .raw and the
                 // card offers Draft Again while it is still open.
                 editor?.retryDraft = { [weak self] in
@@ -455,6 +459,7 @@ public final class VoiceTaskCaptureCoordinator {
                 into: current,
                 revisions: editor?.revisions ?? VoiceTaskFieldRevisions(),
                 requestRevisions: requestRevisions)
+            voiceLog.notice("draft applied title=\(merged.title.count, privacy: .public) chars")
             self.apply(merged, to: task)
             editor?.apply(merged)
         }
@@ -468,6 +473,9 @@ public final class VoiceTaskCaptureCoordinator {
         task.sourceContext = "Voice capture"
         task.captureState = .raw
         task.captureTranscript = transcript
+        // Visible and editable, unlike captureTranscript which is immutable
+        // evidence. Drafting may refine it; the verbatim copy always survives.
+        task.notes = transcript
         context.insert(task)
         try? context.save()
         return task

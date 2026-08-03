@@ -113,6 +113,17 @@ public final class VoiceTaskQuickEditState: VoiceTaskQuickEditing {
         onClose?()
     }
 
+    /// Throw the captured task away entirely. Close KEEPS the task (capture
+    /// is never destructive by default), but an accidental trigger — a
+    /// fumbled hotkey, two stray words — needs a way out that does not leave
+    /// litter in the Inbox for you to clean up later.
+    public func discard() {
+        guard !isClosed else { return }
+        context.delete(task)
+        try? context.save()
+        close()
+    }
+
     /// Commit, then hand off to the full task drawer in the main window.
     public func openFully() {
         commit()

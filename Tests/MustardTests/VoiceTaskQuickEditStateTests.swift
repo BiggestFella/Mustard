@@ -171,6 +171,32 @@ final class VoiceTaskQuickEditStateTests: XCTestCase {
         XCTAssertTrue(state.isClosed)
     }
 
+    // MARK: - Discard
+
+    func test_discard_deletesTheCapturedTask() throws {
+        let context = try ctx()
+        let task = capturedTask(in: context)
+        let state = makeState(task: task, context: context)
+
+        state.discard()
+
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<MustardTask>()).count, 0,
+            "an accidental capture must be removable, not just closeable")
+        XCTAssertTrue(state.isClosed)
+    }
+
+    func test_close_stillKeepsTheTask() throws {
+        let context = try ctx()
+        let task = capturedTask(in: context)
+        let state = makeState(task: task, context: context)
+
+        state.handle(.escape)
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<MustardTask>()).count, 1)
+        XCTAssertIdentical(try context.fetch(FetchDescriptor<MustardTask>()).first, task)
+    }
+
     // MARK: - One visible card
 
     func test_present_replacesThePreviousCard() throws {

@@ -147,6 +147,19 @@ public struct VoiceTaskDraftGenerator: Sendable {
     /// exists only under SwiftPM (the iOS companion target compiles sources
     /// directly and never runs voice drafting).
     public static func bundledPrompt(_ name: String) -> String? {
+        // The PACKAGED app must be tried first. `Bundle.module` resolves the
+        // SwiftPM build-directory copy, which does not exist inside
+        // Mustard.app — the same trap AgentTurnContract already works around.
+        // Getting this wrong is silent: drafting just fails and every capture
+        // stays raw.
+        let packaged = Bundle.main.resourceURL
+            .map { $0.appendingPathComponent("Mustard_MustardKit.bundle", isDirectory: true) }
+            .flatMap(Bundle.init(url:))
+        if let url = packaged?.url(forResource: name, withExtension: "txt", subdirectory: "Prompts")
+            ?? packaged?.url(forResource: name, withExtension: "txt"),
+           let text = try? String(contentsOf: url, encoding: .utf8) {
+            return text
+        }
         #if SWIFT_PACKAGE
         let url = Bundle.module.url(forResource: name, withExtension: "txt", subdirectory: "Prompts")
             ?? Bundle.module.url(forResource: name, withExtension: "txt")

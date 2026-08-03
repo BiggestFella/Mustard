@@ -51,6 +51,22 @@ public enum VoiceCapture {
             .joined(separator: " ")
     }
 
+    /// How many spoken words a placeholder title keeps before trailing off.
+    public static let fallbackTitleWordLimit = 8
+
+    /// The title a fresh capture is born with. The spoken words themselves go
+    /// into the task's notes — a long dictation makes an unreadable title —
+    /// so this is only a readable stub until on-device drafting proposes a
+    /// real one. It must never be empty: a task with no name is worse than a
+    /// clumsy one, and drafting is allowed to fail.
+    public static func fallbackTitle(from transcript: String) -> String {
+        let normalized = normalizeTitle(transcript)
+        guard !normalized.isEmpty else { return "Voice note" }
+        let words = normalized.split(separator: " ")
+        guard words.count > fallbackTitleWordLimit else { return normalized }
+        return words.prefix(fallbackTitleWordLimit).joined(separator: " ") + "…"
+    }
+
     /// Transcript → title: trim, collapse whitespace runs (incl. newlines) to single
     /// spaces, drop one trailing full stop (recognizers punctuate most utterances
     /// with "." — noise in a title; "?"/"!" are kept), and capitalize the first letter.
