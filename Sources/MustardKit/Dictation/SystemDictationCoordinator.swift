@@ -126,10 +126,17 @@ public final class SystemDictationCoordinator {
         do {
             snapshot = try snapshotFocus()
         } catch FocusReadError.accessibilityPermissionMissing {
+            // Logged with the bundle path: a TCC grant can read as enabled in
+            // System Settings while applying to a different copy of the app.
+            voiceLog.notice(
+                "dictation: refused, accessibility not trusted for \(Bundle.main.bundlePath, privacy: .public)")
             return refuse(.denied("Allow Accessibility in System Settings → Privacy & Security so dictation can type for you."))
         } catch {
+            voiceLog.notice("dictation: refused, no focused text field (\(String(describing: error), privacy: .public))")
             return refuse(.recoverable("No text field is focused — click where the words should go, then hold the dictation key."))
         }
+        voiceLog.notice(
+            "dictation: focus read ok secure=\(snapshot.isSecure, privacy: .public) authorized=\(self.authorized, privacy: .public)")
         guard !snapshot.isSecure else {
             return refuse(.denied("Dictation never types into password fields."))
         }
@@ -191,6 +198,7 @@ public final class SystemDictationCoordinator {
             let finals = await self.boundedFinals()
             guard self.holdEpoch == epoch else { return }
             let transcript = VoiceCapture.transcript(from: finals)
+            voiceLog.notice("dictation: finals=\(finals.count, privacy: .public) chars=\(transcript.count, privacy: .public)")
             guard !transcript.isEmpty else {
                 return self.recover(transcript: nil, reason: "Nothing was heard — the field is untouched.")
             }
@@ -198,7 +206,19 @@ public final class SystemDictationCoordinator {
             // Strict release-time revalidation: the fresh snapshot must equal
             // the press-time one (same field, same cursor, same surroundings)
             // or the words go to safe recovery, never the wrong place.
-            guard (try? self.snapshotFocus()) == target else {
+            let fresh = try? self.snapshotFocus()
+            guard fresh == target else {
+                // Which part moved matters: a re-rendering field (value differs)
+                // is a very different problem from focus actually leaving.
+                voiceLog.notice("""
+                    dictation: revalidation failed \
+                    freshRead=\(fresh != nil, privacy: .public) \
+                    samePID=\(fresh?.applicationPID == target.applicationPID, privacy: .public) \
+                    sameElement=\(fresh?.elementIdentifier == target.elementIdentifier, privacy: .public) \
+                    sameSelection=\(fresh?.selectedRange == target.selectedRange, privacy: .public) \
+                    samePreceding=\(fresh?.precedingCharacter == target.precedingCharacter, privacy: .public) \
+                    sameFollowing=\(fresh?.followingCharacter == target.followingCharacter, privacy: .public)
+                    """)
                 return self.recover(
                     transcript: transcript,
                     reason: "The field or cursor moved during dictation — the words are kept for you.")
@@ -209,6 +229,7 @@ public final class SystemDictationCoordinator {
                 return self.recover(transcript: transcript, reason: "Dictation never types into password fields.")
             }
             let outcome = await self.insert(text, target)
+            voiceLog.notice("dictation: insert outcome=\(String(describing: outcome), privacy: .public)")
             guard self.holdEpoch == epoch else { return }
             switch outcome {
             case .insertedDirectly, .insertedByPaste:
