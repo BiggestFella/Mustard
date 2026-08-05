@@ -175,27 +175,30 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
 
 ## Next — buildable, unblocked 🟢
 
-- [ ] **F25 Voice capture — push-to-talk → board task → agent cleanup queue**
-      *(spec approved by Leon 2026-07-22 — see ADR-0011)*. Hold a global hotkey
-      (⌃⌥Space, Carbon `RegisterEventHotKey` — press *and* release, no TCC grant),
-      speak, release → task. Three slices:
-      - **v1 Capture:** on-device `SFSpeechRecognizer` + `AVAudioEngine` push-to-talk;
-        live-transcript pill (HoverPanel pattern, never steals focus); release inserts
-        an Inbox task (`.me`, `source = "voice"`, `captureState = .raw`, verbatim
-        transcript kept on `captureTranscript`); <300 ms or empty → cancel. Pure
-        `VoiceCapture` outcome/normalizer unit (TDD). Info.plist mic+speech usage
-        strings in `build-app.sh`.
-      - **v2 Cleanup queue:** raw captures batch (≤5) through one `claude -p`
-        text-transform pass on the scheduler tick when the execution gate is free —
-        title/description/schedule/area auto-applied (tier 1, reversible;
-        `normalizePlacement` invariant); 60/300/900 s backoff capped at 3 then
-        `.failed` (task stays usable raw). Pure `CaptureCleanupQueue` +
-        `CaptureCleanup` prompt/parser/schedule-resolver units (TDD).
-      - **v3 Routing:** agent-shaped captures additionally emit a `Recommendation`
-        (`source = "voice"`, rec.task = the captured task, action limited to
-        draft_email/draft_slack/ticket_write/vault_note) into the existing triage →
-        trust → gating → bridge loop. Never sets `owner = .agent` directly (BAK-90 +
-        coordinator auto-pickup stay honest).
+- [x] **F25 Voice capture** *(✅ BUILT — v1 capture shipped in PR #98; the v2
+      claude-based cleanup queue and v3 routing were REPLACED 2026-07-29 by the
+      Voice Suite's on-device drafting — see below. Automatic delegation from a
+      voice task is now explicitly out of scope per the capture spec.)*
+- [ ] **F27 Mustard Voice Suite** *(specs + plans approved 2026-07-29 —
+      `docs/superpowers/{specs,plans}/2026-07-29-*`; Linear BAK-271…303; PR #101)*.
+      Four workstreams on the modern Apple stack (SpeechAnalyzer + Foundation
+      Models, fully on-device; macOS 26 floor, Xcode 27 beta):
+      - **✅ Voice Core (BAK-271, Tasks 1–6):** toolchain + floor, shared
+        contracts, asset readiness, `AppleSpeechSession`, on-device language
+        service, Voice Setup surface.
+      - **✅ Voice-task capture (BAK-272 Tasks 1–5):** `VoiceTaskDrafting`
+        validation/merge, `VoiceTaskDraftGenerator` (Apple Intelligence guided
+        drafting), `VoiceTaskCaptureCoordinator` (segment stream, revision-gated
+        merge), notch-adjacent quick-edit card, legacy SFSpeech engine + claude
+        cleanup queue removed. Remaining: Task 6 macOS 27 acceptance pass (BAK-286).
+      - **✅ Dictation (BAK-273 Tasks 1–5):** AX focus snapshots, direct/verified-
+        paste insertion, hold-⌃⌥D coordinator, nonactivating pill with recovery.
+        Remaining: cross-app matrix (BAK-292, Leon).
+      - **✅ Meeting recorder (BAK-274 Tasks 1–10):** consent-gated two-source
+        capture, crash-recoverable storage, merged transcripts, evidence-backed
+        digests, review/approval, suggestions, retention/Trash/export.
+        Remaining: real-call matrix (BAK-303, Leon). A 25-agent adversarial
+        review confirmed 20 findings mid-suite; all fixed (`c4ebabc`).
 
 *(Previous: B1 shipped as **F17**, the multi-source foundation as **F18**, and I1
 delegation as **F19**. Other unblocked candidate: **I2 Trust that earns itself** —
