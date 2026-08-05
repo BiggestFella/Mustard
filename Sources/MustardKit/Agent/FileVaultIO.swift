@@ -18,6 +18,8 @@ public struct FileVaultIO: MeetingVaultIO {
         self.init(root: URL(fileURLWithPath: rootPath, isDirectory: true))
     }
 
+    public var rootPath: String { root.path }
+
     public func meetingNotePaths() -> [String] {
         // Subtrees never worth descending into — pruning keeps the 60s harvest cheap
         // even when a KB embeds a built site (node_modules can be tens of thousands of

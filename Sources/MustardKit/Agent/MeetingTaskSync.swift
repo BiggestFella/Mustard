@@ -4,6 +4,10 @@ import SwiftData
 /// File-system boundary for the meeting-task sync, injected so the decision
 /// logic can be unit-tested against an in-memory map (no disk).
 public protocol MeetingVaultIO {
+    /// Absolute path of the vault root the relative paths below hang off. Needed to
+    /// hand the agent an absolute meeting-note path — its working directory is a
+    /// single vault, not this root, so a root-relative path would not resolve.
+    var rootPath: String { get }
     /// Meeting-note paths relative to the vault root.
     func meetingNotePaths() -> [String]
     func read(_ relativePath: String) -> String?
@@ -17,6 +21,8 @@ public struct ImportDigest: Equatable {
     public var imported = 0
     public var completedFromVault = 0
     public var syncedToVault = 0
+    /// Legacy tasks moved out of the fallback area into their real one.
+    public var areasRepaired = 0
     public var clients: Set<String> = []
 
     public var summary: String {
@@ -32,7 +38,16 @@ public struct ImportDigest: Equatable {
 public final class MeetingTaskSync {
     /// vault-root folder → Mustard Area name. `nonisolated` so pure helpers
     /// (e.g. `AreaRouter`) can read this immutable map without main-actor isolation.
+    /// Vault directory name → area. Both the real on-disk names and the short
+    /// codes are listed: the vault root Leon points Mustard at is the parent
+    /// `Codeheroes work`, whose children are the `*-Knowledge-Base` directories.
+    /// Omitting those meant every meeting task fell through to `fallbackArea`
+    /// and landed in Code Heroes regardless of vault (fixed 2026-07-28).
     public nonisolated static let defaultAreaMap: [String: String] = [
+        "DL-Knowledge-Base": "Digital Licence",
+        "SB-Knowledge-Base": "Sales Buddi",
+        "Sandvik-Knowledge-Base": "Sandvik",
+        "Code-Heroes-Knowledge-Base": "Code Heroes",
         "DL": "Digital Licence",
         "SB": "Sales Buddi",
         "Sandvik": "Sandvik",
@@ -79,6 +94,19 @@ public final class MeetingTaskSync {
                         task.tags = parsed.tags
                         if task.dueAt == nil { task.dueAt = parsed.due }
                     }
+                    // Repair areas assigned while the area map was broken: everything
+                    // fell through to the fallback, which would now route an old DL/SB/
+                    // Sandvik task into the Code Heroes vault. Only touch tasks still
+                    // sitting in the fallback whose own path implies something else, so
+                    // a deliberate re-filing is never clobbered. Self-limiting: once
+                    // moved, the condition no longer holds.
+                    let impliedArea = clientName(forNotePath: path)
+                    if task.source.hasPrefix("meeting"),
+                       task.list?.area?.name == fallbackArea,
+                       impliedArea != fallbackArea {
+                        task.list = defaultList(forClient: impliedArea)
+                        digest.areasRepaired += 1
+                    }
                     if parsed.isDone && task.stage.isOpen {
                         // Line ticked in the vault while the task was open → vault won.
                         task.markDone(now: now)
@@ -103,14 +131,21 @@ public final class MeetingTaskSync {
     }
 
     private func makeTask(_ p: ParsedMeetingTask, subtitle: String, now: Date) -> MustardTask {
-        let task = MustardTask(title: p.title, owner: .me)
-        task.stage = .inbox
+        // Meeting tasks are handed to the agent on arrival: the ledger filter already
+        // guarantees they are real, discrete, Leon-owned actions, so the agent attempts
+        // each one and hands back what only Leon can do. See TaskStage/AgentTaskQueue —
+        // `.forAgent` alone is inert; `owner == .agent` is what makes it runnable.
+        let task = MustardTask(title: p.title, owner: .agent)
+        let meeting = resolveMeetingNote(p)
+        task.stage = .forAgent
         task.source = "meeting"
+        // Stays the harvested file (the ledger) — it is the write-back target and is
+        // hashed into originKey. The meeting note travels in `notes` instead.
         task.sourceURL = p.notePath
-        task.sourceContext = subtitle
+        task.sourceContext = meeting.map { meetingSubtitle(text: $0.text, path: $0.path) } ?? subtitle
         task.originKey = p.originKey
         task.dueAt = p.due
-        task.notes = Self.composeNotes(p, subtitle: subtitle)
+        task.notes = Self.composeNotes(p, subtitle: subtitle, meetingNotePath: meeting?.path)
         task.tags = p.tags
         task.list = defaultList(forClient: clientName(forNotePath: p.notePath))
         // Already ticked in the vault → import as done, don't resurrect it open.
@@ -120,13 +155,28 @@ public final class MeetingTaskSync {
 
     /// Notes body = description (or transcript-quote fallback), then a provenance
     /// footer referencing the meeting, the quote, and owner/due.
-    static func composeNotes(_ p: ParsedMeetingTask, subtitle: String) -> String {
+    static func composeNotes(
+        _ p: ParsedMeetingTask, subtitle: String, meetingNotePath: String? = nil
+    ) -> String {
         let body = (p.desc?.isEmpty == false ? p.desc! : (p.transcriptQuote ?? ""))
             .trimmingCharacters(in: .whitespaces)
         var footer: [String] = []
-        var from = subtitle
-        if let d = noteDate(p.notePath) { from += from.isEmpty ? d : " (\(d))" }
+        // A Task Ledger line names its originating meeting in `src:`. Prefer it —
+        // the ledger's own title and path are the same for every task it holds, so
+        // subtitle/noteDate would render a useless "From: Task Ledger" on every card.
+        var from: String
+        if let src = p.srcNote, !src.isEmpty {
+            from = src
+        } else {
+            from = subtitle
+            if let d = noteDate(p.notePath) { from += from.isEmpty ? d : " (\(d))" }
+        }
         if !from.isEmpty { footer.append("From: \(from)") }
+        // The agent's route to real context: the curated note carries the decisions,
+        // discussion and waiting-on list, and its `.transcript.md` sibling the rest.
+        if let meetingNotePath, !meetingNotePath.isEmpty {
+            footer.append("Meeting note: \(meetingNotePath)")
+        }
         if let q = p.transcriptQuote, !q.isEmpty, q != body { footer.append("Context: \"\(q)\"") }
         var meta: [String] = []
         if let o = p.owner, !o.isEmpty { meta.append("Owner: \(o)") }
@@ -142,6 +192,35 @@ public final class MeetingTaskSync {
     static func noteDate(_ path: String) -> String? {
         guard let r = path.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) else { return nil }
         return String(path[r])
+    }
+
+    /// Resolve a ledger line's `src:` slug to the curated meeting note beside it —
+    /// `<vault>/meetings/<YYYY>/<MM>/<slug>.md`. The agent gets this path in its
+    /// prompt so it can read the decisions, discussion and transcript sibling; a
+    /// ledger line's own one-sentence `desc:` is not enough context to act on.
+    ///
+    /// Deliberately NOT written to `task.sourceURL` — that field is the write-back
+    /// target and its value is baked into `originKey`, so repointing it would stop
+    /// completions ticking the ledger line.
+    /// Returns nil unless the file actually exists, so callers fall back cleanly.
+    /// Hands back the contents too, so the caller can lift the real meeting title
+    /// without a second read.
+    func resolveMeetingNote(_ p: ParsedMeetingTask) -> (path: String, text: String)? {
+        guard let slug = p.srcNote, !slug.isEmpty,
+              let date = Self.noteDate(slug), date.count == 10 else { return nil }
+        let year = String(date.prefix(4))
+        let month = String(date.dropFirst(5).prefix(2))
+
+        // Rebuild the prefix up to and including the `meetings` component, so this
+        // works whether the vault root is a KB directory or its parent.
+        let parts = p.notePath.split(separator: "/").map(String.init)
+        guard let meetingsIdx = parts.firstIndex(of: "meetings") else { return nil }
+        let prefix = parts[...meetingsIdx].joined(separator: "/")
+
+        let candidate = "\(prefix)/\(year)/\(month)/\(slug).md"
+        guard let text = io.read(candidate) else { return nil }
+        // Absolute, so it resolves from whatever working directory the agent runs in.
+        return ((io.rootPath as NSString).appendingPathComponent(candidate), text)
     }
 
     // MARK: Write-back (Mustard → vault)
@@ -201,9 +280,14 @@ public final class MeetingTaskSync {
         return byKey
     }
 
+    /// The vault directory is normally the first path component, but scan them all
+    /// so a re-rooted or nested vault still maps to the right area instead of
+    /// silently falling back.
     private func clientName(forNotePath path: String) -> String {
-        let root = path.split(separator: "/").first.map(String.init) ?? ""
-        return areaMap[root] ?? fallbackArea
+        for component in path.split(separator: "/").map(String.init) {
+            if let area = areaMap[component] { return area }
+        }
+        return fallbackArea
     }
 
     /// The note's first `# ` heading, falling back to the file name — the row subtitle.
