@@ -200,6 +200,51 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
         Remaining: real-call matrix (BAK-303, Leon). A 25-agent adversarial
         review confirmed 20 findings mid-suite; all fixed (`c4ebabc`).
 
+      **MERGED to `main` 2026-08-05 as `0c06e1a` (PR #101).** All three surfaces
+      verified on hardware: capture, dictation (incl. the password-field refusal),
+      and a two-channel meeting recording (44 "you" + 34 "meeting" segments merged,
+      tracks finalized, digest generated). Live testing found **eleven runtime bugs
+      the 1,443-test suite could not reach** — every one in the layer that only
+      exists at runtime (Carbon handler chaining, `CGEventSource.keyState` lying
+      about a claimed hotkey's own key, `SpeechTranscriber` needing `.fastResults`,
+      ad-hoc signing invalidating TCC grants on every rebuild, Chromium apps
+      returning `.success` from an AX write they discard, a starved SpeechAnalyzer
+      session never returning from `finish()`). Lesson recorded: **instrument the
+      runtime layer before attempting the first fix** — three speculative hotkey
+      fixes made things worse; an `os_log` trace found each cause in one pass.
+
+- [ ] **F28 Voice Suite hardening & meeting quality** *(drafted 2026-08-05 from
+      hardware verification of F27; file B before A — B removes the false
+      positives A would otherwise scan for)*:
+      - [ ] **B Clean up recording intermediates** — `recovery.json` and both
+        `.partial.caf` sources are retained after a successful export (~22 MB/min;
+        an hour-long call leaves ~1.3 GB). Delete them only once the m4a export
+        **and** the mix have both succeeded; on any failure leave everything
+        untouched, since the partials are then the only copy of the audio.
+      - [ ] **A Crash-recovery scan at launch, offering Resume** — the recovery
+        machinery is fully built and unit-tested (manifest checkpointed with safe
+        byte offsets, `.partial → .recover` transition) but **never read**, so
+        interrupted recordings strand forever. Scan at launch, truncate each
+        partial at `safeByteOffset`, and offer **Resume recording** (primary),
+        **Finalize what was captured**, or **Discard**. Never auto-resume or
+        auto-discard. *UX decided by Leon 2026-08-05: offer to resume.*
+      - [ ] **C Verify meeting action-proposal extraction** — the verification
+        recording produced zero proposals. Possibly correct for that clip, but
+        extraction has never been shown to work. Pin it with a fixture-driven test
+        over a canned transcript containing commitments, then confirm on real audio;
+        no proposal may exist without a transcript-attributable evidence span.
+      - [ ] **D Reduce transcript fragmentation** — 78 segments in 37 s (~2/sec),
+        sentences chopped into two-word pieces, which also degrades the digest.
+        Coalesce adjacent same-source finals into sentence-level segments in a pure
+        `Logic/` unit before persistence, leaving `MeetingTranscriptMerge`'s
+        cross-source ordering intact. Existing meetings are not retro-coalesced.
+        Measure against a baseline tool by feeding both the **saved**
+        `playback.m4a` — never run two transcribers live, which compares
+        recordings rather than transcribers. *(Separately: over speakers the mic
+        picks up system audio, so words land on both channels and the merge
+        interleaves duplicates. Retest with headphones before treating it as a
+        bug — it may be purely acoustic.)*
+
 *(Previous: B1 shipped as **F17**, the multi-source foundation as **F18**, and I1
 delegation as **F19**. Other unblocked candidate: **I2 Trust that earns itself** —
 design locked 2026-06-16, still needs a plan.)*
