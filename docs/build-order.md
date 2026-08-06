@@ -117,6 +117,19 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       - Acceptance: approve the "Email Bree" voice rec → card moves Queued → (worker) →
         Needs Review with a live Gmail draft link.
 
+- [ ] **F28 On-device rewrite (⌃⌥R)** *(spec + plan approved 2026-08-05; Linear
+      BAK-313..327 filed in **Backlog**, deliberately NOT agent-ready — Leon asked for
+      the ticket and plan only)*. Select text in any app → ⌃⌥R → review an Apple
+      Foundation Models rewrite in a floating card → Return replaces the selection.
+      Completes the hotkey family (⌃⌥Space captures, ⌃⌥D dictates, ⌃⌥R rewrites).
+      Phase 1 is four fixed intents; phase 2 adds a voice profile distilled from the
+      vault, phase 3 live Mustard context. **Blocked on PR #101** — every dependency
+      (`OnDeviceLanguageService`, `AccessibilityFocusReader`, `TextInserter`,
+      `PasteboardSnapshot`) lives only on that branch — and on dictation being
+      hardware-verified, since rewrite inherits its secure-field refusal.
+      Spec: `docs/superpowers/specs/2026-08-05-on-device-rewrite-design.md`.
+      Plan: `docs/superpowers/plans/2026-08-05-on-device-rewrite.md`.
+
 - [ ] **F27 Console/board attention consolidation** *(planning — raised by Leon
       2026-07-23)*. The Agent Console left column stacks three visually-similar things:
       **NEEDS YOU** (tasks with a question), **NEEDS REVIEW** (completed agent work
