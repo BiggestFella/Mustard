@@ -265,6 +265,51 @@ final class ClaudeTaskRuntimeTests: XCTestCase {
         XCTAssertEqual(script.invocations.count, 2)
     }
 
+    /// Regression: `claude -p` reports a logged-out CLI in its own stdout JSON envelope
+    /// (`"result":"Not logged in · Please run /login"`) and exits 1 with an EMPTY stderr.
+    /// Trusting stderr alone missed it, so six delegated tasks burned their retries and
+    /// landed in Needs Review labelled "finished" instead of pausing the runtime once.
+    func test_loggedOutStdoutEnvelope_withEmptyStderr_isAuthenticationRequired() async {
+        let envelope = #"{"is_error":true,"result":"Not logged in · Please run /login"}"#
+        let script = InvocationScript(results: [
+            .init(
+                ok: false,
+                text: envelope,
+                failureSource: .exitStatus,
+                stderr: "",
+                exitStatus: 1
+            ),
+            .init(ok: true, text: #"{"loggedIn":false}"#, unparsed: true),
+        ])
+        let runtime = ClaudeTaskRuntime(invoke: script.invoke)
+
+        let response = await runtime.start(request())
+
+        XCTAssertEqual(response.failure, .authenticationRequired(envelope))
+        XCTAssertEqual(script.invocations.last?.arguments, ["auth", "status", "--json"])
+    }
+
+    /// The stdout envelope is only a hint — `claude auth status` stays the sole authority,
+    /// so task-authored text mentioning auth can never fake a global runtime pause.
+    func test_loggedOutStdoutEnvelope_withHealthyAuth_staysProcessFailure() async {
+        let taskText = "The ticket notes say: not logged in"
+        let script = InvocationScript(results: [
+            .init(
+                ok: false,
+                text: taskText,
+                failureSource: .exitStatus,
+                stderr: "",
+                exitStatus: 1
+            ),
+            .init(ok: true, text: #"{"loggedIn":true}"#, unparsed: true),
+        ])
+        let runtime = ClaudeTaskRuntime(invoke: script.invoke)
+
+        let response = await runtime.start(request())
+
+        XCTAssertEqual(response.failure, .process(taskText))
+    }
+
     func test_health_invokesAuthStatusWithFreshID_andMapsAvailable() async throws {
         let recorder = InvocationRecorder(result: .init(ok: true, text: #"{"loggedIn":true}"#))
         let runtime = ClaudeTaskRuntime(invoke: recorder.invoke)

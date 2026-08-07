@@ -100,13 +100,21 @@ public actor ClaudeTaskRuntime: AgentRuntime {
         let text = result.text
         if result.failureSource == .cancelled { return .cancelled(text) }
         if result.failureSource == .timedOut { return .timedOut(text) }
-        guard let trustedText = Self.trustedFailureText(result) else { return .process(text) }
-        if Self.isAuthenticationFailure(trustedText) {
-            if case .authenticationRequired = await health() {
-                return .authenticationRequired(text)
-            }
-            return .process(text)
+        // Authentication is the one failure we can settle authoritatively (`claude auth
+        // status`), so ANY hint earns a probe — including plain stdout. A logged-out
+        // `claude -p` reports "Not logged in · Please run /login" inside its own stdout
+        // JSON envelope and exits 1 with an EMPTY stderr, so gating the probe on trusted
+        // stderr alone silently misclassified a logged-out CLI as a per-task process
+        // failure: six delegated tasks burned their retries and landed in Needs Review
+        // labelled "finished" instead of pausing the runtime once. Probing on untrusted
+        // text is safe precisely because `health()` — not the text — decides; task-authored
+        // prose can only cost an extra probe, never fake a global pause.
+        if Self.isAuthenticationFailure(text)
+            || Self.trustedFailureText(result).map(Self.isAuthenticationFailure) == true,
+           case .authenticationRequired = await health() {
+            return .authenticationRequired(text)
         }
+        guard let trustedText = Self.trustedFailureText(result) else { return .process(text) }
         if result.rateLimited || ClaudeRunner.isRateLimited(trustedText) { return .rateLimited(text) }
         if Self.isSessionMissing(trustedText) { return .sessionMissing(text) }
         return .process(text)
