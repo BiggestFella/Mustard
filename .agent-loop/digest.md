@@ -626,3 +626,47 @@ Append-only ledger of merges and holds. Each entry carries a ready `git revert` 
 - **Follow-ups (tracked):** running agent-lane→agent-lane drag doesn't cancel the live turn; pre-existing iOS shared-view-atom build break; bridge failed-result re-export has no retry cap; learning loop is phase two (docs/superpowers/plans/2026-07-13-agent-learning-loop.md).
 - **Outward actions:** none
 - **Revert:** `git revert d04a340`
+
+## 2026-08-07 — BACKLOG CLEARANCE · five parked branches merged (PRs #103–#107)
+
+Leon asked to clear all outstanding unmerged work in one pass. Five branches had been
+finished-but-parked (four of them waiting on an eye-check that never happened), then the
+Voice Suite landed on top of them. None was blocked; they had simply gone stale.
+
+**Method.** Each branch had current `main` merged *into* it, was built and tested to a
+green full suite verified **by exit code**, then squash-merged. `main` was re-fetched
+between each so every branch was tested against the real, moving target.
+
+- **PR #103 — `feat(today)`: timeline spine** · clean merge · 1451 tests, 0 failures
+  · **Revert:** `git revert b2e1dc6`
+- **PR #104 — `feat(agent)`: console/board attention consolidation (was F27, now F29)**
+  · clean merge · 1455 tests, 0 failures · **Revert:** `git revert 896c056`
+- **PR #105 — `docs(rewrite)`: F28 spec + plan, F27/F28 numbering fix** · docs only
+  · **Revert:** `git revert bd6e156`
+- **PR #106 — `feat(notes)`: polish pack** · 1 conflict (`RootView.swift`: main's
+  `.meetings` case vs the branch's `.notes` `pendingOpen` — both kept) · 1493 tests,
+  0 failures · **Revert:** `git revert 9969263`
+- **PR #107 — `feat(triage)`: brand-mark logos** · 4 conflicts · 1493 tests, 0 failures
+  · also packaged via `./build-app.sh` because the resource union was the real risk
+  · **Revert:** `git revert d96b709`
+
+**PR #107's conflicts, since they encode decisions:** `Package.swift` resources were
+**unioned** (`Resources` + `Agent/Prompts` + `Voice/Prompts`) — either side alone breaks
+the logos or the voice prompts; `SourceBadge` kept the branch's `id:` *and* main's
+`.voice` case; `Theme.Motion.reflow` was kept because `MustardMobile` references it;
+`build-app.sh` took **main's** version after verifying it already supersedes the branch's
+bundle-copy loop. `SourceLogo` switched exhaustively over `SourceID` and predated
+`.voice`, so a `.voice` arm was added — the merge would not have compiled otherwise.
+
+- **Risk:** medium overall; no Agent/contract/security surface touched.
+- **Fresh-context review:** ⚠️ **NOT run.** Leon directed a straight clearance. Local
+  verification (build + full suite + packaging) was the gate instead.
+- **⚠ Leon eye-check outstanding on four of the five** — Today spine, console two-tier
+  attention, notes polish surfaces, and logo legibility at 13pt. Each is independently
+  revertible with the lines above.
+- **Outward actions:** branches pushed to `origin`, five PRs opened and merged. No
+  release, no remote deletion, no secrets.
+
+**Digest gap noted:** PRs **#98**, **#101** and **#102** were merged 2026-07-24…08-05 and
+never logged here, so they have no revert line recorded. Left as-is rather than
+back-filled from reconstruction.
