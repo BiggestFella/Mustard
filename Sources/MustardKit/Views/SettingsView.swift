@@ -10,7 +10,12 @@ public struct SettingsView: View {
     @AppStorage("trustLevel") private var trustRaw = TrustLevel.manual.rawValue
     private var trust: TrustLevel { TrustLevel(rawValue: trustRaw) ?? .manual }
 
-    public init() {}
+    /// Navigates to the Voice Setup screen (BAK-280); RootView owns the route.
+    private let onVoiceSetup: (() -> Void)?
+
+    public init(onVoiceSetup: (() -> Void)? = nil) {
+        self.onVoiceSetup = onVoiceSetup
+    }
 
     public var body: some View {
         ScrollView {
@@ -40,6 +45,28 @@ public struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Palette.textSecondary)
                     Text("🔒 Email, Slack and tickets are always reviewed by you — at every trust level.")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("VOICE")
+                        .font(.system(size: 10, weight: .semibold)).tracking(0.06)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                    Button {
+                        onVoiceSetup?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "waveform")
+                                .font(Theme.Fonts.meta)
+                            Text("Voice Setup…")
+                                .font(Theme.Fonts.body)
+                        }
+                        .foregroundStyle(Theme.Palette.accent)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Text("Microphone, speech, accessibility, system audio and calendar permissions — plus the on-device speech model.")
                         .font(Theme.Fonts.caption)
                         .foregroundStyle(Theme.Palette.textTertiary)
                 }

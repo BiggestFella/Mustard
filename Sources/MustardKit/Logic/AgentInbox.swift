@@ -16,16 +16,16 @@ public enum AgentInbox {
         RecommendationQueue.pending(recommendations, now: now).count
     }
 
-    /// Agent tasks awaiting your answer or output review (Needs You + Needs Review).
+    /// Agent tasks awaiting your approval, answer, or output review (all three gate
+    /// stages) — matches PersonalBoard.waitingCount/needsHuman (F27 count unification).
     public static func attentionTaskCount(_ tasks: [MustardTask]) -> Int {
-        tasks.filter { $0.stage == .needsInput || $0.stage == .needsReview }.count
+        tasks.filter { $0.stage.isGate }.count
     }
 
-    /// The two attention groups for the unified Agent Console queue: questions (Needs You)
-    /// and outputs (Needs Review), each oldest-first so the longest-waiting item leads.
+    /// The single attention bucket for the console's "In flight · needs you" tier:
+    /// all three gate stages (needsApproval ∪ needsInput ∪ needsReview), oldest-first.
     public struct AgentAttention {
-        public let questions: [MustardTask]
-        public let reviews: [MustardTask]
+        public let inFlight: [MustardTask]
     }
 
     public static func attention(_ tasks: [MustardTask]) -> AgentAttention {
@@ -35,9 +35,22 @@ public enum AgentInbox {
             a.createdAt != b.createdAt ? a.createdAt < b.createdAt : a.uid < b.uid
         }
         return AgentAttention(
-            questions: tasks.filter { $0.stage == .needsInput }.sorted(by: precedes),
-            reviews: tasks.filter { $0.stage == .needsReview }.sorted(by: precedes)
+            inFlight: tasks.filter { $0.stage.isGate }.sorted(by: precedes)
         )
+    }
+
+    /// The console gate row's primary button for a stage: its label, and whether it
+    /// advances in one click (Approve/Accept, via PersonalBoard.approveTarget) or must
+    /// open the conversation (Answer — replying needs typing). Nil for non-gate stages.
+    /// Enumerates the gate stages (`TaskStage.isGate`) — keep in sync if a gate stage is
+    /// added, or a new `.gate` stage will surface in `inFlight` with no action button.
+    public static func gateAction(for stage: TaskStage) -> (label: String, oneClick: Bool)? {
+        switch stage {
+        case .needsApproval: return ("Approve", true)
+        case .needsInput: return ("Answer", false)
+        case .needsReview: return ("Accept", true)
+        default: return nil
+        }
     }
 
     /// Co-pilot dock text (BAK-106): "{N} recommendation(s) and {M} item(s) waiting

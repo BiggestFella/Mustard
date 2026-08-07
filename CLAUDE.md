@@ -41,7 +41,8 @@ structured app data (tasks, recommendations, outputs, events) lives in SwiftData
 
 ```
 Mustard/
-  Package.swift                  SPM manifest (macOS 14+; MustardKit + Mustard + MustardTests)
+  Package.swift                  SPM manifest (macOS 26+, tools 6.2 w/ Swift-5 mode pin;
+                                   MustardKit + Mustard + MustardTests)
   build-app.sh                   assembles a signed build/Mustard.app from the SPM binary
   CLAUDE.md                      this file
   README.md                      human-facing quickstart
@@ -65,18 +66,39 @@ Mustard/
                                    NoteMetadata, WikilinkURL
       Agent/                     ClaudeRunner (Process shell), VaultSweep (prompt+parser),
                                    AgentService (@Observable orchestrator), FileVaultIO
-                                   (MeetingVaultIO + NoteVaultIO), NoteIndexService (notes reindex),
-                                   CaptureCleanup (voice cleanup prompt+parser, ADR-0011)
-      Capture/                   push-to-talk voice capture (F25, ADR-0011): PushToTalkHotKey
-                                   (Carbon, ⌃⌥Space), SpeechTranscriber (on-device SFSpeech),
-                                   VoiceCaptureController (hotkey→pill→raw Inbox task)
+                                   (MeetingVaultIO + NoteVaultIO), NoteIndexService (notes reindex)
+      Dictation/                  system-wide dictation (⌃⌥D, voice suite):
+                                   AccessibilityFocusReader (AX focus snapshots, fail-closed),
+                                   TextInserter + PasteboardSnapshot (direct AX insert or
+                                   lossless verified ⌘V fallback), SystemDictationCoordinator
+                                   (hold-epoch guarded; transcript never lost)
+      Meeting/                    meeting recorder (voice suite): MeetingAudioStore/-Writer
+                                   (validated Recordings/<uid>/ layout, crash-recoverable),
+                                   ScreenCaptureMeetingAudio + MeetingAudioCapture (two-source,
+                                   consent-gated), MeetingTranscriptionService (dual-live or
+                                   file fallback), MeetingDigestService (evidence-backed),
+                                   MeetingCaptureCoordinator, MeetingAppSignals + suggestions,
+                                   MeetingExportService; pure rules in Logic/ (MeetingRecordingState,
+                                   MeetingTranscriptMerge, MeetingDigestChunker, MeetingDetection,
+                                   MeetingActionApproval, MeetingRetention)
+      Voice/                     shared Apple voice core (2026-07-29 voice suite):
+                                   VoiceTypes/VoiceServices (contracts), AppleSpeechSession
+                                   (SpeechAnalyzer adapter), VoiceAssetReadiness,
+                                   OnDeviceLanguageService + PromptCatalog (Apple Intelligence),
+                                   VoicePermissionStatus, VoiceTaskDraftGenerator (+ Prompts/)
+      Capture/                   push-to-talk voice capture (ADR-0011 + voice suite):
+                                   PushToTalkHotKey (Carbon, ⌃⌥Space, conflict surfaced),
+                                   VoiceTaskCaptureCoordinator (hotkey→pill→raw Inbox task→
+                                   on-device drafting→revision-gated merge),
+                                   VoiceTaskQuickEditController (notch-adjacent card)
       Calendar/                  GoogleOAuth (PKCE/URL/token), GoogleCalendarParser
       Views/                     SwiftUI screens + surfaces (Root, Today, Board, Week,
                                    AgentConsole, Notch, Hover, CommandBar, TaskDetail, rows;
                                    Notes, NoteEditor [live Craft editor — no Source/Preview
                                    toggle], MarkdownTextView (TextKit-1 surface), SlashMenuView,
                                    BlockGutterOverlay, MarkdownPreview, BacklinksPanel,
-                                   MorningRitual, VoiceCapturePillView [push-to-talk pill, F25])
+                                   MorningRitual, VoiceCapturePillView [push-to-talk pill],
+                                   VoiceTaskQuickEditView [quick-edit card], VoiceSetupView)
       MustardContainer.swift     builds the on-disk ModelContainer
       PreviewData.swift          in-memory sample container for #Preview
   Tests/MustardTests/            XCTest — one file per Logic/Agent/Calendar unit
@@ -116,7 +138,7 @@ explicit dark hex, not `Theme`.
 ## Build & run
 
 ```bash
-swift test            # full suite (1,088 at the F25 voice-capture MVP; F26 adds a handful)
+swift test            # full suite (~1,400 at the voice-suite meetings milestone)
 swift build           # compile check
 ./build-app.sh        # → build/Mustard.app (ad-hoc signed, double-clickable)
 open build/Mustard.app
@@ -200,34 +222,40 @@ that repo has tracked secrets). It runs in a **connected** Claude session, produ
   reach the connected worker instead of stranding. The manual `delegate()` nudge is
   unchanged; the default only applies to area-*less* tasks.
 
-## Voice capture (F25/F26 — ADR-0011)
+## Voice capture (voice suite 2026-07-29 — ADR-0011 + specs)
 
-Push-to-talk quick capture: hold **⌃⌥Space** anywhere, speak, release → an Inbox task.
-Capture is instant and offline-safe; the agent structures and routes it afterwards.
+Push-to-talk quick capture: hold **⌃⌥Space** anywhere, speak, release → an Inbox task
+plus a notch-adjacent quick-edit card. Everything — transcription AND structuring —
+runs on-device; there is no claude call and no network in this path.
 
-- **Capture (no LLM, no network).** `Capture/PushToTalkHotKey` (Carbon
-  `RegisterEventHotKey`, press+release, no TCC grant) → `Capture/SpeechTranscriber`
-  (on-device `SFSpeechRecognizer`, audio stays local) → `Capture/VoiceCaptureController`
-  sequences hotkey → the floating `VoiceCapturePillView` → insert. Every decision
-  (min-hold cancel, transcript normalization) lives in the pure, tested `Logic/VoiceCapture`.
-  The task is born `source = "voice"`, `captureState = .raw`, owner `.me`, with the
-  verbatim transcript on `captureTranscript`.
-- **Cleanup queue (tier 1, auto-applied).** `Logic/CaptureCleanupQueue` picks ≤5 due raw
-  captures oldest-first with a 60/300/900s backoff → `.failed`; `Agent/CaptureCleanup`
-  builds the batched, date-grounded prompt + parser; `AgentService.cleanupCaptures`
-  (scheduler tick, gated on `AgentExecutionGate`) applies title/description/schedule
-  (`PersonalBoard.normalizePlacement`) + known-area stamp in place — reversible, verbatim
-  transcript retained.
-- **Routing (tier 2, proposed — never auto-run).** An agent-shaped capture also emits a
-  pending `Recommendation` (`source = "voice"`, `rec.task` = the captured task, action
-  limited to draft_email/draft_slack/ticket_write/vault_note) into the triage deck. It
-  **never** sets `owner = .agent` itself — approval promotes the same task through the
-  ordinary gating/trust/bridge path, so always-gated email stays gated. See the area-less
-  rescue (F26) in the "stuck agent cards" section above; the real Gmail draft is created
-  by the connected worker (`drain-agent-queue`, out of repo).
+- **Capture (no network).** `Capture/PushToTalkHotKey` (Carbon `RegisterEventHotKey`,
+  press+release, no TCC grant; a chord conflict returns `.conflict`, never silent) →
+  `Voice/AppleSpeechSession` (SpeechAnalyzer/SpeechTranscriber, one fresh session per
+  capture, mic-fed via `MicrophoneFeed`) → `Capture/VoiceTaskCaptureCoordinator`
+  sequences hotkey → the floating `VoiceCapturePillView` (live segments) → insert.
+  Decisions live in pure, tested units (`Logic/VoiceCapture` outcome/segment mapping,
+  `Logic/VoiceTaskDrafting` validation/merge). The task is born `source = "voice"`,
+  `captureState = .raw`, owner `.me`, verbatim transcript on `captureTranscript`.
+- **On-device drafting (replaces the old claude cleanup queue).** After commit the
+  coordinator asks `Voice/VoiceTaskDraftGenerator` (Foundation Models guided
+  generation, banded prompts in `Voice/Prompts/`) for title/notes/area/schedule/URLs;
+  output passes `VoiceTaskDrafting.validated` and merges **only into fields whose
+  revision counter is unchanged since the request began** — a user edit always wins.
+  Success marks `.cleaned`; any failure leaves the task `.raw` and retryable. The
+  model may only pick areas from the supplied list and never invents URLs/people/
+  dates/completion.
+- **Quick editor.** `Capture/VoiceTaskQuickEditController` owns one activating card
+  below the `NotchScreenPicker` display; `VoiceTaskQuickEditState` holds the draft +
+  revisions (Return in notes = newline; title Return/⌘Return/outside click = commit;
+  Escape keeps the task; Open Fully → `NotchNavigation.pendingTask`).
+- **Out of scope by spec:** automatic delegation/outward execution from a voice task
+  (the old F25 v3 routing tier was removed with the cleanup queue). The F26 area-less
+  rescue in the "stuck agent cards" section still applies to manually delegated work.
 - **Build:** `build-app.sh`'s Info.plist carries `NSMicrophoneUsageDescription` +
-  `NSSpeechRecognitionUsageDescription` (hard-required). The hotkey/mic/speech/pill layer
-  is macOS-runtime-only (verified by eye); all decision logic is pure and unit-tested.
+  `NSSpeechRecognitionUsageDescription`. The hotkey/mic/panel layer is
+  macOS-runtime-only (verified by eye); all decision logic is pure and unit-tested.
+  The live SpeechAnalyzer driver needs macOS 27; on macOS 26 capture reports itself
+  unavailable in the pill instead of failing silently.
 
 ## Git / PR conventions
 
