@@ -179,10 +179,15 @@ public enum Theme {
         /// Gesture tracking a finger (drag snap-back, cancel).
         public static let drag = Animation.spring(response: 0.32, dampingFraction: 0.7)
 
-        /// Small state changes settling into place (hover lift, selection, list reflow).
+        /// Small state changes settling into place (hover lift, selection, toggles).
         public static let settle = Animation.snappy(duration: 0.16)
+
+        /// Layout restacking after an item leaves (deck cards, list reflow).
+        public static let reflow = Animation.spring(response: 0.34, dampingFraction: 0.82)
+
         /// Content expanding or collapsing (drawers, disclosure, trays).
         public static let expand = Animation.snappy(duration: 0.18)
+
         /// Menus and popovers arriving (slash menu, ⌘K).
         public static let pop = Animation.spring(duration: 0.22)
     }

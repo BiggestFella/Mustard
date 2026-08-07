@@ -43,6 +43,10 @@ public struct SourceLink: Equatable {
         }
     }
 
+    /// Typed source id for `SourceLogo`; unrecognised/default kinds fall back to `.vault`
+    /// (the quiet, no-brand-mark case) since `.symbol`'s "link" default has no logo either.
+    public var id: SourceID { SourceID(rawValue: sourceKind) ?? .vault }
+
     /// Friendly source name (header tooltip / accessibility).
     public var sourceName: String {
         switch sourceKind {

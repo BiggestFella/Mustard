@@ -104,7 +104,7 @@ struct MobileTriageView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Smoothly restack the cards behind when the top one leaves.
-        .animation(Theme.Motion.settle, value: pending.count)
+        .animation(Theme.Motion.reflow, value: pending.count)
     }
 
     private func topCard(_ rec: Recommendation) -> some View {
@@ -289,11 +289,14 @@ private struct DeckCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 if !badge.isQuiet {
-                    Label(badge.label, systemImage: badge.symbol)
-                        .labelStyle(.titleAndIcon).font(.caption2.weight(.medium))
-                        .foregroundStyle(Color(hex: badge.fgHex))
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color(hex: badge.bgHex), in: Capsule())
+                    HStack(spacing: 4) {
+                        SourceLogo(source: badge.id, size: 12)
+                        Text(badge.label)
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color(hex: badge.fgHex))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color(hex: badge.bgHex), in: Capsule())
                 }
                 Text("✦ \(rec.action.label)").font(.caption.weight(.medium)).foregroundStyle(Theme.Palette.agentTextDeep)
                 Spacer(minLength: 0)
