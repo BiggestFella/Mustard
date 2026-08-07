@@ -670,3 +670,36 @@ bundle-copy loop. `SourceLogo` switched exhaustively over `SourceID` and predate
 **Digest gap noted:** PRs **#98**, **#101** and **#102** were merged 2026-07-24…08-05 and
 never logged here, so they have no revert line recorded. Left as-is rather than
 back-filled from reconstruction.
+
+## 2026-08-07 — fix(agent): logged-out CLI misclassified as a per-task process failure (PR #110)
+
+**Trigger:** Leon reported all six Needs Review agent cards had failed. Every run's
+`ZLASTERROR` was the same: `claude exited 1` with `"result":"Not logged in · Please run /login"`.
+Reproduced live — the `claude` CLI on this Mac is logged out.
+
+**Root cause of the six failures:** the CLI is not authenticated. Only Leon can fix that
+(`claude /login` or `claude setup-token`). Not a code bug.
+
+**Code bug fixed here:** a logged-out `claude -p` reports the failure in its own *stdout*
+JSON envelope and exits 1 with an *empty stderr*. `ClaudeTaskRuntime.classifyFailure` gated
+auth suspicion on `trustedFailureText` (stderr for `.exitStatus`), so the `health()` probe
+never ran and the failure fell through to `.process`. `AgentRetryPolicy` then treated it as
+an ordinary local failure: non-gated tasks burned the full 60/300/900s backoff
+(`ZATTEMPTCOUNT: 4`), gated ones went straight to `.completionUncertain`. All six landed in
+Needs Review labelled "finished · check the output" — nothing finished, and the runtime
+never paused with its single Retry banner.
+
+Any auth hint now earns a probe, stdout included. `health()` (`claude auth status --json`)
+stays the sole authority, so task-authored prose can only cost an extra probe, never fake a
+global pause; a test pins that.
+
+**Risk:** low — one pure classification path, 2 new tests, no schema or outward action.
+**Checks:** `swift test` exit 0 (1495 tests, 1 skipped, 0 failures); `swift build` exit 0;
+CI "Build & test (macOS)" success. Local runs need
+`DEVELOPER_DIR=~/Downloads/Xcode-beta.app/Contents/Developer` (pre-existing Xcode 27 SDK need).
+
+**Revert:** `git revert f8eee5b`
+
+**Open follow-up (not fixed here):** `AgentConsoleView.gateSubmeta`/`gateSpineColor` label
+*every* Needs Review card "finished · check the output" in green, including runs that
+genuinely failed into review. Task chip filed for Leon.
