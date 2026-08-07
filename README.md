@@ -6,6 +6,11 @@ Things 3 calm — warm off-white, hairline dividers, one blue accent.
 
 ## Run
 
+Requires **macOS 26+** to run and the **Xcode 27 beta** toolchain to build (the
+voice suite uses the modern Apple speech stack — SpeechAnalyzer and Foundation
+Models). Select the beta per-shell with
+`export DEVELOPER_DIR=/path/to/Xcode-beta.app/Contents/Developer`.
+
 ```bash
 swift test          # full suite: models, Logic, agent loop, parsers, voice capture
 ./build-app.sh      # builds build/Mustard.app (signed, double-clickable)
@@ -36,17 +41,40 @@ open build/Mustard.app
 - **Command bar** — ⌘K: type to capture a task (Enter), or run "Go to Today / Board / Week / Agent" / "Sweep now" — arrow keys + Enter, Esc closes.
 - **Notch** — auto-shows on the built-in display: black notch-hugging strip rotating focus → waiting count; hover expands into the agent tray (inline Approve/Deny) + quick capture. ⌘⇧N toggles.
 - **Scheduled sweeps** — "Auto" menu in the Agent console (hourly / 4h / daily); the app checks every minute and sweeps when due.
+- **System-wide dictation** — hold **⌃⌥D** in any app, speak, release: the words
+  land at the cursor (direct Accessibility insertion, or a lossless ⌘V fallback
+  that restores your clipboard unless something newer replaced it). The field is
+  snapshotted before audio starts, so text never lands in the wrong place;
+  password fields are always refused; if insertion can't happen the pill keeps
+  the transcript with Copy / Try Current Field. Needs Accessibility (Voice
+  Setup → Open Settings).
+- **Meeting recorder** — hover the notch → **Start Meeting** (or accept a
+  suggestion when a Zoom/Meet/Teams call looks like it's starting): explicit
+  consent first, then two-source recording (your mic + everything playing on
+  the Mac) with a persistent red indicator, live on-device transcription, and
+  an evidence-backed digest (summary, decisions, approval-gated task
+  proposals). Review in **Meetings**: playback with timestamp seeking,
+  searchable/correctable transcript, approve/reject proposals, export to
+  Markdown + audio. Audio expires after 30 days (pin to keep); everything
+  stays on this Mac. Crash recovery keeps safely written partials.
+- **Voice Setup** — Settings → Voice Setup…: reports the five voice permissions
+  (microphone, speech recognition, accessibility, system audio, calendar)
+  independently, with a Request or Open Settings route per row, plus on-device
+  speech model install. Nothing is requested at launch; a denial degrades only
+  the feature that needs it.
 - **Hover panel** — ⌘⇧H: always-on-top, non-activating mini panel showing your
   current focus (or what the agent is executing) and how many items wait on you.
   Expands on hover.
 - **Voice capture** — hold **⌃⌥Space** anywhere on the Mac, speak a task, release: a
-  floating pill shows the live transcript (on-device speech, no audio leaves the Mac)
-  and the words land as an Inbox task instantly. The agent then tidies it in the
-  background — inferring a short title, description, schedule ("…on the 9th of
-  August"), and area — and, when you asked it to *do* something ("email the action
-  points to Matt"), proposes it in the Agent triage deck for your approval (email/
-  Slack/tickets stay gated). First launch asks for Microphone + Speech permission.
-  Spec: ADR-0011.
+  floating pill shows the live transcript (SpeechAnalyzer, fully on-device — no
+  audio leaves the Mac) and the words land as an Inbox task instantly, verbatim
+  transcript retained. A quick-edit card opens below the notch (title, notes,
+  links, area, schedule; ⌘Return saves, Esc keeps the task, Open Fully jumps to
+  the task drawer) while Apple Intelligence drafts structure on-device — a late
+  result never overwrites a field you've edited. If the model is unavailable the
+  task simply stays raw and editable. First launch asks for the Microphone;
+  drafting needs Apple Intelligence enabled. Spec: ADR-0011 + the 2026-07-29
+  voice-suite specs.
 
 Agents run through your **Claude subscription** (`claude -p`, headless) — no API
 key, no metered billing. If runs fail with 401, run `/login` inside `claude`
