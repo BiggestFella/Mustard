@@ -267,6 +267,37 @@ runs on-device; there is no claude call and no network in this path.
 - Plans live in the sibling Triage-tool repo under
   `docs/superpowers/plans/` (historical) and now `docs/build-order.md` here.
 
+## Finish the loop — do not park work (READ THIS BEFORE ENDING A SESSION)
+
+On 2026-08-07 five finished branches were found sitting unmerged for up to six weeks.
+None was blocked. Each had ended with "awaiting Leon's eye-check" written into a file
+Leon never opened, so the handoff was invisible and the work silently rotted while
+`main` moved 16k lines underneath it. Do not recreate that.
+
+**Default: take work all the way to merged.** Build → full `swift test` green (verified
+by **exit code**, never by grepping output) → push → PR → merge. A branch left unmerged
+at end of session is the exception and must be justified out loud, not assumed.
+
+**Eye-checks are the one thing only Leon can do — so ask him in chat, in your final
+message, and say exactly what to look at.** Never leave a needed eye-check only in a
+doc, a digest entry, or a Linear comment; those are records, not notifications. If Leon
+is not around, merge anyway when tests are green and give him the `git revert <sha>`
+line — reverting is cheap, rot is not ([[.agent-loop/digest.md]] carries a revert line
+per merge for exactly this reason).
+
+**Never leave a branch parked "pending review" without saying so in chat.** If you truly
+must stop mid-flight, say in your final message: what is done, what is left, which
+branch, and what unblocks it.
+
+**One session, one job.** Do not start a second branch for work another session already
+owns — check `git branch` and open PRs first. Two sessions on one feature produced a
+duplicate PR (#100, closed) that had to be thrown away.
+
+**Merged-or-not is not obvious — test it properly.** This repo squash-merges, so
+`git cherry` and three-dot diffs both report already-merged branches as unmerged. To
+check whether a branch's work is in `main`, reverse-apply its own contribution:
+`git diff origin/main...<branch> | git apply --reverse --check -` — clean means merged.
+
 ## Workflow gates (project-bootstrap discipline)
 
 | Gate | Who | When |
