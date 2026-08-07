@@ -64,6 +64,9 @@ public struct MustardBoardCard: View {
                 PriorityFlag(priority: task.priority)   // shared with TimelineRow (BAK-245)
                 if hovering { ownerToggle }   // hover-revealed (handoff); agent shown via the left accent
                 Spacer(minLength: 0)
+                if let capture = task.captureState, capture != .cleaned {
+                    capturePill(capture)
+                }
                 if task.isProposed { proposedPill }
                 if task.isGated {
                     Image(systemName: "lock")
@@ -75,6 +78,24 @@ public struct MustardBoardCard: View {
             .frame(minHeight: 18)
             .padding(.bottom, 7)
         }
+    }
+
+    // MARK: 🎙 Voice-capture pill (F25) — raw = cleanup pending, failed = gave up
+
+    private func capturePill(_ state: CaptureState) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "mic.fill").font(.system(size: 8))
+            Text(state == .raw ? "Raw" : "Cleanup failed")
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(state == .raw ? Theme.Palette.textSecondary : Theme.Palette.warning)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 1)
+        .background(Theme.Palette.surface, in: Capsule())
+        .overlay(Capsule().stroke(Theme.Palette.divider, lineWidth: 0.5))
+        .help(state == .raw
+              ? "Voice capture — the agent will tidy the title and details shortly"
+              : "Voice cleanup gave up — the raw transcript is kept as the title")
     }
 
     // MARK: ✦ Proposed pill (agent-surfaced inbox task)
@@ -321,39 +342,8 @@ public struct MustardBoardCard: View {
     private func rejectGate() { context.delete(task) }
 }
 
-/// Wrapping horizontal layout for the meta row (area/source/due may overflow the
-/// narrow column). Falls back gracefully on older SDKs via SwiftUI's `Layout`.
-/// Shared with `TaskChipRow` (BAK-245) so row chips wrap the same way card meta does.
-struct FlowMeta: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > 0 && x + size.width > maxWidth {
-                x = 0; y += rowHeight + spacing; rowHeight = 0
-            }
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return CGSize(width: maxWidth == .infinity ? x : maxWidth, height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + size.width > bounds.maxX {
-                x = bounds.minX; y += rowHeight + spacing; rowHeight = 0
-            }
-            sub.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-    }
-}
+// `FlowMeta` (the wrapping meta-row layout) moved to SharedUI/FlowMeta.swift so the iOS
+// target can compile it too — it's shared by MustardBoardCard (desktop) and TaskChipRow.
 
 #if DEBUG
 #Preview {

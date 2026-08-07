@@ -195,6 +195,28 @@ public final class AgentService {
         for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
     }
 
+    /// Export area-less connected-worker tasks to the default KB's outbox (F26,
+    /// ADR-0011 addendum). The per-source `exportWorkOrders` filters by area, so an
+    /// approved voice hand-off that inferred no client area is invisible to it and
+    /// strands (BAK-90). This routes exactly those orphans — tasks with no area — to
+    /// the injected default working dir instead, so the connected worker can still
+    /// pick them up. `BridgeExport.plan` still applies the real gates (export stage +
+    /// `requiresConnectedWorker`), so ordinary local tasks are never exported here.
+    /// The default dir must be distinct from the enabled source dirs (it is — the
+    /// meeting vault isn't a sweep source) so the two passes never cancel each other.
+    public func exportAreaLessWork(workingDir: String, project: String) {
+        guard !workingDir.isEmpty else { return }
+        let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
+        let target = BridgeExport.RouteTarget(workingDir: workingDir, project: project)
+        let orphans = all.filter { $0.list?.area == nil }
+        let plan = BridgeExport.plan(
+            tasks: orphans, route: { _ in target },
+            liveOutboxUIDs: [workingDir: bridge.liveOutboxUIDs(workingDir: workingDir)],
+            liveResultUIDs: [workingDir: bridge.liveResultUIDs(workingDir: workingDir)], now: .now)
+        for w in plan.writes { try? bridge.writeWorkOrder(w.order, workingDir: workingDir) }
+        for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
+    }
+
     /// Ingest `_agent/results/` for one KB working dir: apply each (guarded) and archive it.
     public func ingestAgentResults(workingDir: String) {
         let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []

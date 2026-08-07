@@ -32,8 +32,17 @@ public enum AgentTaskQueue {
 
     /// Sources are considered in settings order; the first eligible source whose
     /// project maps to the task's area is selected.
-    public static func route(_ task: MustardTask, settings: SourceSettings) -> AgentTaskRoute? {
-        guard let areaName = task.list?.area?.name else { return nil }
+    ///
+    /// `defaultRoute` (F26, ADR-0011 addendum) rescues **area-less** hand-offs — a
+    /// voice-routed capture that inferred no client area would otherwise strand in
+    /// `.queued` forever (BAK-90) because there is no area to route by. It applies ONLY
+    /// when the task has no area: a task that HAS an area but no enabled matching source
+    /// is a genuine config gap (the manual-hand-off nudge case) and still returns nil,
+    /// so the default can never silently shadow a mis-mapped area.
+    public static func route(
+        _ task: MustardTask, settings: SourceSettings, defaultRoute: AgentTaskRoute? = nil
+    ) -> AgentTaskRoute? {
+        guard let areaName = task.list?.area?.name else { return defaultRoute }
 
         for source in settings.sources {
             guard source.enabled,

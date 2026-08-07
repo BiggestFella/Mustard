@@ -19,10 +19,20 @@ jobs:
     # only that machine picks up these jobs. To register one, see
     # docs/ci-self-hosted-runner.md.
     runs-on: [self-hosted, macOS, mustard]
+    # The Voice Suite compiles against macOS 27-only APIs (Speech, Foundation
+    # Models), so CI must build with the Xcode 27 beta SDK — the runner's
+    # xcode-select default is still Xcode 26.6. DEVELOPER_DIR is the per-process
+    # equivalent of xcode-select (see BAK-275); update this path when Xcode 27
+    # moves to /Applications or becomes the system default.
+    env:
+      DEVELOPER_DIR: /Users/leoncreed-baker/Downloads/Xcode-beta.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
-      - name: Show Swift version
-        run: swift --version
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          swift --version
       - name: Build
         run: swift build
       - name: Test

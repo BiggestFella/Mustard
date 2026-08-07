@@ -24,6 +24,7 @@ public struct SourceBadge: Equatable {
         case .jira: SourceBadge(symbol: "diamond.fill", label: "Jira", isQuiet: false, fgHex: "#2E5CB8", bgHex: "#E7EEF9")
         case .shortcut: SourceBadge(symbol: "flag.fill", label: "Shortcut", isQuiet: false, fgHex: "#5B4AA8", bgHex: "#ECE8F7")
         case .vault: SourceBadge(symbol: "books.vertical", label: "Vault", isQuiet: true)
+        case .voice: SourceBadge(symbol: "mic.fill", label: "Voice", isQuiet: false, fgHex: "#7F77DD", bgHex: "#EEECFA")
         }
     }
 

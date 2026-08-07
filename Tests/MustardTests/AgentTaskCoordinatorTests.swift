@@ -214,6 +214,65 @@ final class AgentTaskCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.activeTitle)
     }
 
+    func test_runNext_areaLessTask_routesViaDefault_notStranded() async throws {
+        // F26: a voice hand-off with no client area would strand (route() → nil)
+        // without the default. With a default route injected, it's picked up and run.
+        let runtime = ScriptedAgentRuntime(responses: [.completed("Drafted", artifacts: [])])
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
+            AgentRun.self, AgentMessage.self, AgentDraft.self,
+            configurations: configuration)
+        let context = ModelContext(container)
+        let coordinator = AgentTaskCoordinator(
+            context: context, runtime: runtime,
+            persist: { try context.save() },
+            contractProvider: { self.testContract },
+            nowProvider: { self.secondTurn },
+            defaultRouteProvider: { AgentTaskRoute(project: "Code Heroes", workingDirectory: "/kb/ch-work") })
+
+        let task = MustardTask(title: "Email Bree", owner: .agent)   // NO list/area
+        task.stage = .queued
+        task.actionType = .draftEmail
+        context.insert(task)
+
+        await coordinator.runNext(settings: settings, now: firstTurn)
+
+        XCTAssertNotEqual(task.stage, .queued, "should not strand — the default route unblocks it")
+        XCTAssertEqual(task.agentRun?.workingDirectory, "/kb/ch-work")
+        XCTAssertEqual(task.agentRun?.project, "Code Heroes")
+        XCTAssertNil(coordinator.lastError)
+    }
+
+    func test_runNext_areaLessTask_strandsWhenNoDefaultRouteConfigured() async throws {
+        // No meeting vault set → provider returns nil → area-less task stays put and the
+        // coordinator reports it, rather than routing nowhere.
+        let runtime = ScriptedAgentRuntime(responses: [.completed("x", artifacts: [])])
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
+            AgentRun.self, AgentMessage.self, AgentDraft.self,
+            configurations: configuration)
+        let context = ModelContext(container)
+        let coordinator = AgentTaskCoordinator(
+            context: context, runtime: runtime,
+            persist: { try context.save() },
+            contractProvider: { self.testContract },
+            nowProvider: { self.secondTurn },
+            defaultRouteProvider: { nil })
+
+        let task = MustardTask(title: "Email Bree", owner: .agent)
+        task.stage = .queued
+        task.actionType = .draftEmail
+        context.insert(task)
+
+        await coordinator.runNext(settings: settings, now: firstTurn)
+
+        XCTAssertEqual(task.stage, .queued)
+        XCTAssertNil(task.agentRun)
+        XCTAssertNotNil(coordinator.lastError)
+    }
+
     func test_completedTurnMaterializesValidDraftsAndDropsUnsafeOnes() async throws {
         let runtime = ScriptedAgentRuntime(responses: [
             .success(.init(outcome: .completed, message: "done", questions: [], summary: "Drafted",

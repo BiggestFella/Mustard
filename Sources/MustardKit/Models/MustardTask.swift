@@ -58,6 +58,18 @@ public final class MustardTask {
     /// Stable identity from `MeetingTaskParser.originKey` — dedup + line locator.
     public var originKey: String?
 
+    // Voice capture lifecycle (F25, ADR-0011). All optional/defaulted so the CloudKit
+    // schema stays additive (ADR-0001); nil/0 on every non-capture task.
+    /// `raw` = awaiting the cleanup pass, `cleaned` = pass applied, `failed` = pass
+    /// gave up (task stays usable with its raw title). Nil for non-capture tasks.
+    public var captureStateRaw: String?
+    /// The verbatim speech transcript, preserved so cleanup is never destructive.
+    public var captureTranscript: String?
+    /// Failed cleanup attempts so far (drives the 60/300/900s backoff ladder).
+    public var captureAttempts: Int = 0
+    /// Cleanup backoff window — the queue skips this task until this passes.
+    public var captureNextAttemptAt: Date?
+
     // Board stage model (BAK-74). `stage` supersedes `status`; `statusRaw` is kept
     // only so existing stores decode and `BoardMigration` can backfill `stage`.
     public var stageRaw: String = TaskStage.inbox.rawValue
@@ -79,6 +91,11 @@ public final class MustardTask {
     public var stage: TaskStage {
         get { TaskStage(rawValue: stageRaw) ?? .inbox }
         set { stageRaw = newValue.rawValue }
+    }
+
+    public var captureState: CaptureState? {
+        get { captureStateRaw.flatMap(CaptureState.init(rawValue:)) }
+        set { captureStateRaw = newValue?.rawValue }
     }
 
     public var actionType: RecommendationAction? {

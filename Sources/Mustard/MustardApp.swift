@@ -76,6 +76,13 @@ private final class MustardAppScheduler {
                         agent.ingestAgentResults(workingDir: source.workingDirectory)
                     }
                 }
+                // Area-less connected-worker hand-offs (F26) route to the default KB —
+                // the meeting vault — since they match no source's area filter above.
+                let defaultDir = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+                if !defaultDir.isEmpty, !updated.sources.contains(where: { $0.enabled && $0.workingDirectory == defaultDir }) {
+                    agent.exportAreaLessWork(workingDir: defaultDir, project: "Code Heroes")
+                    agent.ingestAgentResults(workingDir: defaultDir)
+                }
                 lastInbox = .now
             }
         }
@@ -120,6 +127,11 @@ struct MustardApp: App {
     @State private var hoverPanel: HoverPanel?
     @State private var notch: NotchController?
     @State private var notchNav = NotchNavigation()
+    @State private var voiceCapture: VoiceTaskCaptureCoordinator?
+    @State private var dictation: SystemDictationCoordinator?
+    @State private var meetingRecorder: MeetingCaptureCoordinator
+    @State private var meetingSuggestions: MeetingSuggestionMonitor
+    @State private var didRecoverMeetings = false
     init() {
         let container = MustardContainer.make()
         let executionGate = AgentExecutionGate()
@@ -149,6 +161,38 @@ struct MustardApp: App {
             noteIndex: noteIndex,
             calendar: calendar
         ))
+
+        // Manual meeting recorder (Meetings Tasks 6–8): consent-gated
+        // two-source capture with the on-device digest. Built here so both
+        // the main window (review/retry) and the notch share one instance.
+        let recordings = URL.applicationSupportDirectory
+            .appending(path: "Mustard/Recordings", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(
+            at: recordings, withIntermediateDirectories: true)
+        let meetingStore = MeetingAudioStore(recordingsRoot: recordings)
+        let digestService = MeetingDigestService(
+            service: OnDeviceLanguageService.live(),
+            calendar: .current,
+            loadPrompt: VoiceTaskDraftGenerator.bundledPrompt,
+            // ~4 chars per token is the standard conservative estimate; the
+            // chunker only needs a budget-shaped bound, not exact counts.
+            tokenCount: { $0.count / 4 + 1 })
+        self._meetingRecorder = State(initialValue: MeetingCaptureCoordinator(
+            context: container.mainContext,
+            capturing: ScreenCaptureMeetingAudio(),
+            store: meetingStore,
+            makeWriter: { uid, startedAt in
+                try MeetingAudioWriter(store: meetingStore, meetingUID: uid, startedAt: startedAt)
+            },
+            transcription: .liveMeeting(),
+            generateDigest: { segments, now in
+                await digestService.digest(segments: segments, now: now)
+            }))
+        let recorder = _meetingRecorder.wrappedValue
+        self._meetingSuggestions = State(initialValue: MeetingSuggestionMonitor(
+            events: { (try? container.mainContext.fetch(FetchDescriptor<CalendarEvent>())) ?? [] },
+            signals: { MeetingAppSignals.current() },
+            isRecording: { recorder.state != .idle }))
     }
 
     var body: some Scene {
@@ -159,6 +203,7 @@ struct MustardApp: App {
                 .environment(noteIndex)
                 .environment(calendar)
                 .environment(notchNav)
+                .environment(meetingRecorder)
                 .frame(minWidth: 640, minHeight: 520)
                 .task {
                     let container = container
@@ -174,6 +219,22 @@ struct MustardApp: App {
                             )
                         }
                     }
+                    if !didRecoverMeetings {
+                        // Crash-left partials surface once per launch, and
+                        // audio past the 30-day retention (pinned exempt)
+                        // is cleared — transcripts and digests stay.
+                        meetingRecorder.recoverOnLaunch()
+                        MeetingRetention.sweep(
+                            meetings: (try? container.mainContext.fetch(
+                                FetchDescriptor<MeetingRecord>())) ?? [],
+                            store: MeetingAudioStore(
+                                recordingsRoot: URL.applicationSupportDirectory
+                                    .appending(path: "Mustard/Recordings", directoryHint: .isDirectory)),
+                            context: container.mainContext,
+                            now: .now)
+                        meetingSuggestions.startPolling()
+                        didRecoverMeetings = true
+                    }
                     if notch == nil {
                         let controller = NotchController { onHover in
                             AnyView(
@@ -181,11 +242,31 @@ struct MustardApp: App {
                                     .environment(agent)
                                     .environment(taskAgent)
                                     .environment(notchNav)
+                                    .environment(meetingRecorder)
+                                    .environment(meetingSuggestions)
                                     .modelContainer(container)
                             )
                         }
                         controller.show()
                         notch = controller
+                    }
+                    if voiceCapture == nil {
+                        // Push-to-talk capture: hold ⌃⌥Space anywhere, speak, release
+                        // → raw Inbox task, quick-edit card, on-device drafting. One
+                        // coordinator per app; permission pre-flight happens at
+                        // activation, never mid-capture.
+                        let capture = VoiceTaskCaptureCoordinator(
+                            context: container.mainContext, navigation: notchNav)
+                        capture.activate()
+                        voiceCapture = capture
+                    }
+                    if dictation == nil {
+                        // System-wide dictation: hold ⌃⌥D in any app, speak, release
+                        // → the words land at the cursor (never in secure fields,
+                        // never in Mustard's store).
+                        let coordinator = SystemDictationCoordinator.live()
+                        coordinator.activate()
+                        dictation = coordinator
                     }
                 }
         }

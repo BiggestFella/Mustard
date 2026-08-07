@@ -43,6 +43,9 @@ public final class AgentTaskCoordinator {
     private let persist: () throws -> Void
     private let contractProvider: () throws -> String
     private let nowProvider: () -> Date
+    /// Fallback route for area-less agent tasks (F26). Injected so tests can pin it;
+    /// in the app it resolves the meeting vault ("Codeheroes work") as the default KB.
+    private let defaultRouteProvider: () -> AgentTaskRoute?
     private var activeTask: MustardTask?
     private var activeRun: AgentRun?
     private var activeGeneration = 0
@@ -60,6 +63,7 @@ public final class AgentTaskCoordinator {
         self.persist = { try context.save() }
         self.contractProvider = AgentTurnContract.workerContract
         self.nowProvider = { Date.now }
+        self.defaultRouteProvider = AgentTaskCoordinator.meetingVaultDefaultRoute
     }
 
     init(
@@ -68,7 +72,8 @@ public final class AgentTaskCoordinator {
         executionGate: AgentExecutionGate? = nil,
         persist: @escaping () throws -> Void,
         contractProvider: @escaping () throws -> String = AgentTurnContract.workerContract,
-        nowProvider: @escaping () -> Date = { Date.now }
+        nowProvider: @escaping () -> Date = { Date.now },
+        defaultRouteProvider: @escaping () -> AgentTaskRoute? = AgentTaskCoordinator.meetingVaultDefaultRoute
     ) {
         self.context = context
         self.runtime = runtime
@@ -76,6 +81,16 @@ public final class AgentTaskCoordinator {
         self.persist = persist
         self.contractProvider = contractProvider
         self.nowProvider = nowProvider
+        self.defaultRouteProvider = defaultRouteProvider
+    }
+
+    /// The default agent KB for area-less hand-offs: the meeting vault ("Codeheroes
+    /// work"), filed under the `Code Heroes` project. Nil when no meeting vault is set
+    /// — an area-less task then simply stays queued rather than routing nowhere.
+    nonisolated static func meetingVaultDefaultRoute() -> AgentTaskRoute? {
+        let path = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return AgentTaskRoute(project: "Code Heroes", workingDirectory: path)
     }
 
     public func runNext(settings: SourceSettings, now: Date = .now) async {
@@ -781,8 +796,9 @@ public final class AgentTaskCoordinator {
     ) -> (MustardTask, AgentTaskRoute)? {
         var remaining = tasks
         var unroutableTitles: [String] = []
+        let defaultRoute = defaultRouteProvider()
         while let candidate = AgentTaskQueue.nextRunnable(remaining, now: now) {
-            if let route = AgentTaskQueue.route(candidate, settings: settings) {
+            if let route = AgentTaskQueue.route(candidate, settings: settings, defaultRoute: defaultRoute) {
                 return (candidate, route)
             }
             unroutableTitles.append(candidate.title)

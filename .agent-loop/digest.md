@@ -2,6 +2,16 @@
 
 Append-only ledger of merges and holds. Each entry carries a ready `git revert` line.
 
+## 2026-07-24 — MERGED · Fix: compile shared task chips into the iOS target (PR #99)
+- **Risk:** low (mechanical file move, no behaviour change) · **Deep-review:** n/a
+- **Checks:** macOS swift build clean + swift test 1033 pass/1 skip · **iOS Simulator + device(arm64) CLEAN build SUCCEEDED (fresh DerivedData)** · CI (self-hosted, macOS-only) green 56s
+- **Review:** fresh-context APPROVE — byte-compared the moved FlowMeta (identical), confirmed exactly one definition, no AppKit/Views-only deps remain, desktop unaffected; independently reproduced the clean iOS build.
+- **Root cause:** `main`'s iOS app did NOT clean-build — MobileTaskSheet/MobileTodayView reference `PriorityFlag`/`TaskChipRow` (BAK-244/245 shared chips) + the `FlowMeta` layout, all living in `Sources/MustardKit/Views/**` which project.yml excludes from the iOS target. Prior `build-ios.sh` passes were stale-incremental-cache illusions. **CI never caught it: the self-hosted CI runs only `swift test`/`swift build` (macOS SPM), never the iOS xcodebuild.**
+- **Fix:** moved the shared, pure-SwiftUI UI to a new (non-excluded) `Sources/MustardKit/SharedUI/` — `TaskChips.swift` (git mv, history preserved) + `FlowMeta.swift` (extracted verbatim from MustardBoardCard.swift). Both targets compile it; desktop unchanged (same module).
+- **Follow-up (open):** add an iOS `xcodebuild` lane to CI so `Views/**`-boundary regressions can't land silently again.
+- **Revert:** `git revert df60dfcf01f64842bd916a529ac16e0cab52e11c`
+
+
 ## 2026-07-06 — MERGED · Craft pass — Theme tokens, surface polish, live Notes editor (PR #78)
 - **Risk:** HIGH (new live editing surface over vault files — spec's own call; an earlier
   mechanical-medium classification was corrected after fresh-context review flagged it)

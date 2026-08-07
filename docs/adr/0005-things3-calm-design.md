@@ -20,3 +20,11 @@ notch hardware) and uses explicit dark hex, not `Theme`.
 - Consistent, calm look enforced through one token file.
 - Easy retheme later by editing `Theme`.
 - Reviewers can flag any hardcoded color as a defect.
+
+## Amendment (2026-07-24): the Today spine "now" line
+
+The Today timeline spine introduces one warm coral marker (`Theme.Palette.now` /
+`nowLine`) for the live "now" line. This is a deliberate, single, sanctioned exception to
+the single-accent rule — in the same spirit as the notch's dark surface — because the
+present-moment marker must not read as either a *you* (blue) or *agent* (purple) item.
+No other coral is introduced.

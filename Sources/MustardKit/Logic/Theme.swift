@@ -80,6 +80,12 @@ public enum Theme {
         // MARK: Error / destructive
         public static let error = Color(hex: "#D85A30")          // error text + destructive action
 
+        // "Now" marker for the Today spine. A warm coral that is neither accent-blue nor
+        // agent-purple, so "the present moment" never competes with an owner colour.
+        // Sanctioned single-accent exception (see ADR-0005), like the notch's dark surface.
+        public static let now = Color(hex: "#D85A30")       // now dot + label
+        public static let nowLine = Color(hex: "#F0997B")   // lighter now rule
+
         // MARK: Muted status pill
         public static let statusMutedText = Color(hex: "#8A8579")
         public static let statusMutedBg = Color(hex: "#F1EDE4")
