@@ -70,13 +70,9 @@ public struct AgentConsoleView: View {
 
                 if taskAgent.authenticationRequired { authBanner }
 
-                if !attention.questions.isEmpty {
-                    sectionLabel("NEEDS YOU", count: attention.questions.count)
-                    ForEach(attention.questions) { attentionRow($0) }
-                }
-                if !attention.reviews.isEmpty {
-                    sectionLabel("NEEDS REVIEW", count: attention.reviews.count)
-                    ForEach(attention.reviews) { attentionRow($0) }
+                if !attention.inFlight.isEmpty {
+                    sectionLabel("IN FLIGHT · NEEDS YOU", count: attention.inFlight.count)
+                    ForEach(attention.inFlight) { gateRow($0) }
                 }
 
                 sectionLabel("RECOMMENDATIONS", count: pending.count)
@@ -302,28 +298,82 @@ public struct AgentConsoleView: View {
         .padding(.top, 12)
     }
 
-    /// A compact attention row (Needs You / Needs Review) that opens the task's
-    /// conversation in the detail sheet.
-    private func attentionRow(_ task: MustardTask) -> some View {
-        Button { selectedTask = task } label: {
-            HStack(spacing: 8) {
-                if let area = task.list?.area {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color(hex: area.colorHex)).frame(width: 7, height: 7)
-                }
+    /// The gate-kind spine colour: purple (approval), amber (answer), green (review).
+    /// Enumerates the gate stages (`TaskStage.isGate`) — keep in sync with `gateSubmeta`
+    /// and `AgentInbox.gateAction` if a gate stage is added.
+    private func gateSpineColor(_ stage: TaskStage) -> Color {
+        switch stage {
+        case .needsApproval: return Theme.Palette.agent
+        case .needsInput: return Theme.Palette.warning
+        case .needsReview: return Theme.Palette.done
+        default: return Theme.Palette.hairline
+        }
+    }
+
+    /// The muted sub-meta line under a gate row's title. Enumerates the gate stages
+    /// (`TaskStage.isGate`) — keep in sync with `gateSpineColor` / `AgentInbox.gateAction`.
+    private func gateSubmeta(_ task: MustardTask) -> String {
+        switch task.stage {
+        case .needsApproval: return task.isGated ? "gated · approve to run" : "approve to run"
+        case .needsInput: return "agent asked · your answer needed"
+        case .needsReview: return "finished · check the output"
+        default: return ""
+        }
+    }
+
+    /// One-click advance for a gate row, mirroring MustardBoardCard.approveGate: the
+    /// pure PersonalBoard.approveTarget decides the destination (needsApproval → queued
+    /// / needsReview; needsReview → done), so acting here and on the board stay coherent.
+    private func advanceGate(_ task: MustardTask) {
+        guard let target = PersonalBoard.approveTarget(for: task) else { return }
+        PersonalBoard.move(task, to: target)
+    }
+
+    /// A compact, actionable gate row (Needs Approval / You / Review) — deliberately
+    /// distinct from the rich proposal cards. Tapping the row opens the conversation
+    /// sheet; the trailing button either advances in one click or opens the sheet.
+    private func gateRow(_ task: MustardTask) -> some View {
+        let action = AgentInbox.gateAction(for: task.stage)
+        return HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(gateSpineColor(task.stage))
+                .frame(width: 3)
+            if let area = task.list?.area {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color(hex: area.colorHex)).frame(width: 7, height: 7)
+            }
+            VStack(alignment: .leading, spacing: 1) {
                 Text(task.title).font(Theme.Fonts.body).foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
-                Spacer(minLength: 8)
-                Text(task.stage == .needsInput ? "Answer" : "Review")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(task.stage == .needsInput ? Theme.Palette.warnText : Theme.Palette.reviewText)
+                Text(gateSubmeta(task)).font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.textTertiary).lineLimit(1)
             }
-            .padding(.horizontal, 11).padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+            Spacer(minLength: 8)
+            if let action {
+                Button {
+                    if action.oneClick { advanceGate(task) } else { selectedTask = task }
+                } label: {
+                    Text(action.label)
+                        .font(Theme.Fonts.caption.weight(.semibold))
+                        .foregroundStyle(action.oneClick ? .white : Theme.Palette.textSecondary)
+                        .padding(.horizontal, 11).padding(.vertical, 5)
+                        .background {
+                            if action.oneClick {
+                                RoundedRectangle(cornerRadius: 7).fill(gateSpineColor(task.stage))
+                            } else {
+                                RoundedRectangle(cornerRadius: 7).stroke(Theme.Palette.hairline, lineWidth: 0.5)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 11).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture { selectedTask = task }
         .padding(.bottom, 8)
     }
 }

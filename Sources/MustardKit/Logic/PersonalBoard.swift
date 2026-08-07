@@ -22,7 +22,7 @@ public enum PersonalBoard {
 
     /// The gate columns shown when the board is focused to the review queue
     /// ("N waiting on you" → Exit review queue, BAK-101).
-    public static let gateStages: [TaskStage] = [.needsApproval, .needsInput, .needsReview]
+    public static let gateStages: [TaskStage] = TaskStage.allCases.filter { $0.isGate }
 
     /// Board search (BAK-134): case-insensitive title filter; empty query → unchanged.
     public static func filterBySearch(_ tasks: [MustardTask], query: String) -> [MustardTask] {
@@ -162,7 +162,7 @@ public enum PersonalBoard {
     }
 
     private static func needsHuman(_ task: MustardTask) -> Bool {
-        task.stage == .needsApproval || task.stage == .needsInput || task.stage == .needsReview
+        task.stage.isGate
     }
 
     /// Public area predicate — mobile Week (BAK-116) scopes its day-strip capacity,
