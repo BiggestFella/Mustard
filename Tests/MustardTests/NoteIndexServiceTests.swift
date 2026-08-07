@@ -14,6 +14,8 @@ private final class FakeNoteIO: NoteVaultIO {
     func write(_ p: String, _ c: String) throws { files[p] = c }
     func snapshot(_ p: String, _ c: String) throws {}
     func modificationDate(_ p: String) -> Date? { mtimes[p] }
+    func move(from: String, to: String) throws { files[to] = files.removeValue(forKey: from); mtimes[to] = mtimes.removeValue(forKey: from) }
+    func trash(_ p: String) throws { files.removeValue(forKey: p); mtimes.removeValue(forKey: p) }
 }
 
 @MainActor

@@ -25,6 +25,26 @@ struct InlineFormatBarState: Equatable {
     var anchor: CGRect
 }
 
+/// UI state for the wikilink hover preview (Notes polish pack C), published by
+/// the coordinator like `SlashMenuState`. `resolved` is nil for a dangling link
+/// (the overlay shows a "Create note?" hint instead of an excerpt); `anchor` is
+/// the hovered link's rect in the editor overlay's coordinate space.
+struct WikilinkHoverState: Equatable {
+    var target: String
+    var resolved: NoteRef?
+    var anchor: CGRect
+}
+
+/// UI state for the `[[` wikilink autocomplete popup (Notes polish pack D),
+/// published by the coordinator exactly like `SlashMenuState`. `triggerRange`
+/// covers "[[" + the typed query — replaced wholesale when a title is picked.
+struct WikilinkAutocompleteState: Equatable {
+    var query: String
+    var triggerRange: NSRange
+    var anchor: CGRect
+    var selectedIndex: Int = 0
+}
+
 /// One moveable block's on-screen geometry (2b Task 9), in the editor overlay's
 /// coordinate space. `index` matches `BlockReorder.move`'s moveable indexing
 /// (frontmatter excluded), so the gutter can hand hit-test results straight through.
@@ -56,6 +76,13 @@ final class MarkdownEditorProxy {
     func pick(_ command: SlashCommand) { coordinator?.performSlashCommand(command) }
     func moveBlock(from: Int, to: Int) { coordinator?.moveBlock(from: from, to: to) }
     func openSlashMenu(atBlock index: Int) { coordinator?.openSlashMenu(atBlock: index) }
+
+    // MARK: Wikilink autocomplete (Notes polish pack D)
+
+    func pickWikilink(_ candidate: WikilinkAutocomplete.LinkCandidate) {
+        coordinator?.performWikilinkPick(candidate)
+    }
+    func createWikilinkNote(_ query: String) { coordinator?.performWikilinkCreate(query) }
 
     // MARK: Block actions (Phase 3 / BAK-252 — gutter context menu)
 
@@ -118,6 +145,19 @@ struct MarkdownTextView: NSViewRepresentable {
     /// owned by NoteEditorView the same way `slashMenu` is — the coordinator
     /// writes it on every selection change, NoteEditorView renders the overlay.
     var formatBar: Binding<InlineFormatBarState?> = Binding<InlineFormatBarState?>.constant(nil)
+    /// Wikilink hover-preview state (polish pack C) — same ownership pattern.
+    var hoverLink: Binding<WikilinkHoverState?> = Binding<WikilinkHoverState?>.constant(nil)
+    /// `[[` autocomplete popup state (polish pack D) — same ownership pattern.
+    var autocomplete: Binding<WikilinkAutocompleteState?> = Binding<WikilinkAutocompleteState?>.constant(nil)
+    /// Same-project autocomplete candidates: display title + the filename stem
+    /// links actually resolve by (passed by NoteEditorView from its entries; the
+    /// coordinator ranks them via `WikilinkAutocomplete.rank`).
+    var noteCandidates: [WikilinkAutocomplete.LinkCandidate] = []
+    /// Creates a note titled by the autocomplete query WITHOUT navigating (the
+    /// caret must stay put mid-typing) — NotesView's writeNote, threaded through.
+    /// Returns the created relativePath so the splice can target ITS stem (a
+    /// sanitized or collision-suffixed filename diverges from the typed title).
+    var onCreateNote: (String) -> String? = { _ in nil }
     /// Moveable-block geometry publication for the hover gutter (2b Task 9).
     var onBlockRectsChange: ([MarkdownBlockRect]) -> Void = { _ in }
     var proxy: MarkdownEditorProxy? = nil
@@ -243,8 +283,11 @@ struct MarkdownTextView: NSViewRepresentable {
             // string — force a full recompute rather than diffing against them.
             context.coordinator.refreshMarkerVisibility()
             // A programmatic replace means the OLD selection's toolbar (if any)
-            // is now anchored to a document that no longer exists here.
+            // is now anchored to a document that no longer exists here — and so
+            // are any hover preview / autocomplete states.
             if formatBar.wrappedValue != nil { formatBar.wrappedValue = nil }
+            context.coordinator.clearHover()
+            if autocomplete.wrappedValue != nil { autocomplete.wrappedValue = nil }
         }
 
         // Backup focus grab for the rare case the window wasn't attached yet in
@@ -260,6 +303,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.fullPassTask?.cancel()
+        coordinator.clearHover()
         NotificationCenter.default.removeObserver(coordinator)
     }
 
@@ -327,10 +371,14 @@ struct MarkdownTextView: NSViewRepresentable {
             refreshMarkerVisibility()
             scheduleFullPass()
             refreshSlashMenu()
+            refreshAutocomplete()
             // Any edit collapses the selection (typing replaces it) — hide the
             // format toolbar the instant that happens, same "hides on typing"
             // requirement `refreshFormatBar`'s guard already encodes.
             refreshFormatBar()
+            // An edit can delete/reflow the hovered link — the popover's anchor
+            // and target are both stale.
+            clearHover()
         }
 
         /// The partition block containing the caret in the NEW string (recomputing
@@ -686,6 +734,71 @@ struct MarkdownTextView: NSViewRepresentable {
             return true
         }
 
+        // MARK: Wikilink hover preview (Notes polish pack C)
+
+        /// Debounce before the popover shows — long enough that sweeping the mouse
+        /// across a note never flashes previews, short enough to feel intentional.
+        private static let hoverDelayNanos: UInt64 = 350_000_000
+        private var hoverTask: Task<Void, Never>?
+        /// The link target currently under the mouse (pre-debounce) — dedupes
+        /// mouseMoved streams so we only re-arm the debounce on target CHANGE.
+        private var hoverCandidate: (target: String, location: Int)?
+
+        /// Called from the text view's mouseMoved tracking. Hit-tests the `.link`
+        /// attribute under the pointer (the decoration pass owns which characters
+        /// are links, so this never re-parses markdown) and arms the debounced
+        /// publish. Anything that isn't a wikilink clears the state.
+        func handleHoverMove(at viewPoint: CGPoint) {
+            guard let textView, let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let storage = textView.textStorage,
+                  (textView.string as NSString).length <= Self.plainTextFallbackLimit
+            else { clearHover(); return }
+
+            let origin = textView.textContainerOrigin
+            let containerPoint = CGPoint(x: viewPoint.x - origin.x, y: viewPoint.y - origin.y)
+            guard layoutManager.numberOfGlyphs > 0 else { clearHover(); return }
+            let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+            guard glyphIndex < layoutManager.numberOfGlyphs else { clearHover(); return }
+            // Same nearest-glyph guard as checkbox clicks: only count the pointer
+            // as "on" the link when it's inside the line fragment's box.
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            guard NSPointInRect(containerPoint, fragment) else { clearHover(); return }
+            let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+            guard charIndex < storage.length else { clearHover(); return }
+
+            var linkRange = NSRange(location: 0, length: 0)
+            guard let url = storage.attribute(.link, at: charIndex,
+                                              longestEffectiveRange: &linkRange,
+                                              in: NSRange(location: 0, length: storage.length)) as? URL,
+                  let target = WikilinkURL.target(from: url)
+            else { clearHover(); return }
+
+            // Same link as the armed candidate (or the shown popover) — nothing to do.
+            if hoverCandidate?.target == target, hoverCandidate?.location == linkRange.location { return }
+            hoverCandidate = (target, linkRange.location)
+            hoverTask?.cancel()
+            let anchorLocation = linkRange.location
+            hoverTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: Coordinator.hoverDelayNanos)
+                guard !Task.isCancelled, let self, self.hoverCandidate?.target == target else { return }
+                self.parent.hoverLink.wrappedValue = WikilinkHoverState(
+                    target: target,
+                    resolved: self.parent.resolveWikilink(target),
+                    anchor: self.overlayRect(forCharacterAt: anchorLocation) ?? CGRect.zero
+                )
+            }
+        }
+
+        /// Cancels any pending publish and hides the popover. Called on mouse-exit,
+        /// scroll, text change, and whenever the pointer leaves link glyphs.
+        func clearHover() {
+            hoverTask?.cancel()
+            hoverTask = nil
+            hoverCandidate = nil
+            if parent.hoverLink.wrappedValue != nil { parent.hoverLink.wrappedValue = nil }
+        }
+
         // MARK: Slash menu — trigger detection (2b Task 7)
 
         /// Recomputes the slash-menu state from the caret's line prefix. Runs on
@@ -750,36 +863,74 @@ struct MarkdownTextView: NSViewRepresentable {
             // BAK-254.) The format bar still tracks the selection.
             refreshFormatBar()
 
-            // Close-only path: never opens (allowOpen false).
-            guard parent.slashMenu.wrappedValue != nil else { return }
-            refreshSlashMenu(allowOpen: false)
+            // Close-only paths: never open on a pure selection move (allowOpen false).
+            if parent.slashMenu.wrappedValue != nil { refreshSlashMenu(allowOpen: false) }
+            if parent.autocomplete.wrappedValue != nil { refreshAutocomplete(allowOpen: false) }
         }
 
-        /// ↑/↓/⏎/Esc are intercepted ONLY while the slash menu is open — never
-        /// steal arrows or return during normal editing (plan risk register).
+        /// ↑/↓/⏎/Esc are intercepted ONLY while the slash menu or the wikilink
+        /// autocomplete is open — never steal arrows or return during normal
+        /// editing (plan risk register). The two menus are mutually exclusive
+        /// (`refreshAutocomplete` won't open beside the slash menu), so the slash
+        /// branch running first is priority in name only.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard var menu = parent.slashMenu.wrappedValue else { return false }
-            let items = SlashMenu.items(query: menu.query)
-            guard !items.isEmpty else { return false }
+            if var menu = parent.slashMenu.wrappedValue {
+                let items = SlashMenu.items(query: menu.query)
+                guard !items.isEmpty else { return false }
 
-            if commandSelector == #selector(NSResponder.moveDown(_:)) {
-                menu.selectedIndex = min(menu.selectedIndex + 1, items.count - 1)
-                parent.slashMenu.wrappedValue = menu
-                return true
+                if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                    menu.selectedIndex = min(menu.selectedIndex + 1, items.count - 1)
+                    parent.slashMenu.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                    menu.selectedIndex = max(menu.selectedIndex - 1, 0)
+                    parent.slashMenu.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                    performSlashCommand(items[min(menu.selectedIndex, items.count - 1)])
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                    parent.slashMenu.wrappedValue = nil
+                    return true
+                }
+                return false
             }
-            if commandSelector == #selector(NSResponder.moveUp(_:)) {
-                menu.selectedIndex = max(menu.selectedIndex - 1, 0)
-                parent.slashMenu.wrappedValue = menu
-                return true
+
+            if var menu = parent.autocomplete.wrappedValue {
+                let candidates = WikilinkAutocomplete.rank(query: menu.query,
+                                                           candidates: parent.noteCandidates)
+                let rowCount = autocompleteRowCount(for: menu.query)
+                guard rowCount > 0 else { return false }
+
+                if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                    menu.selectedIndex = min(menu.selectedIndex + 1, rowCount - 1)
+                    parent.autocomplete.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                    menu.selectedIndex = max(menu.selectedIndex - 1, 0)
+                    parent.autocomplete.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                    let index = min(menu.selectedIndex, rowCount - 1)
+                    if index < candidates.count {
+                        performWikilinkPick(candidates[index])
+                    } else {
+                        performWikilinkCreate(menu.query)   // the trailing Create row
+                    }
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                    parent.autocomplete.wrappedValue = nil
+                    return true
+                }
+                return false
             }
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                performSlashCommand(items[min(menu.selectedIndex, items.count - 1)])
-                return true
-            }
-            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-                parent.slashMenu.wrappedValue = nil
-                return true
-            }
+
             return false
         }
 
@@ -828,6 +979,83 @@ struct MarkdownTextView: NSViewRepresentable {
                 anchor: overlayRect(forCharacterAt: location) ?? CGRect.zero,
                 selectedIndex: 0
             )
+        }
+
+        // MARK: Wikilink autocomplete (Notes polish pack D)
+
+        /// Recomputes the `[[` autocomplete state from the caret — the same
+        /// open-on-text-change / close-only-on-selection-change contract as
+        /// `refreshSlashMenu`. Never open alongside the slash menu (the slash
+        /// trigger requires a line starting "/", so the two can't both be live;
+        /// the guard is belt-and-braces).
+        private func refreshAutocomplete(allowOpen: Bool = true) {
+            guard !isPerformingEdit else { return }
+            guard let textView else { return }
+            let wasOpen = parent.autocomplete.wrappedValue != nil
+            guard allowOpen || wasOpen else { return }
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0,
+                  parent.slashMenu.wrappedValue == nil,
+                  let query = WikilinkAutocomplete.activeQuery(text: textView.string,
+                                                               caretUTF16: selection.location),
+                  autocompleteRowCount(for: query.text) > 0
+            else {
+                if wasOpen { parent.autocomplete.wrappedValue = nil }
+                return
+            }
+
+            let previous = parent.autocomplete.wrappedValue
+            let keptIndex = (previous?.query == query.text) ? (previous?.selectedIndex ?? 0) : 0
+            let rowCount = autocompleteRowCount(for: query.text)
+            parent.autocomplete.wrappedValue = WikilinkAutocompleteState(
+                query: query.text,
+                triggerRange: query.range,
+                anchor: overlayRect(forCharacterAt: query.range.location) ?? CGRect.zero,
+                selectedIndex: min(keptIndex, rowCount - 1)
+            )
+        }
+
+        /// Total keyboard rows: ranked candidates + the trailing "Create" row
+        /// (shown only for a non-blank query). One count, owned here, so the
+        /// coordinator's ↑/↓/⏎ and the overlay's rendering can't drift apart —
+        /// `WikilinkAutocompleteView` derives its rows from the same functions.
+        private func autocompleteRowCount(for query: String) -> Int {
+            let candidates = WikilinkAutocomplete.rank(query: query, candidates: parent.noteCandidates)
+            let hasCreateRow = !query.trimmingCharacters(in: .whitespaces).isEmpty
+            return candidates.count + (hasCreateRow ? 1 : 0)
+        }
+
+        /// Commits a pick: replaces the "[["+query trigger with the candidate's
+        /// STEM-targeted link (`[[stem]]` / `[[stem|title]]` — links resolve by
+        /// filename stem, never by display title) through the SAME undo-safe
+        /// channel as slash commands.
+        func performWikilinkPick(_ candidate: WikilinkAutocomplete.LinkCandidate) {
+            guard let textView, let state = parent.autocomplete.wrappedValue else { return }
+            let insertion = WikilinkAutocomplete.insertion(for: candidate)
+            isPerformingEdit = true
+            textView.breakUndoCoalescing()
+            textView.insertText(insertion, replacementRange: state.triggerRange)
+            textView.breakUndoCoalescing()
+            textView.setSelectedRange(NSRange(
+                location: state.triggerRange.location + (insertion as NSString).length, length: 0))
+            isPerformingEdit = false
+            parent.autocomplete.wrappedValue = nil
+            textView.window?.makeFirstResponder(textView)
+        }
+
+        /// The "Create '<query>'" row: creates the note (no navigation — the caret
+        /// must stay here) and links to it BY THE CREATED FILE'S STEM — sanitization
+        /// or a collision suffix can make the filename diverge from the typed title,
+        /// and splicing the raw title would then link the WRONG (pre-existing) note.
+        /// File creation IS outside the undo group, same trade-off as
+        /// create-from-dangling: ⌘Z reverts the text and the created note dangles.
+        func performWikilinkCreate(_ query: String) {
+            let title = query.trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty else { return }
+            let createdPath = parent.onCreateNote(title)
+            let stem = createdPath.map(WikilinkAutocomplete.stem(ofPath:)) ?? title
+            performWikilinkPick(WikilinkAutocomplete.LinkCandidate(title: title, stem: stem))
         }
 
         // MARK: Inline format toolbar (Phase 4 / BAK-253 — floating selection toolbar)
@@ -1012,6 +1240,10 @@ struct MarkdownTextView: NSViewRepresentable {
 
         @objc func clipViewBoundsDidChange(_ notification: Notification) {
             schedulePublishBlockRects()
+            // A scroll moves the hovered link out from under the pointer — the
+            // anchored popover would drift; hide it. (The slash/autocomplete menus
+            // stay, matching the slash menu's existing scroll behavior.)
+            clearHover()
         }
 
         /// Coalesces to one publication per runloop turn — layout/scroll callbacks
@@ -1110,6 +1342,35 @@ final class FocusReportingTextView: NSTextView {
         let didResign = super.resignFirstResponder()
         if didResign { focusCoordinator?.setFocus(false) }
         return didResign
+    }
+
+    // MARK: Wikilink hover tracking (Notes polish pack C)
+
+    /// One tracking area over the visible rect feeds mouseMoved into the
+    /// coordinator's hover hit-test. `.inVisibleRect` keeps the rect in sync with
+    /// scrolling/resizes without manual re-add; the coordinator owns all decisions
+    /// (which link, debounce, publish) — this view only forwards pointer events.
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseMoved, .mouseEnteredAndExited,
+                                            .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        focusCoordinator?.handleHoverMove(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        focusCoordinator?.clearHover()
     }
 
     /// A single click on a checkbox glyph toggles it instead of placing a caret.

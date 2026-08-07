@@ -10,6 +10,7 @@ public enum CommandKind: Equatable {
     case goAgent
     case sweep
     case reindexNotes
+    case searchNotes
 }
 
 public struct CommandItem: Identifiable, Equatable {
@@ -30,6 +31,7 @@ public enum CommandBarEngine {
         CommandItem(id: "agent", title: "Go to Agent", icon: "sparkles", kind: .goAgent),
         CommandItem(id: "sweep", title: "Sweep knowledge base now", icon: "wand.and.stars", kind: .sweep),
         CommandItem(id: "reindex", title: "Reindex notes now", icon: "arrow.clockwise", kind: .reindexNotes),
+        CommandItem(id: "search", title: "Search notes", icon: "magnifyingglass", kind: .searchNotes),
     ]
 
     public static func items(query: String) -> [CommandItem] {

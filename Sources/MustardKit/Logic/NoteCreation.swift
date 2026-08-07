@@ -35,12 +35,12 @@ public enum NoteCreation {
     /// plain titles stay byte-identical. The `# heading` line always carries the
     /// raw (trimmed, newline-folded) title unquoted.
     public static func stub(title: String) -> String {
-        let name = normalizedTitle(title)
-        return "---\ntitle: \(yamlValue(name))\ntags: []\n---\n\n# \(name)\n"
+        let name = displayName(title)
+        return "---\ntitle: \(yamlEscaped(name))\ntags: []\n---\n\n# \(name)\n"
     }
 
     private static func sanitizedName(_ title: String) -> String {
-        var name = normalizedTitle(title)
+        var name = displayName(title)
         for separator in ["/", ":", "\\"] {
             name = name.replacingOccurrences(of: separator, with: "-")
         }
@@ -53,8 +53,9 @@ public enum NoteCreation {
     }
 
     /// Trims, folds internal newlines (multi-line paste) to single spaces, and
-    /// falls back to "Untitled" when nothing is left.
-    private static func normalizedTitle(_ title: String) -> String {
+    /// falls back to "Untitled" when nothing is left. Public so `NoteRename` can
+    /// retitle a note's frontmatter/heading with identical rules.
+    public static func displayName(_ title: String) -> String {
         let folded = title
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -82,8 +83,9 @@ public enum NoteCreation {
 
     /// Quotes when the bare value would break a real YAML parser (Obsidian flags
     /// the whole properties block): `:` mappings, `#` comments, stray quotes, or
-    /// a leading list/flow indicator.
-    private static func yamlValue(_ title: String) -> String {
+    /// a leading list/flow indicator. Public so `NoteRename` can render a retitled
+    /// note's frontmatter `title:` value with identical rules.
+    public static func yamlEscaped(_ title: String) -> String {
         let needsQuoting = title.contains(":") || title.contains("#") || title.contains("\"")
             || title.hasPrefix("-") || title.hasPrefix("[") || title.hasPrefix("{")
         guard needsQuoting else { return title }

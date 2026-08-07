@@ -56,6 +56,10 @@ public struct RootView: View {
     @State private var screen: MustardScreen = .today
     @State private var selectedScope: ListScope?
     @State private var showCommandBar = false
+    @State private var showNoteSearch = false
+    /// A note chosen in the search palette, waiting for the Notes surface to select
+    /// it — the same handoff shape as `selectedTaskFromNotch` (consume then clear).
+    @State private var pendingNoteOpen: NoteRef?
     @State private var sourcePanel = SourcePanelController()
     @State private var selectedTaskFromNotch: MustardTask?
     @Environment(NotchNavigation.self) private var notchNav
@@ -79,7 +83,7 @@ public struct RootView: View {
                     case .today: TodayView(onPlan: { screen = .agent })
                     case .board: BoardView()
                     case .week: WeekView()
-                    case .notes: NotesView()
+                    case .notes: NotesView(pendingOpen: $pendingNoteOpen)
                     case .meetings: MeetingReviewView()
                     case .agent: AgentConsoleView()
                     case .lists: ListContentView(scope: selectedScope ?? .unfiled)
@@ -99,8 +103,23 @@ public struct RootView: View {
                     Color.black.opacity(0.12)
                         .ignoresSafeArea()
                         .onTapGesture { showCommandBar = false }
-                    CommandBarView(isPresented: $showCommandBar, screen: $screen)
+                    CommandBarView(isPresented: $showCommandBar, screen: $screen,
+                                   onSearchNotes: { showNoteSearch = true })
                         .padding(.top, 90)
+                }
+            }
+        }
+        .overlay {
+            if showNoteSearch {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .onTapGesture { showNoteSearch = false }
+                    NoteSearchView(isPresented: $showNoteSearch, onOpen: { ref in
+                        pendingNoteOpen = ref
+                        screen = .notes
+                    })
+                    .padding(.top, 90)
                 }
             }
         }
@@ -112,6 +131,10 @@ public struct RootView: View {
                 // Hidden trigger: ⌘⇧S toggles the source inspector.
                 Button("") { sourcePanel.isPresented.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                // Hidden trigger: ⌘⇧F opens full-text note search (polish pack B).
+                // Closes the ⌘K bar first — the two palettes must never stack.
+                Button("") { showCommandBar = false; showNoteSearch.toggle() }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
             }
             .opacity(0)
         }

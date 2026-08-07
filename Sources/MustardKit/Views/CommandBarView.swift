@@ -10,6 +10,9 @@ struct CommandBarView: View {
     @AppStorage("vaultPath") private var vaultPath = ""
     @Binding var isPresented: Bool
     @Binding var screen: MustardScreen
+    /// Opens the full-text note search palette (polish pack B) — RootView owns its
+    /// presentation, same as it owns this bar's.
+    var onSearchNotes: () -> Void = {}
     @State private var query = ""
     @State private var selected = 0
     @FocusState private var focused: Bool
@@ -103,6 +106,8 @@ struct CommandBarView: View {
             Task { await agent.sweep(vaultPath: vaultPath) }
         case .reindexNotes:
             noteIndex.reindexAll(SourceSettingsStore.loadOrMigrate())
+        case .searchNotes:
+            onSearchNotes()
         }
         isPresented = false
     }
