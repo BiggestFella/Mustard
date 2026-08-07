@@ -6,7 +6,8 @@ final class ModelTests: XCTestCase {
     private func makeContext() throws -> ModelContext {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
-            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self, CalendarEvent.self, configurations: config
+            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
+            AgentRun.self, AgentMessage.self, CalendarEvent.self, configurations: config
         )
         return ModelContext(container)
     }

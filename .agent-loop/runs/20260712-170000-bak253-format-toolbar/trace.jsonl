@@ -1,0 +1,6 @@
+{"ts":"2026-07-12T17:00:00+10:00","event":"run_start","run_id":"20260712-170000-bak253-format-toolbar","issue":"BAK-253","epic":"BAK-248","branch":"agent/bak-253-format-toolbar","base":"origin/main@b219223"}
+{"ts":"2026-07-12T17:00:30+10:00","event":"risk_classified","class":"medium","basis":"labels risk:medium; paths Logic/Views/Tests; no outward actions"}
+{"ts":"2026-07-12T17:30:00+10:00","event":"implementation","agent":"sonnet-builder","commits":["0df6817","605f9b0","1fadde6"],"detail":"strikethrough/highlight spans + pure InlineFormat toggle (re-parse guard, involution) + floating toolbar"}
+{"ts":"2026-07-12T17:35:00+10:00","event":"checks","name":"test+build","result":"pass","detail":"835/1/0 + Build complete (orchestrator run)"}
+{"ts":"2026-07-12T17:50:00+10:00","event":"review","kind":"fresh_context","reviewer":"sonnet-subagent","axes":{"standards":"pass","spec":"pass","risk":"pass","test":"pass"},"blocking_findings":0,"non_blocking_findings":3,"verdict":"APPROVE-WITH-FOLLOW-UPS"}
+{"ts":"2026-07-12T17:55:00+10:00","event":"followups_filed","detail":"findings 1-3 appended to BAK-254 as comment (== false-positive, second O(doc) scan, unwrap test completeness)"}

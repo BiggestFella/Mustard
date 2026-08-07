@@ -7,14 +7,17 @@ public enum MustardScreen: String, CaseIterable, Identifiable {
     case board = "Board"
     case week = "Week"
     case notes = "Notes"
+    case meetings = "Meetings"
     case agent = "Agent"
     case lists = "Lists"
     case settings = "Settings"
+    case voiceSetup = "Voice Setup"
     public var id: String { rawValue }
 
     /// Screens shown as top-level sidebar buttons. `.lists` is intentionally
     /// excluded — it's reached by selecting an area/list/unfiled row below.
-    static let primary: [MustardScreen] = [.today, .board, .week, .notes, .agent]
+    /// `.voiceSetup` is reached from Settings (BAK-280).
+    static let primary: [MustardScreen] = [.today, .board, .week, .notes, .meetings, .agent]
 
     var systemImage: String {
         switch self {
@@ -22,9 +25,11 @@ public enum MustardScreen: String, CaseIterable, Identifiable {
         case .board: "rectangle.split.3x1"
         case .week: "calendar"
         case .notes: "doc.text"
+        case .meetings: "mic"
         case .agent: "sparkles"
         case .lists: "tray.full"
         case .settings: "gearshape"
+        case .voiceSetup: "waveform"
         }
     }
 }
@@ -51,6 +56,10 @@ public struct RootView: View {
     @State private var screen: MustardScreen = .today
     @State private var selectedScope: ListScope?
     @State private var showCommandBar = false
+    @State private var showNoteSearch = false
+    /// A note chosen in the search palette, waiting for the Notes surface to select
+    /// it — the same handoff shape as `selectedTaskFromNotch` (consume then clear).
+    @State private var pendingNoteOpen: NoteRef?
     @State private var sourcePanel = SourcePanelController()
     @State private var selectedTaskFromNotch: MustardTask?
     @Environment(NotchNavigation.self) private var notchNav
@@ -74,14 +83,16 @@ public struct RootView: View {
                     case .today: TodayView(onPlan: { screen = .agent })
                     case .board: BoardView()
                     case .week: WeekView()
-                    case .notes: NotesView()
+                    case .notes: NotesView(pendingOpen: $pendingNoteOpen)
+                    case .meetings: MeetingReviewView()
                     case .agent: AgentConsoleView()
                     case .lists: ListContentView(scope: selectedScope ?? .unfiled)
-                    case .settings: SettingsView()
+                    case .settings: SettingsView(onVoiceSetup: { screen = .voiceSetup })
+                    case .voiceSetup: VoiceSetupView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if screen != .agent && screen != .settings { copilotDock }
+                if screen != .agent && screen != .settings && screen != .voiceSetup { copilotDock }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -92,8 +103,23 @@ public struct RootView: View {
                     Color.black.opacity(0.12)
                         .ignoresSafeArea()
                         .onTapGesture { showCommandBar = false }
-                    CommandBarView(isPresented: $showCommandBar, screen: $screen)
+                    CommandBarView(isPresented: $showCommandBar, screen: $screen,
+                                   onSearchNotes: { showNoteSearch = true })
                         .padding(.top, 90)
+                }
+            }
+        }
+        .overlay {
+            if showNoteSearch {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .onTapGesture { showNoteSearch = false }
+                    NoteSearchView(isPresented: $showNoteSearch, onOpen: { ref in
+                        pendingNoteOpen = ref
+                        screen = .notes
+                    })
+                    .padding(.top, 90)
                 }
             }
         }
@@ -105,6 +131,10 @@ public struct RootView: View {
                 // Hidden trigger: ⌘⇧S toggles the source inspector.
                 Button("") { sourcePanel.isPresented.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                // Hidden trigger: ⌘⇧F opens full-text note search (polish pack B).
+                // Closes the ⌘K bar first — the two palettes must never stack.
+                Button("") { showCommandBar = false; showNoteSearch.toggle() }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
             }
             .opacity(0)
         }
@@ -117,7 +147,7 @@ public struct RootView: View {
         // (TextEditor, DatePicker, pickers) don't render dark under macOS dark mode.
         // The notch is a separate panel with its own explicit dark colors — unaffected.
         .preferredColorScheme(.light)
-        .sheet(item: $selectedTaskFromNotch) { TaskDetailSheet(task: $0) }
+        .taskDetailDrawer(item: $selectedTaskFromNotch)
         .onChange(of: notchNav.pendingTask, initial: true) { _, task in
             guard let task else { return }
             NSApp.activate(ignoringOtherApps: true)
@@ -136,7 +166,7 @@ public struct RootView: View {
     /// console; surfaces what's waiting and links into the console.
     private var copilotDock: some View {
         let recs = AgentInbox.pendingRecCount(recommendations)
-        let outs = AgentInbox.outputCount(tasks)
+        let items = AgentInbox.attentionTaskCount(tasks)
         return VStack(spacing: 0) {
             Divider().overlay(Theme.Palette.hairline)
             HStack(spacing: 8) {
@@ -144,7 +174,7 @@ public struct RootView: View {
                 Text("Agent")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Theme.Palette.agentText)
-                Text(AgentInbox.dockText(recs: recs, outputs: outs))
+                Text(AgentInbox.dockText(recs: recs, items: items))
                     .font(.system(size: 12.5))
                     .foregroundStyle(Theme.Palette.textSecondary)
                 Spacer(minLength: 0)

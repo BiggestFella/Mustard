@@ -22,6 +22,7 @@ public enum RitualPlanner {
     public static func pushToTomorrow(_ task: MustardTask, calendar: Calendar = .current) {
         guard let when = task.scheduledAt else { return }
         task.scheduledAt = calendar.date(byAdding: .day, value: 1, to: when)
+        PersonalBoard.normalizePlacement(task)
     }
 
     /// Step 1 mutation — back to the unscheduled inbox. Leaves the carry-forward
@@ -52,6 +53,7 @@ public enum RitualPlanner {
     public static func planToday(_ task: MustardTask, day: Date, calendar: Calendar = .current) {
         task.scheduledAt = calendar.startOfDay(for: day)
         task.isTimed = false
+        PersonalBoard.normalizePlacement(task)
     }
 
     /// Step 3 capacity line — WeekPlanner reuse; nil label when nothing planned.
@@ -63,6 +65,16 @@ public enum RitualPlanner {
         guard openPlanned else { return nil }
         let minutes = WeekPlanner.capacityMinutes(tasks, on: day, calendar: calendar)
         return "\(WeekPlanner.capacityLabel(minutes: minutes)) planned"
+    }
+
+    /// Today's chronological timeline (BAK-247): the day's scheduled tasks minus any
+    /// pinned in the FOCUS section (starred as focus for `day`). A focus-starred task
+    /// shows exactly once — as a pin in FOCUS — instead of being duplicated in the
+    /// timeline below it. Shared so any surface with a FOCUS section dedups identically.
+    public static func timeline(_ tasks: [MustardTask], day: Date, calendar: Calendar = .current) -> [MustardTask] {
+        let focusUIDs = Set(focused(tasks, day: day, calendar: calendar).map(\.uid))
+        return DayPlanner.tasksForDay(tasks, day: day, calendar: calendar)
+            .filter { !focusUIDs.contains($0.uid) }
     }
 
     /// Step 4 — today's open planned tasks (star candidates).

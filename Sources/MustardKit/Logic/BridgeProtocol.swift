@@ -50,10 +50,12 @@ public struct AgentResult: Codable, Equatable {
     public var links: [TaskLink]?    // execute: created artifact links
     public var summary: String?
     public var error: String?
+    public var drafts: [AgentDraftPayload]?
     public init(uid: String, mode: String, status: String, actionType: String? = nil,
                 title: String? = nil, body: String? = nil, links: [TaskLink]? = nil,
-                summary: String? = nil, error: String? = nil) {
+                summary: String? = nil, error: String? = nil, drafts: [AgentDraftPayload]? = nil) {
         self.uid = uid; self.mode = mode; self.status = status; self.actionType = actionType
         self.title = title; self.body = body; self.links = links; self.summary = summary; self.error = error
+        self.drafts = drafts
     }
 }

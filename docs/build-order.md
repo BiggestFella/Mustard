@@ -93,6 +93,93 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       `docs/superpowers/plans/2026-07-06-craft-pass-phase0-1.md` +
       `…-craft-editor-phase2.md`. Daily Note (spec Phase 3) pinned/deferred.
 
+## Next — buildable, unblocked 🟢 (queued 2026-07-12)
+
+- [ ] **F26 Voice hand-off reaches the connected worker (real Gmail draft)**
+      *(direction: Leon picked "connected worker, fix routing" 2026-07-23 — see ADR-0011
+      addendum)*. Today an approved voice-routed outward task (`draft_email` etc.)
+      promotes to `.queued`/agent but **strands** when it has no client area:
+      `AgentTaskQueue.route` and `AgentService.exportWorkOrders` both key on the task's
+      area, so a blank-area capture never routes to a worker outbox (BAK-90). Fix so the
+      voice → agent → **real Gmail draft** → Needs Review loop completes:
+      - **Default route for area-less agent tasks.** Introduce a configurable default
+        agent project/KB (fallback to the meeting source's `Code Heroes` default). Pure
+        `AgentTaskQueue.route` + `BridgeExport`/`exportWorkOrders` resolve it at route/
+        export time when `task.list?.area == nil`. Keep the task's displayed area blank
+        (per Leon) — the fallback is routing-only. TDD (extend `AgentTaskQueueTests`,
+        `BridgeExportTests`).
+      - **Keep `delegate()`'s BAK-90 entry nudge for MANUAL drags** (a person dragging a
+        card to the agent lane still gets "give it a client area"); the default only
+        rescues programmatic hand-offs (voice approval) that would otherwise strand.
+      - **Worker side (Leon's sibling repo, out of this repo):** `drain-agent-queue` must
+        actually call the Gmail connector to create the draft (not just write a draft
+        artifact). Guided change in the `Codeheroes work` vault skill — never pushed here.
+      - Acceptance: approve the "Email Bree" voice rec → card moves Queued → (worker) →
+        Needs Review with a live Gmail draft link.
+
+- [ ] **F28 On-device rewrite (⌃⌥R)** *(spec + plan approved 2026-08-05; Linear
+      BAK-313..327 filed in **Backlog**, deliberately NOT agent-ready — Leon asked for
+      the ticket and plan only)*. Select text in any app → ⌃⌥R → review an Apple
+      Foundation Models rewrite in a floating card → Return replaces the selection.
+      Completes the hotkey family (⌃⌥Space captures, ⌃⌥D dictates, ⌃⌥R rewrites).
+      Phase 1 is four fixed intents; phase 2 adds a voice profile distilled from the
+      vault, phase 3 live Mustard context. **Unblocked 2026-08-07** — PR #101 merged,
+      so every dependency (`OnDeviceLanguageService`, `AccessibilityFocusReader`,
+      `TextInserter`, `PasteboardSnapshot`) is now on `main`. Still gated on dictation
+      being hardware-verified (BAK-292), since rewrite inherits its secure-field refusal.
+      Spec: `docs/superpowers/specs/2026-08-05-on-device-rewrite-design.md`.
+      Plan: `docs/superpowers/plans/2026-08-05-on-device-rewrite.md`.
+
+- [x] **F29 Console/board attention consolidation** — ✅ **MERGED 2026-08-07 (PR #104)**
+      *(raised by Leon 2026-07-23; renumbered from F27, which is the Voice Suite)*.
+      Shipped: `AgentInbox` inFlight bucket + `gateAction` + unified count, gate-stage
+      set derived from `TaskStage.isGate` (single source), `AgentAttention` collapsed to
+      one bucket, console two-tier attention (gate rows vs proposals), console↔board
+      count parity pinned by tests. ⚠️ Leon eye-check still outstanding.
+      Original problem statement: the Agent Console left column stacked three
+      visually-similar things:
+      **NEEDS YOU** (tasks with a question), **NEEDS REVIEW** (completed agent work
+      awaiting accept/reject), and the **RECOMMENDATIONS** triage deck (proposals not yet
+      started). The first two are tasks mid-execution and *also* appear in their board
+      columns; the third is pre-execution proposals. Same card treatment blurs the phases
+      and double-surfaces review work. Decide: (a) a visually distinct card for
+      review/approval tasks vs. proposal cards, and (b) which surface (console vs. board)
+      is canonical for each phase. **Spec/design first, no code yet.** Handover /
+      starting context: `docs/specs/2026-07-23-console-board-attention-consolidation-design.md`.
+
+## Done (2026-07-12) ✅
+
+- [x] **F23 Craft editor — full markdown hiding + menu system** — five-phase follow-on
+      to F22: shared `BlockKind` model (foundation), fully-hidden markdown syntax
+      (Craft-style focus reveal, not just dimming), expanded insert (`/`) menu
+      (headings 1-4, quote, lists, code, divider, table, image, sub-page), a "turn
+      into" + block-actions context menu, and a floating inline-formatting toolbar
+      (bold/italic/strikethrough/code/highlight/link). Color/Indentation/Alignment/
+      Page-Card block types/embeds/Mermaid/inline-image-preview explicitly deferred
+      (no clean markdown representation). Spec:
+      `docs/specs/2026-07-12-craft-editor-menus-design.md`. Linear epic **BAK-248**
+      (sub-issues BAK-249..253, phases 0-4) — **all five phases merged 2026-07-12**
+      (PRs #91-#95, suite 696 → 835); follow-ups in BAK-254; Leon eye-check pending.
+
+## Done (2026-07-13) ✅
+
+- [x] **F24 Resumable agent task sessions (core MVP)** — Mustard automatically picks up
+      delegated tasks, pauses for human answers without blocking the queue, resumes the
+      same Claude session, and sends every result to a unified **Needs Review** flow.
+      Durable `AgentRun`/`AgentMessage` conversation; provider-neutral `AgentRuntime` with
+      the resumable `ClaudeTaskRuntime`; one serial `AgentTaskCoordinator`; pure
+      `AgentTaskQueue`/`AgentTaskTransition`/`AgentRetryPolicy`; **Needs You** stage;
+      structured worker contract (drafts-only, no send); the file bridge is now reserved
+      for explicit `requiresConnectedWorker` fallback only. Task conversation + review UI
+      in Task Detail and the Agent Console attention queue. Specs:
+      `docs/specs/2026-07-13-agent-task-sessions-design.md`,
+      `docs/superpowers/plans/2026-07-13-agent-task-sessions-core.md`. Branch
+      `codex/agent-task-sessions-implementation` (suite → 984); **awaiting Leon's hands-on
+      test before merge**. Remaining fast-follows: the learning loop
+      (`.../2026-07-13-agent-learning-loop.md`), a Codex runtime adapter, parallel
+      execution, live token streaming, automatic connected-session launch, and the
+      pre-existing iOS shared-view-atom build break (unrelated; tracked separately).
+
 ## Next — needs Leon ⛔
 
 - [ ] **N1 Live Google Calendar** — `GoogleAuthSession` (loopback + ASWebAuth) +
@@ -107,8 +194,79 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
 
 ## Next — buildable, unblocked 🟢
 
-*(Cleared — B1 shipped as **F17**, the multi-source foundation as **F18**, and I1
-delegation as **F19**. Next unblocked candidate: **I2 Trust that earns itself** —
+- [x] **F25 Voice capture** *(✅ BUILT — v1 capture shipped in PR #98; the v2
+      claude-based cleanup queue and v3 routing were REPLACED 2026-07-29 by the
+      Voice Suite's on-device drafting — see below. Automatic delegation from a
+      voice task is now explicitly out of scope per the capture spec.)*
+- [ ] **F27 Mustard Voice Suite** *(specs + plans approved 2026-07-29 —
+      `docs/superpowers/{specs,plans}/2026-07-29-*`; Linear BAK-271…303; PR #101)*.
+      Four workstreams on the modern Apple stack (SpeechAnalyzer + Foundation
+      Models, fully on-device; macOS 26 floor, Xcode 27 beta):
+      - **✅ Voice Core (BAK-271, Tasks 1–6):** toolchain + floor, shared
+        contracts, asset readiness, `AppleSpeechSession`, on-device language
+        service, Voice Setup surface.
+      - **✅ Voice-task capture (BAK-272 Tasks 1–5):** `VoiceTaskDrafting`
+        validation/merge, `VoiceTaskDraftGenerator` (Apple Intelligence guided
+        drafting), `VoiceTaskCaptureCoordinator` (segment stream, revision-gated
+        merge), notch-adjacent quick-edit card, legacy SFSpeech engine + claude
+        cleanup queue removed. Remaining: Task 6 macOS 27 acceptance pass (BAK-286).
+      - **✅ Dictation (BAK-273 Tasks 1–5):** AX focus snapshots, direct/verified-
+        paste insertion, hold-⌃⌥D coordinator, nonactivating pill with recovery.
+        Remaining: cross-app matrix (BAK-292, Leon).
+      - **✅ Meeting recorder (BAK-274 Tasks 1–10):** consent-gated two-source
+        capture, crash-recoverable storage, merged transcripts, evidence-backed
+        digests, review/approval, suggestions, retention/Trash/export.
+        Remaining: real-call matrix (BAK-303, Leon). A 25-agent adversarial
+        review confirmed 20 findings mid-suite; all fixed (`c4ebabc`).
+
+      **MERGED to `main` 2026-08-05 as `0c06e1a` (PR #101).** All three surfaces
+      verified on hardware: capture, dictation (incl. the password-field refusal),
+      and a two-channel meeting recording (44 "you" + 34 "meeting" segments merged,
+      tracks finalized, digest generated). Live testing found **eleven runtime bugs
+      the 1,443-test suite could not reach** — every one in the layer that only
+      exists at runtime (Carbon handler chaining, `CGEventSource.keyState` lying
+      about a claimed hotkey's own key, `SpeechTranscriber` needing `.fastResults`,
+      ad-hoc signing invalidating TCC grants on every rebuild, Chromium apps
+      returning `.success` from an AX write they discard, a starved SpeechAnalyzer
+      session never returning from `finish()`). Lesson recorded: **instrument the
+      runtime layer before attempting the first fix** — three speculative hotkey
+      fixes made things worse; an `os_log` trace found each cause in one pass.
+
+- [ ] **F30 Voice Suite hardening & meeting quality** *(drafted 2026-08-05 from
+      hardware verification of F27; renumbered from F28, which is the on-device
+      rewrite; file B before A — B removes the false positives A would otherwise
+      scan for)*:
+      - [ ] **B Clean up recording intermediates** — `recovery.json` and both
+        `.partial.caf` sources are retained after a successful export (~22 MB/min;
+        an hour-long call leaves ~1.3 GB). Delete them only once the m4a export
+        **and** the mix have both succeeded; on any failure leave everything
+        untouched, since the partials are then the only copy of the audio.
+      - [ ] **A Crash-recovery scan at launch, offering Resume** — the recovery
+        machinery is fully built and unit-tested (manifest checkpointed with safe
+        byte offsets, `.partial → .recover` transition) but **never read**, so
+        interrupted recordings strand forever. Scan at launch, truncate each
+        partial at `safeByteOffset`, and offer **Resume recording** (primary),
+        **Finalize what was captured**, or **Discard**. Never auto-resume or
+        auto-discard. *UX decided by Leon 2026-08-05: offer to resume.*
+      - [ ] **C Verify meeting action-proposal extraction** — the verification
+        recording produced zero proposals. Possibly correct for that clip, but
+        extraction has never been shown to work. Pin it with a fixture-driven test
+        over a canned transcript containing commitments, then confirm on real audio;
+        no proposal may exist without a transcript-attributable evidence span.
+      - [ ] **D Reduce transcript fragmentation** — 78 segments in 37 s (~2/sec),
+        sentences chopped into two-word pieces, which also degrades the digest.
+        Coalesce adjacent same-source finals into sentence-level segments in a pure
+        `Logic/` unit before persistence, leaving `MeetingTranscriptMerge`'s
+        cross-source ordering intact. Existing meetings are not retro-coalesced.
+        Measure against a baseline tool by feeding both the **saved**
+        `playback.m4a` — never run two transcribers live, which compares
+        recordings rather than transcribers. *(Separately: over speakers the mic
+        picks up system audio, so words land on both channels and the merge
+        interleaves duplicates. Retest with headphones before treating it as a
+        bug — it may be purely acoustic.)*
+
+*(Previous: B1 shipped as **F17**, the multi-source foundation as **F18**, and I1
+delegation as **F19**. Other unblocked candidate: **I2 Trust that earns itself** —
 design locked 2026-06-16, still needs a plan.)*
 
 ## Later — autonomous, unblocked 🔓

@@ -42,6 +42,9 @@ public enum Theme {
         public static let textFaint = Color(hex: "#C0BCB1")    // column counts, quick-add chrome — near but distinct from textTertiary
         public static let textMuted = Color(hex: "#A6A296")    // completed title
         public static let strikethrough = Color(hex: "#C8C3B7")
+        /// `==highlight==` span background — Craft-style soft mark (Phase 4 /
+        /// BAK-253, format toolbar).
+        public static let highlightBg = Color(hex: "#FBF1C7")
         public static let onSurface = Color(hex: "#46433B")
         public static let onSurfaceSoft = Color(hex: "#5C584E")
 
@@ -76,6 +79,12 @@ public enum Theme {
 
         // MARK: Error / destructive
         public static let error = Color(hex: "#D85A30")          // error text + destructive action
+
+        // "Now" marker for the Today spine. A warm coral that is neither accent-blue nor
+        // agent-purple, so "the present moment" never competes with an owner colour.
+        // Sanctioned single-accent exception (see ADR-0005), like the notch's dark surface.
+        public static let now = Color(hex: "#D85A30")       // now dot + label
+        public static let nowLine = Color(hex: "#F0997B")   // lighter now rule
 
         // MARK: Muted status pill
         public static let statusMutedText = Color(hex: "#8A8579")
@@ -150,13 +159,14 @@ public enum Theme {
         }
     }
 
-    // MARK: Motion — shared easing/spring tokens (desktop + iOS)
+    // MARK: Motion — canonical animation tokens: one feel across the app (desktop + iOS)
 
     /// Default CSS-style easings are too weak to feel intentional; these curves
     /// (per Emil Kowalski's animation-eng skill) give entrances/exits a punch.
     /// Use `easeOut` for anything entering/exiting, `easeInOut` for on-screen
-    /// morphing, and `drag`/`settle` springs for gesture-driven or interruptible
-    /// motion (springs preserve velocity when interrupted; keyframe curves don't).
+    /// morphing, `drag` for gesture-driven/interruptible motion (springs preserve
+    /// velocity when interrupted; keyframe curves don't), and the `settle`/`expand`/
+    /// `pop` state springs for discrete UI state changes.
     public enum Motion {
         public static func easeOut(_ duration: Double = 0.2) -> Animation {
             .timingCurve(0.23, 1, 0.32, 1, duration: duration)
@@ -267,6 +277,8 @@ extension Theme {
         public static let textPrimary = NSColor(Palette.textPrimary)
         public static let textTertiary = NSColor(Palette.textTertiary)
         public static let accent = NSColor(Palette.accent)
+        public static let strikethrough = NSColor(Palette.strikethrough)
+        public static let highlightBg = NSColor(Palette.highlightBg)
     }
 
     /// NSFont equivalents of the editorial scale plus the editor-only variants

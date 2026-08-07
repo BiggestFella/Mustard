@@ -11,6 +11,11 @@ struct MobileTaskSheet: View {
 
     private var isAgent: Bool { task.owner == .agent }
 
+    /// The latest agent question, when the task is waiting on you.
+    private var agentQuestion: String? {
+        task.agentRun?.orderedMessages.last { $0.role == .agent && $0.kind == .question }?.content
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -28,7 +33,12 @@ struct MobileTaskSheet: View {
                         Spacer()
                     }
 
-                    Text(task.title).font(.title2.bold())
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        PriorityFlag(priority: task.priority)
+                        Text(task.title).font(.title2.bold())
+                    }
+                    // At-a-glance chips shared with the desktop sheet + rows (BAK-244/245).
+                    if TaskChipRow.hasChips(task) { TaskChipRow(task: task) }
                     if !task.notes.isEmpty {
                         Text(task.notes).font(.subheadline).foregroundStyle(.secondary)
                     }
@@ -36,6 +46,13 @@ struct MobileTaskSheet: View {
                     if let conf = task.confidence { confidence(conf) }
                     if let why = task.delegation?.reasoning, !why.isEmpty { section("WHY", why) }
                     if let draft = task.delegation?.draft, !draft.isEmpty { section("DRAFT", draft) }
+                    // Needs You: mobile can't run the CLI, so it shows the question read-only
+                    // and points back to the Mac (live reply awaits CloudKit sync).
+                    if task.stage == .needsInput, let question = agentQuestion {
+                        section("AGENT NEEDS YOU", question)
+                        Text("Reply on Mac to resume.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
 
                     details
                     if !task.tags.isEmpty { tags }
@@ -136,6 +153,12 @@ struct MobileTaskSheet: View {
                 Spacer()
                 Button("Move to review") { PersonalBoard.move(task, to: .needsReview) }.buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
             case .forAgent:
+                Spacer()
+                Button("Take back") { task.owner = .me; if task.stage.isOpen { task.stage = .planned } }.buttonStyle(.borderedProminent)
+            case .needsInput:
+                // Mobile take-back stays a direct mutation for now (no CLI/coordinator on
+                // iOS; live reply awaits CloudKit sync — see the Task 11 handoff note).
+                Text("Reply on Mac to resume.").foregroundStyle(.secondary)
                 Spacer()
                 Button("Take back") { task.owner = .me; if task.stage.isOpen { task.stage = .planned } }.buttonStyle(.borderedProminent)
             case .done:

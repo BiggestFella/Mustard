@@ -280,7 +280,7 @@ struct MobileWeekView: View {
 
     private func schedule(_ task: MustardTask) {
         task.scheduledAt = WeekPlanner.scheduleDate(on: selectedDay, keepingTimeFrom: task.scheduledAt, calendar: cal)
-        if task.stage == .inbox { task.stage = .planned }
+        PersonalBoard.normalizePlacement(task)
         scheduledToast = "Scheduled onto \(selectedDay.formatted(.dateTime.weekday(.abbreviated).day().month()))"
     }
 

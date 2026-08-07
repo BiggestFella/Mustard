@@ -21,6 +21,10 @@ public struct ParsedMeetingTask: Equatable {
     public let notePath: String
     /// Stable identity for dedup + line-locating (see `originKey`).
     public let originKey: String
+    /// Originating meeting slug from `src:`, wikilinks stripped (nil if absent).
+    /// Task Ledger lines carry this because the ledger's own path says nothing
+    /// about which meeting raised the task.
+    public let srcNote: String?
 }
 
 /// Pure, deterministic harvester for the curated `- [ ]` checklist that Leon's
@@ -64,7 +68,8 @@ public enum MeetingTaskParser {
                     tags: tags(rawLine),
                     rawLine: rawLine,
                     notePath: notePath,
-                    originKey: originKey(notePath: notePath, line: rawLine)
+                    originKey: originKey(notePath: notePath, line: rawLine),
+                    srcNote: stripWikilinks(field(rawLine, label: "src"))
                 )
             )
         }

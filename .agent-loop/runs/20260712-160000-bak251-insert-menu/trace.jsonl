@@ -1,0 +1,6 @@
+{"ts":"2026-07-12T16:00:00+10:00","event":"run_start","run_id":"20260712-160000-bak251-insert-menu","issue":"BAK-251","epic":"BAK-248","branch":"agent/bak-251-insert-menu","base":"origin/main@92c61df"}
+{"ts":"2026-07-12T16:00:30+10:00","event":"risk_classified","class":"medium","basis":"labels risk:medium; paths Logic/Views/Tests; no outward actions"}
+{"ts":"2026-07-12T16:20:00+10:00","event":"implementation","agent":"sonnet-builder","commits":["cfe69f0","6b6dbc4"],"detail":"16 grouped slash commands + grouped SlashMenuView; 33 SlashMenuTests (TDD)"}
+{"ts":"2026-07-12T16:25:00+10:00","event":"checks","name":"test+build","command":"swift test && swift build","result":"pass","detail":"747 tests, 1 skipped, 0 failures; Build complete (orchestrator run)"}
+{"ts":"2026-07-12T16:35:00+10:00","event":"review","kind":"fresh_context","reviewer":"sonnet-subagent","axes":{"standards":"pass","spec":"pass","risk":"pass","test":"pass"},"blocking_findings":0,"non_blocking_findings":1,"verdict":"APPROVE-WITH-FOLLOW-UPS"}
+{"ts":"2026-07-12T16:40:00+10:00","event":"review_fix","commit":"a04f7eb","detail":"auto-scroll slash-menu highlight into view (ScrollViewReader); suite re-run green"}

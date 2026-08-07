@@ -63,7 +63,12 @@ public enum BlockReorder {
     /// "Blank" matches NoteDecoration's rule (whitespace-only after trimming), and
     /// tail bytes are preserved verbatim — CRLF blanks stay CRLF. Interior blank
     /// lines (inside a fence) are untouched: only the run at the very end splits.
-    private static func splitTrailingBlanks(_ slice: String) -> (content: String, tail: String) {
+    ///
+    /// Internal (not `private`): `BlockTransform` (Phase 3 / BAK-252) reuses this
+    /// exact algorithm so a "turn into" splice's untouched trailing-blank tail
+    /// matches `move`'s separator-hygiene rule byte-for-byte instead of a second,
+    /// possibly-drifting reimplementation.
+    static func splitTrailingBlanks(_ slice: String) -> (content: String, tail: String) {
         let ns = slice as NSString
         var location = 0
         var contentEnd = 0

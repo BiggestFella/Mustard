@@ -31,6 +31,39 @@ final class RitualPlannerTests: XCTestCase {
         XCTAssertNil(t.scheduledAt)
     }
 
+    // BAK-247 — a focus-starred task is pinned in the FOCUS section, so it must not
+    // also appear in the chronological timeline below (that was the "duplicate").
+    func test_timeline_excludesTodaysFocusStarredTasks() {
+        let starred = task("starred", scheduled: day.addingTimeInterval(9 * 3_600))
+        starred.focusOnDay = cal.startOfDay(for: day)
+        let plain = task("plain", scheduled: day.addingTimeInterval(10 * 3_600))
+        let tomorrow = task("tomorrow", scheduled: day.addingTimeInterval(86_400))
+        let timeline = RitualPlanner.timeline([starred, plain, tomorrow], day: day, calendar: cal)
+        XCTAssertEqual(timeline.map(\.title), ["plain"])
+    }
+
+    func test_timeline_keepsChronologicalOrder() {
+        let late = task("late", scheduled: day.addingTimeInterval(15 * 3_600))
+        let early = task("early", scheduled: day.addingTimeInterval(8 * 3_600))
+        XCTAssertEqual(RitualPlanner.timeline([late, early], day: day, calendar: cal).map(\.title), ["early", "late"])
+    }
+
+    // The exclusion is day-keyed: a task scheduled today but starred for a DIFFERENT
+    // day is not pinned in today's FOCUS, so it must stay in today's timeline.
+    func test_timeline_keepsTaskStarredForAnotherDay() {
+        let t = task("otherStar", scheduled: day.addingTimeInterval(9 * 3_600))
+        t.focusOnDay = cal.startOfDay(for: day.addingTimeInterval(86_400))   // starred tomorrow
+        XCTAssertEqual(RitualPlanner.timeline([t], day: day, calendar: cal).map(\.title), ["otherStar"])
+    }
+
+    // A done focus task is still a FOCUS pin (focusOnDay kept), so it's excluded from
+    // the timeline just like an open one — shown once, in FOCUS.
+    func test_timeline_excludesDoneFocusTask() {
+        let t = task("doneStar", scheduled: day.addingTimeInterval(9 * 3_600))
+        t.focusOnDay = cal.startOfDay(for: day); t.stage = .done
+        XCTAssertTrue(RitualPlanner.timeline([t], day: day, calendar: cal).isEmpty)
+    }
+
     func test_pickCandidates_unscheduledOpenMineOnly() {
         let inboxTask = task("pick me")
         let scheduled = task("planned", scheduled: day)

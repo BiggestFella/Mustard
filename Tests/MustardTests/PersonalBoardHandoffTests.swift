@@ -23,11 +23,11 @@ final class PersonalBoardHandoffTests: XCTestCase {
 
     // MARK: - Agent-lane source of truth
 
-    func test_isAgentLane_coversTheFourHandOffStages() {
-        for s in [TaskStage.forAgent, .needsApproval, .queued, .needsReview] {
+    func test_isAgentLane_coversTheSixHandOffStages() {
+        for s in [TaskStage.forAgent, .needsApproval, .queued, .inProgress, .needsInput, .needsReview] {
             XCTAssertTrue(PersonalBoard.isAgentLane(s), "\(s) should be an agent lane")
         }
-        for s in [TaskStage.inbox, .planned, .scheduled, .inProgress, .blocked, .done] {
+        for s in [TaskStage.inbox, .planned, .scheduled, .blocked, .done] {
             XCTAssertFalse(PersonalBoard.isAgentLane(s), "\(s) should not be an agent lane")
         }
     }

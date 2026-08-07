@@ -28,4 +28,17 @@ public enum BoardMigration {
             t.migratedStage = true
         }
     }
+
+    /// One-time repair for stores written before BAK-246: any `.inbox` task that
+    /// already carries a `scheduledAt` is re-placed by the canonical invariant
+    /// (`PersonalBoard.normalizePlacement`) — timed → `.scheduled`, otherwise
+    /// `.planned` — so scheduled cards no longer strand in the Inbox column. Runs at
+    /// launch after `backfill`. Idempotent and self-correcting: once a task is off the
+    /// inbox it is never revisited, and unscheduled inbox tasks stay untriaged, so no
+    /// per-row flag is needed (unlike the stage backfill, this can't clobber later
+    /// edits — it only ever moves a scheduled task out of the inbox).
+    public static func normalizeScheduledPlacement(_ context: ModelContext) {
+        guard let tasks = try? context.fetch(FetchDescriptor<MustardTask>()) else { return }
+        for t in tasks { PersonalBoard.normalizePlacement(t) }
+    }
 }

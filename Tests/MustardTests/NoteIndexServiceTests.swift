@@ -14,6 +14,8 @@ private final class FakeNoteIO: NoteVaultIO {
     func write(_ p: String, _ c: String) throws { files[p] = c }
     func snapshot(_ p: String, _ c: String) throws {}
     func modificationDate(_ p: String) -> Date? { mtimes[p] }
+    func move(from: String, to: String) throws { files[to] = files.removeValue(forKey: from); mtimes[to] = mtimes.removeValue(forKey: from) }
+    func trash(_ p: String) throws { files.removeValue(forKey: p); mtimes.removeValue(forKey: p) }
 }
 
 @MainActor
@@ -22,7 +24,8 @@ final class NoteIndexServiceTests: XCTestCase {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         return ModelContext(try ModelContainer(
             for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
-            CalendarEvent.self, NoteIndexEntry.self, configurations: config))
+            AgentRun.self, AgentMessage.self, CalendarEvent.self, NoteIndexEntry.self,
+            configurations: config))
     }
     private let t0 = Date(timeIntervalSince1970: 1_750_000_000)
 

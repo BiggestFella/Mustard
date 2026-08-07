@@ -46,7 +46,7 @@ struct ListContentView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Theme.Palette.bg)
-        .sheet(item: $selectedTask) { TaskDetailSheet(task: $0) }
+        .taskDetailDrawer(item: $selectedTask)
     }
 
     private var header: some View {

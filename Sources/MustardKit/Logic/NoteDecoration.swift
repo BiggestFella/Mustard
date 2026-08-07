@@ -94,6 +94,171 @@ public enum NoteDecoration {
         return blocks
     }
 
+    // MARK: - BlockKind classification (Phase 0 / BAK-249)
+
+    /// Classifies one `Block` as the shared `BlockKind` enum (see that type's doc
+    /// for why `.frontmatter` isn't a case). Mirrors `spans(_:in:)`'s per-block
+    /// entry point and the same fence/frontmatter-first ordering.
+    ///
+    /// `nil` means "frontmatter" — the only block that has no `BlockKind`. Every
+    /// other block, including an all-blank block (a leading-blank-run block; see
+    /// `blocks(_:)`'s doc) or a block past `source`'s bounds, classifies to a
+    /// concrete case rather than `nil`, so callers can use `nil` as the
+    /// frontmatter check without a second flag.
+    public static func blockKind(_ source: String, of block: Block) -> BlockKind? {
+        if block.isFrontmatter { return nil }
+        if block.isFence { return .codeBlock }
+
+        let ns = source as NSString
+        guard block.range.upperBound <= ns.length else { return .paragraph }
+        let blockLines = lines(ns, in: block.range)
+        guard let first = blockLines.first else { return .paragraph }
+
+        switch classify(first.content) {
+        case .heading(let level):
+            return .heading(level)
+        case .rule:
+            return .divider
+        case .quote:
+            return .quote
+        case .ordered:
+            return .numberedList
+        case .bullet:
+            return isTodoLine(first.content) ? .todoList : .bulletList
+        case .blank, .fence:
+            // A run of leading blank lines (its own block per `blocks(_:)`) or a
+            // defensive fence-inside-a-normal-block case (can't happen — a fence
+            // opens its own block) — both fall back to the paragraph default.
+            return .paragraph
+        case .text:
+            let contentLines = blockLines.filter { !isBlank($0) }
+            if contentLines.count == 1, let only = contentLines.first {
+                if subpageCardTarget(only.content) != nil { return .subpage }
+                if isImageLine(only.content) { return .image }
+            }
+            if isTableBlock(contentLines) { return .table }
+            return .paragraph
+        }
+    }
+
+    /// "- [ ] "/"- [x] "/"* [X] " (or the bare "[ ]"/"[x]"/"[X]" with nothing
+    /// after) after the bullet's "- "/"* " prefix — the one shape that
+    /// distinguishes a to-do item from a plain bullet. Case-sensitive only on the
+    /// checked mark ("x" or "X"), matching common task-list convention.
+    private static func isTodoLine(_ content: String) -> Bool {
+        let afterIndent = content.drop { $0 == " " }
+        let rest: Substring
+        if afterIndent.hasPrefix("- ") || afterIndent.hasPrefix("* ") {
+            rest = afterIndent.dropFirst(2)
+        } else {
+            return false
+        }
+        for marker in ["[ ]", "[x]", "[X]"] {
+            if rest == marker || rest.hasPrefix(marker + " ") { return true }
+        }
+        return false
+    }
+
+    /// A full line that is exactly `![alt](url)` (whitespace-trimmed) — nothing
+    /// before or after. Trailing text on the same line ("![a](b) hello") is
+    /// deliberately NOT an image block; it stays an ordinary paragraph (Decision:
+    /// spec's "image insert still writes syntax-only, no live preview" — this
+    /// classifier only recognizes the line shape, it doesn't render a thumbnail).
+    private static let imageLineRegex = try! NSRegularExpression(pattern: #"^!\[[^\]]*\]\([^)]*\)$"#)
+    private static func isImageLine(_ content: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespaces)
+        let ns = trimmed as NSString
+        guard ns.length > 0 else { return false }
+        return imageLineRegex.firstMatch(in: trimmed, range: NSRange(location: 0, length: ns.length)) != nil
+    }
+
+    /// A table (new grammar this editor previously had no block type for — see
+    /// spec Decision, `NoteDecoration`'s file doc): every non-blank line in the
+    /// block contains "|", AND at least one line is a separator row (cells of
+    /// only "-"/":" , e.g. `|---|---|` or `| :-- | --: |`). Requiring the
+    /// separator row (not just pipes) is what keeps two arbitrary lines that
+    /// happen to contain "|" from misclassifying as a table.
+    private static func isTableBlock(_ contentLines: [Line]) -> Bool {
+        guard contentLines.count >= 2,
+              contentLines.allSatisfy({ $0.content.contains("|") })
+        else { return false }
+        return contentLines.contains { isTableSeparatorRow($0.content) }
+    }
+
+    private static func isTableSeparatorRow(_ content: String) -> Bool {
+        var cells = content.trimmingCharacters(in: .whitespaces)
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        // A fully-piped row ("|---|---|") has empty leading/trailing cells from
+        // the split — drop them; an un-piped edge ("---|---") keeps its cells.
+        if cells.first == "" { cells.removeFirst() }
+        if cells.last == "" { cells.removeLast() }
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            !cell.isEmpty && cell.contains("-") && cell.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    // MARK: - Block glyphs (Craft-style rendered prefixes)
+
+    /// A block prefix the editor draws as a real glyph instead of raw markdown —
+    /// the checkbox / bullet / divider / quote treatments. Purely a classification
+    /// of the SOURCE; drawing and hit-testing live in the view.
+    public enum BlockGlyph: Equatable {
+        case checkbox(checked: Bool)   // "- [ ] " / "- [x] "
+        case bullet                    // "- " / "* " (non-todo)
+        case divider                   // "---" / "***"
+        case quote                     // "> "
+    }
+
+    /// For a block whose first line carries a drawable prefix, the `markerRange`
+    /// (the raw syntax the view suppresses — e.g. "- [ ] ", "- ", "---", "> ")
+    /// and the `glyph` to draw in its place. `nil` for everything else (ordinary
+    /// paragraphs, headings — whose `# ` is a hidden text marker, not a drawn
+    /// glyph — numbered lists, which keep their visible "1. ", code, tables,
+    /// images, subpages). Ranges are absolute UTF-16 offsets into `source`.
+    public static func blockGlyph(_ source: String, of block: Block) -> (markerRange: NSRange, glyph: BlockGlyph)? {
+        guard !block.isFrontmatter, !block.isFence else { return nil }
+        let ns = source as NSString
+        guard block.range.upperBound <= ns.length else { return nil }
+        guard let first = lines(ns, in: block.range).first else { return nil }
+        let content = first.content
+        let base = first.contentRange.location
+
+        switch classify(content) {
+        case .rule:
+            return (first.contentRange, .divider)
+        case .quote:
+            let prefix = leadingWhitespaceCount(content) + 2   // "> "
+            return (NSRange(location: base, length: prefix), .quote)
+        case .bullet:
+            let indent = leadingSpaceCount(content)
+            let afterBullet = content.dropFirst(indent).dropFirst(2)   // past "- "/"* "
+            if let checkboxLen = todoMarkerLength(afterBullet) {
+                // "- " + "[ ]"/"[x]"(+ optional trailing space)
+                return (NSRange(location: base, length: indent + 2 + checkboxLen),
+                        .checkbox(checked: isCheckedMarker(afterBullet)))
+            }
+            return (NSRange(location: base, length: indent + 2), .bullet)
+        default:
+            return nil
+        }
+    }
+
+    /// Length of the "[ ]"/"[x]"/"[X]" checkbox marker (plus one trailing space if
+    /// present) at the start of `afterBullet`, or `nil` if there's no checkbox.
+    private static func todoMarkerLength(_ afterBullet: Substring) -> Int? {
+        for marker in ["[ ]", "[x]", "[X]"] {
+            if afterBullet == marker { return marker.count }
+            if afterBullet.hasPrefix(marker + " ") { return marker.count + 1 }
+        }
+        return nil
+    }
+
+    private static func isCheckedMarker(_ afterBullet: Substring) -> Bool {
+        afterBullet.hasPrefix("[x]") || afterBullet.hasPrefix("[X]")
+    }
+
     // MARK: - Spans
 
     public struct Span: Equatable {
@@ -111,6 +276,8 @@ public enum NoteDecoration {
         case heading(level: Int)                          // heading TEXT (hashes excluded)
         case marker                                       // syntax chars to de-emphasize
         case bold, italic, inlineCode                     // content between markers
+        case strikethrough                                // `~~content~~` (Phase 4 / BAK-253)
+        case highlight                                     // `==content==` (Phase 4 / BAK-253)
         case codeBlock                                    // fence interior
         case listMarker                                   // "- " / "1. " / "> " prefix
         case wikilink(target: String, alias: String?)     // the VISIBLE label span
@@ -245,12 +412,18 @@ public enum NoteDecoration {
     /// first (opaque — no emphasis and no wikilinks inside, the fence rule one level
     /// down), then wikilinks (the ONE grammar: `WikilinkSyntax.regex`, group ranges
     /// read directly so markers/label split without re-deriving the pattern), then
-    /// `**bold**`, then `*italic*`. Single-line, non-nested; underscore emphasis is
-    /// NOT parsed. Lookarounds on the emphasis patterns keep unmatched runs ("**a",
-    /// "***x***") raw rather than guessed. A claimed-mask enforces first-wins.
+    /// `**bold**`, then `*italic*`, then `~~strikethrough~~`, then `==highlight==`
+    /// (Phase 4 / BAK-253 — added for the format-toolbar's "is already formatted"
+    /// detection; same shape as bold/italic, just a different fixed-width
+    /// delimiter). Single-line, non-nested; underscore emphasis is NOT parsed.
+    /// Lookarounds on every symmetric-delimiter pattern keep unmatched/tripled
+    /// runs ("**a", "***x***", "~~~y~~~") raw rather than guessed. A claimed-mask
+    /// enforces first-wins.
     private static let codeSpanRegex = try! NSRegularExpression(pattern: "`([^`]+)`")
     private static let boldRegex = try! NSRegularExpression(pattern: #"(?<!\*)\*\*([^*]+)\*\*(?!\*)"#)
     private static let italicRegex = try! NSRegularExpression(pattern: #"(?<!\*)\*([^*]+)\*(?!\*)"#)
+    private static let strikethroughRegex = try! NSRegularExpression(pattern: #"(?<!~)~~([^~]+)~~(?!~)"#)
+    private static let highlightRegex = try! NSRegularExpression(pattern: #"(?<!=)==([^=]+)==(?!=)"#)
 
     private static func inlineSpans(in text: String, at base: Int) -> [Span] {
         let ns = text as NSString
@@ -321,6 +494,20 @@ public enum NoteDecoration {
             claim(m.range)
         }
 
+        for m in strikethroughRegex.matches(in: text, range: full) where isFree(m.range) {
+            add(NSRange(location: m.range.location, length: 2), .marker)
+            add(m.range(at: 1), .strikethrough)
+            add(NSRange(location: m.range.upperBound - 2, length: 2), .marker)
+            claim(m.range)
+        }
+
+        for m in highlightRegex.matches(in: text, range: full) where isFree(m.range) {
+            add(NSRange(location: m.range.location, length: 2), .marker)
+            add(m.range(at: 1), .highlight)
+            add(NSRange(location: m.range.upperBound - 2, length: 2), .marker)
+            claim(m.range)
+        }
+
         return spans
     }
 
@@ -341,6 +528,156 @@ public enum NoteDecoration {
               target == target.trimmingCharacters(in: .whitespaces)
         else { return nil }
         return target
+    }
+
+    // MARK: - Marker visibility (Phase 1 / BAK-250 — Craft-style focus reveal)
+
+    /// One `markerVisibility(_:focusedRange:)` result: the document's hideable
+    /// marker ranges split by whether their containing block is currently
+    /// focused. Pure decision only — this type never hides anything itself;
+    /// `MarkdownTextView` is the presentation layer that turns `hidden` ranges
+    /// into a TextKit "not shown" glyph flag (see that file's doc for why that
+    /// mechanism keeps the underlying text and its attributes untouched).
+    public struct MarkerVisibility: Equatable {
+        public let hidden: [NSRange]
+        public let revealed: [NSRange]
+
+        public init(hidden: [NSRange], revealed: [NSRange]) {
+            self.hidden = hidden
+            self.revealed = revealed
+        }
+    }
+
+    /// Given `source` and the editor's current focus, which of the document's
+    /// hideable marker ranges should render hidden vs revealed. `focusedRange`
+    /// `nil` means the editor has NO focus at all (e.g. the window resigned key)
+    /// — every marker in the document hides. Otherwise `focusedRange` is the
+    /// text view's selection: a zero-length range is a caret, a non-zero range a
+    /// selection.
+    ///
+    /// Reveal is decided at BLOCK granularity — the same unit
+    /// `MarkdownTextView`'s existing caret-scoped decoration pass already uses —
+    /// not per character: every block `focusedRange` touches reveals ALL its
+    /// hideable markers; every other block's hideable markers hide. See
+    /// `focusedBlockIndices` for the exact boundary/selection rules, and
+    /// `hideableSpans` for exactly which syntax is in scope.
+    public static func markerVisibility(_ source: String, focusedRange: NSRange?) -> MarkerVisibility {
+        let all = blocks(source)
+        guard !all.isEmpty else { return MarkerVisibility(hidden: [], revealed: []) }
+        let focused: Set<Int> = focusedRange.map { focusedBlockIndices(all, focusedRange: $0) } ?? []
+
+        var hidden: [NSRange] = []
+        var revealed: [NSRange] = []
+        for (index, block) in all.enumerated() {
+            let ranges = hideableSpans(source, in: block).map(\.range)
+            if focused.contains(index) {
+                revealed += ranges
+            } else {
+                hidden += ranges
+            }
+        }
+        return MarkerVisibility(hidden: hidden, revealed: revealed)
+    }
+
+    /// The blocks currently revealed for `focusedRange` (empty when `nil`) — the
+    /// block-level view of `markerVisibility`'s decision. Exposed separately so a
+    /// caller holding the previous call's result can diff the two `[Block]`
+    /// arrays and re-touch only the blocks whose membership changed, instead of
+    /// re-deriving every marker range on every selection move
+    /// (`MarkdownTextView`'s incremental selection-change path).
+    public static func revealedBlocks(_ source: String, focusedRange: NSRange?) -> [Block] {
+        guard let focusedRange else { return [] }
+        let all = blocks(source)
+        return focusedBlockIndices(all, focusedRange: focusedRange).sorted().map { all[$0] }
+    }
+
+    /// The hideable marker ranges within exactly one block — the per-block slice
+    /// `MarkdownTextView`'s incremental path re-touches when only that one
+    /// block's reveal state changed.
+    public static func hideableMarkerRanges(_ source: String, in block: Block) -> [NSRange] {
+        hideableSpans(source, in: block).map(\.range)
+    }
+
+    /// Block indices `focusedRange` touches. A zero-length range (a caret)
+    /// belongs to the block whose HALF-OPEN range contains it — the same
+    /// `NSLocationInRange` convention `MarkdownTextView`'s `caretBlock` already
+    /// uses — so a caret sitting exactly on a block boundary belongs to the
+    /// block that STARTS there, never both. A caret past every block's
+    /// half-open range (only possible at the very end of the document) falls
+    /// back to the last block, mirroring that same call site's `?? blocks.last`.
+    /// A non-zero selection touches every block it overlaps
+    /// (`NSIntersectionRange(...).length > 0`) — how a selection spanning
+    /// several blocks reveals all of them.
+    private static func focusedBlockIndices(_ blocks: [Block], focusedRange: NSRange) -> Set<Int> {
+        guard !blocks.isEmpty else { return [] }
+        if focusedRange.length == 0 {
+            if let index = blocks.firstIndex(where: { NSLocationInRange(focusedRange.location, $0.range) }) {
+                return [index]
+            }
+            return [blocks.count - 1]
+        }
+        var result = Set<Int>()
+        for (index, block) in blocks.enumerated()
+            where NSIntersectionRange(block.range, focusedRange).length > 0 {
+            result.insert(index)
+        }
+        return result
+    }
+
+    /// Which of one block's EXISTING `.marker`/`.listMarker` spans are in Phase
+    /// 1's hiding scope: a heading's `#…# ` prefix, a blockquote's `> ` prefix,
+    /// and `**`/`*`/`` ` ``/`~~`/`==` emphasis-or-code-or-strikethrough-or-
+    /// highlight delimiters (checked in ANY block kind — inline formatting
+    /// reads the same inside a paragraph, heading, quote, or list item).
+    /// `~~`/`==` (Phase 4 / BAK-253) integrate here for free: they're just two
+    /// more cases in `isDelimitedContent` below, because `inlineSpans` already
+    /// places their `.marker` spans directly adjacent to their content spans,
+    /// exactly like bold/italic/inlineCode. Deliberately NOT in scope, so they stay exactly as
+    /// dimmed-and-always-visible as they are today, focus or not:
+    ///   - bullet ("- "/"* ") and ordered ("1. ") prefixes — hiding them would
+    ///     leave a list item with no visual marker at all; no bullet/number
+    ///     glyph exists to take their place yet.
+    ///   - fence delimiters and rule lines — hiding the only visible cue for a
+    ///     code block's or divider's boundary would leave nothing on screen
+    ///     where the line used to be.
+    ///   - wikilink brackets — links are their own considered surface (pills /
+    ///     subpage cards), not this phase's scope.
+    /// Checkbox bracket syntax ("- [ ]"/"- [x]") isn't handled here either: it
+    /// has no distinct span today (plain paragraph text inside a bullet line,
+    /// per `spans(_:in:)`/`isTodoLine`), so there is nothing for this function
+    /// to classify — nothing changes for it in either direction.
+    private static func hideableSpans(_ source: String, in block: Block) -> [Span] {
+        let all = spans(source, in: block)
+        guard !all.isEmpty else { return [] }
+        let kind = blockKind(source, of: block)
+
+        var result: [Span] = []
+        if case .heading = kind, let prefix = all.first(where: { $0.kind == .marker }) {
+            result.append(prefix)
+        }
+        if kind == .quote, let prefix = all.first(where: { $0.kind == .listMarker }) {
+            result.append(prefix)
+        }
+
+        // Emphasis/code delimiters: a `.marker` span immediately touching a
+        // `.bold`/`.italic`/`.inlineCode` content span. By construction (the
+        // shared regex match in `inlineSpans`) a delimiter is always directly
+        // adjacent to its own content span, in every block kind, so this check
+        // doesn't need `kind` at all.
+        func isDelimitedContent(_ k: Kind) -> Bool {
+            switch k {
+            case .bold, .italic, .inlineCode, .strikethrough, .highlight: return true
+            default: return false
+            }
+        }
+        let contentRanges = all.filter { isDelimitedContent($0.kind) }.map(\.range)
+        for span in all where span.kind == .marker {
+            let touchesContent = contentRanges.contains {
+                $0.location == span.range.upperBound || $0.upperBound == span.range.location
+            }
+            if touchesContent { result.append(span) }
+        }
+        return result
     }
 
     // MARK: - Line scanning + classification
@@ -374,20 +711,34 @@ public enum NoteDecoration {
         return result
     }
 
-    private enum LineKind {
+    /// Widened from `private` to `internal`: `BlockTransform`'s "turn into"
+    /// escape discipline (BAK-252 review fix) needs to know whether a
+    /// candidate PARAGRAPH line would reclassify as some other line kind, and
+    /// must ask THIS classifier rather than re-deriving the marker rules
+    /// itself — the drift this shared classification layer exists to prevent.
+    enum LineKind {
         case blank, fence, rule, quote, bullet, ordered, text
         case heading(Int)
     }
 
     /// Same predicates as `MarkdownBlocks.blockLine`, same order (rule before
-    /// heading; fence before everything non-blank).
-    private static func classify(_ content: String) -> LineKind {
+    /// heading; fence before everything non-blank). See `LineKind`'s doc for
+    /// why this is `internal` rather than `private`.
+    static func classify(_ content: String) -> LineKind {
         let trimmed = content.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return .blank }
         if trimmed.hasPrefix("```") { return .fence }
         if trimmed == "---" || trimmed == "***" { return .rule }
-        if let level = headingLevel(trimmed) { return .heading(level) }
-        if trimmed.hasPrefix("> ") { return .quote }
+        // Leading-whitespace-only trim (tabs included, matching `leadingWhitespaceCount`
+        // and `lineSpans`' heading/quote prefix-length math) — deliberately NOT
+        // `trimmed`, which also strips TRAILING whitespace and would eat the one
+        // space an EMPTY heading/quote ("#### " or "> " with no title/text yet —
+        // e.g. right after the slash menu inserts the template and before the user
+        // types) needs to classify correctly. Bullet/ordered below already dodge
+        // this bug because they check their own from-scratch `afterIndent`.
+        let afterLeadingWhitespace = content.drop { $0 == " " || $0 == "\t" }
+        if let level = headingLevel(afterLeadingWhitespace) { return .heading(level) }
+        if afterLeadingWhitespace.hasPrefix("> ") { return .quote }
         let afterIndent = content.drop { $0 == " " }
         if afterIndent.hasPrefix("- ") || afterIndent.hasPrefix("* ") { return .bullet }
         if isOrdered(afterIndent) { return .ordered }
@@ -395,9 +746,9 @@ public enum NoteDecoration {
     }
 
     /// `#{1,6} ` → the level; seven hashes or no trailing space is not a heading.
-    private static func headingLevel(_ trimmed: String) -> Int? {
-        let hashes = trimmed.prefix { $0 == "#" }.count
-        guard hashes >= 1, hashes <= 6, trimmed.dropFirst(hashes).hasPrefix(" ") else { return nil }
+    private static func headingLevel(_ afterLeadingWhitespace: Substring) -> Int? {
+        let hashes = afterLeadingWhitespace.prefix { $0 == "#" }.count
+        guard hashes >= 1, hashes <= 6, afterLeadingWhitespace.dropFirst(hashes).hasPrefix(" ") else { return nil }
         return hashes
     }
 

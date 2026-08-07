@@ -63,7 +63,7 @@ public struct WeekView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.Palette.bg)
-        .sheet(item: $selectedTask) { TaskDetailSheet(task: $0) }
+        .taskDetailDrawer(item: $selectedTask)
         .overlay(alignment: .bottom) { toastView }
         .animation(Theme.Motion.easeOut(), value: toast)
         .task(id: toast?.id) {
@@ -251,7 +251,7 @@ public struct WeekView: View {
             guard let uid = uids.first, let task = allTasks.first(where: { $0.uid == uid })
             else { return false }
             task.scheduledAt = WeekPlanner.scheduleDate(on: day, keepingTimeFrom: task.scheduledAt)
-            if task.stage == .inbox { task.stage = .planned }
+            PersonalBoard.normalizePlacement(task)
             return true
         }
     }

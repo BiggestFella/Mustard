@@ -40,9 +40,28 @@ final class StageBoardTests: XCTestCase {
         XCTAssertEqual(PersonalBoard.tasks(all, in: .inbox, view: .everyone, area: .area("DLA SDK")).count, 1)
     }
 
-    func test_waitingCount_isNeedsApprovalPlusNeedsReview_inScope() {
-        let all = [task(.needsApproval, owner: .agent), task(.needsReview, owner: .agent), task(.inbox)]
-        XCTAssertEqual(PersonalBoard.waitingCount(all, view: .everyone, area: .all), 2)
+    func test_waitingCount_countsAllHumanAttentionStages_inScope() {
+        let questionAndReview = [task(.needsInput, owner: .agent), task(.needsReview, owner: .agent)]
+        XCTAssertEqual(PersonalBoard.waitingCount(questionAndReview, view: .everyone, area: .all), 2)
+
+        let approval = task(.needsApproval, owner: .agent)
+        XCTAssertEqual(PersonalBoard.waitingCount([approval], view: .everyone, area: .all), 1)
+    }
+
+    func test_waitingCount_respectsOwnerAndAreaScope() {
+        let all = [
+            task(.needsApproval, owner: .agent, area: "DLA SDK"),
+            task(.needsInput, owner: .agent, area: "DLA SDK"),
+            task(.needsReview, owner: .me, area: "DLA SDK"),
+            task(.needsInput, owner: .agent, area: "Other"),
+            task(.inbox, owner: .agent, area: "DLA SDK"),
+        ]
+
+        XCTAssertEqual(PersonalBoard.waitingCount(all, view: .everyone, area: .all), 4)
+        XCTAssertEqual(PersonalBoard.waitingCount(all, view: .agent, area: .all), 3)
+        XCTAssertEqual(PersonalBoard.waitingCount(all, view: .mine, area: .all), 1)
+        XCTAssertEqual(PersonalBoard.waitingCount(all, view: .everyone, area: .area("DLA SDK")), 3)
+        XCTAssertEqual(PersonalBoard.waitingCount(all, view: .agent, area: .area("DLA SDK")), 2)
     }
 
     func test_reassign_toAgentGoesForAgent_toMeGoesPlanned() {
@@ -61,8 +80,16 @@ final class StageBoardTests: XCTestCase {
         XCTAssertEqual(t.stage, .done); XCTAssertNotNil(t.completedAt)
     }
 
-    func test_agentBadge_countsNeedsApprovalAndReview_anyOwner() {
-        let all = [task(.needsApproval, owner: .agent), task(.needsReview, owner: .me), task(.queued, owner: .agent)]
-        XCTAssertEqual(PersonalBoard.agentBadge(all), 2)
+    func test_agentBadge_countsAllHumanAttentionStages_anyOwner() {
+        let all = [task(.needsApproval, owner: .agent), task(.needsInput, owner: .agent),
+                   task(.needsReview, owner: .me), task(.queued, owner: .agent)]
+        XCTAssertEqual(PersonalBoard.agentBadge([all[1], all[2]]), 2)
+        XCTAssertEqual(PersonalBoard.agentBadge(all), 3)
+    }
+
+    func test_agentLaneStages_includeFullAgentPipeline() {
+        let expected: Set<TaskStage> = [.forAgent, .needsApproval, .queued, .inProgress,
+                                        .needsInput, .needsReview]
+        XCTAssertEqual(PersonalBoard.agentLaneStages, expected)
     }
 }

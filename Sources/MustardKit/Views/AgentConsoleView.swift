@@ -13,16 +13,21 @@ public struct AgentConsoleView: View {
     @AppStorage("trustLevel") private var trustRaw = TrustLevel.manual.rawValue
     @AppStorage("autoOpenSourceOnSelect") private var autoOpenSource = true
     @Environment(SourcePanelController.self) private var sourcePanel
+    @Environment(AgentTaskCoordinator.self) private var taskAgent
     @State private var selected: Recommendation?
+    @State private var selectedTask: MustardTask?
 
     private var trust: TrustLevel { TrustLevel(rawValue: trustRaw) ?? .manual }
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
+    @Query private var allTasks: [MustardTask]
 
     public init() {}
 
     private var pending: [Recommendation] {
         RecommendationQueue.pending(recommendations, now: .now)
     }
+
+    private var attention: AgentInbox.AgentAttention { AgentInbox.attention(allTasks) }
 
     public var body: some View {
         HSplitView {
@@ -32,6 +37,12 @@ public struct AgentConsoleView: View {
                 .frame(minWidth: 320, idealWidth: 420)
         }
         .background(Theme.Palette.bg)
+        .sheet(item: $selectedTask) { task in
+            // Reuse the task detail flow (which hosts the agent conversation) rather than
+            // duplicating the conversation UI in the console. A draft opens as a companion
+            // panel beside the task, same as the board drawer.
+            ConsoleTaskSheet(task: task, onClose: { selectedTask = nil })
+        }
         .onAppear {
             if selected == nil {
                 selected = RecommendationSelection.nextSelection(current: nil, pending: pending)
@@ -55,6 +66,13 @@ public struct AgentConsoleView: View {
                         .font(Theme.Fonts.meta)
                         .foregroundStyle(Theme.Palette.error)
                         .padding(.vertical, 8)
+                }
+
+                if taskAgent.authenticationRequired { authBanner }
+
+                if !attention.inFlight.isEmpty {
+                    sectionLabel("IN FLIGHT · NEEDS YOU", count: attention.inFlight.count)
+                    ForEach(attention.inFlight) { gateRow($0) }
                 }
 
                 sectionLabel("RECOMMENDATIONS", count: pending.count)
@@ -260,6 +278,104 @@ public struct AgentConsoleView: View {
             .foregroundStyle(Theme.Palette.textTertiary)
             .padding(.vertical, 12)
     }
+
+    /// One banner for a runtime that needs sign-in — not repeated per task row.
+    private var authBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Agent sign-in needed", systemImage: "lock")
+                .font(Theme.Fonts.body.weight(.semibold))
+                .foregroundStyle(Theme.Palette.warnText)
+            Text("The Claude CLI isn't logged in. Run `claude /login` (or `claude setup-token`) in a terminal, then retry.")
+                .font(Theme.Fonts.meta)
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Retry") { Task { await taskAgent.retryAuthentication() } }
+                .controlSize(.small)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Palette.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.top, 12)
+    }
+
+    /// The gate-kind spine colour: purple (approval), amber (answer), green (review).
+    /// Enumerates the gate stages (`TaskStage.isGate`) — keep in sync with `gateSubmeta`
+    /// and `AgentInbox.gateAction` if a gate stage is added.
+    private func gateSpineColor(_ stage: TaskStage) -> Color {
+        switch stage {
+        case .needsApproval: return Theme.Palette.agent
+        case .needsInput: return Theme.Palette.warning
+        case .needsReview: return Theme.Palette.done
+        default: return Theme.Palette.hairline
+        }
+    }
+
+    /// The muted sub-meta line under a gate row's title. Enumerates the gate stages
+    /// (`TaskStage.isGate`) — keep in sync with `gateSpineColor` / `AgentInbox.gateAction`.
+    private func gateSubmeta(_ task: MustardTask) -> String {
+        switch task.stage {
+        case .needsApproval: return task.isGated ? "gated · approve to run" : "approve to run"
+        case .needsInput: return "agent asked · your answer needed"
+        case .needsReview: return "finished · check the output"
+        default: return ""
+        }
+    }
+
+    /// One-click advance for a gate row, mirroring MustardBoardCard.approveGate: the
+    /// pure PersonalBoard.approveTarget decides the destination (needsApproval → queued
+    /// / needsReview; needsReview → done), so acting here and on the board stay coherent.
+    private func advanceGate(_ task: MustardTask) {
+        guard let target = PersonalBoard.approveTarget(for: task) else { return }
+        PersonalBoard.move(task, to: target)
+    }
+
+    /// A compact, actionable gate row (Needs Approval / You / Review) — deliberately
+    /// distinct from the rich proposal cards. Tapping the row opens the conversation
+    /// sheet; the trailing button either advances in one click or opens the sheet.
+    private func gateRow(_ task: MustardTask) -> some View {
+        let action = AgentInbox.gateAction(for: task.stage)
+        return HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(gateSpineColor(task.stage))
+                .frame(width: 3)
+            if let area = task.list?.area {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color(hex: area.colorHex)).frame(width: 7, height: 7)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(task.title).font(Theme.Fonts.body).foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(1)
+                Text(gateSubmeta(task)).font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.textTertiary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let action {
+                Button {
+                    if action.oneClick { advanceGate(task) } else { selectedTask = task }
+                } label: {
+                    Text(action.label)
+                        .font(Theme.Fonts.caption.weight(.semibold))
+                        .foregroundStyle(action.oneClick ? .white : Theme.Palette.textSecondary)
+                        .padding(.horizontal, 11).padding(.vertical, 5)
+                        .background {
+                            if action.oneClick {
+                                RoundedRectangle(cornerRadius: 7).fill(gateSpineColor(task.stage))
+                            } else {
+                                RoundedRectangle(cornerRadius: 7).stroke(Theme.Palette.hairline, lineWidth: 0.5)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 11).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture { selectedTask = task }
+        .padding(.bottom, 8)
+    }
 }
 
 /// Compact, selectable summary row for the recommendations master list. The full
@@ -403,6 +519,28 @@ struct FlowChips: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+/// Console host for the task detail: pairs the sheet with the companion draft panel.
+private struct ConsoleTaskSheet: View {
+    let task: MustardTask
+    let onClose: () -> Void
+    @State private var draftPanel = AgentDraftPanelState()
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if draftPanel.draft != nil {
+                AgentDraftPanelView(state: draftPanel)
+                    .frame(width: 440)
+                Divider().overlay(Theme.Palette.hairline)
+            }
+            TaskDetailSheet(task: task, onClose: onClose)
+                .frame(minWidth: 480)
+                .environment(draftPanel)
+        }
+        .frame(minHeight: 560)
+        .animation(Theme.Motion.expand, value: draftPanel.draft?.uid)
     }
 }
 

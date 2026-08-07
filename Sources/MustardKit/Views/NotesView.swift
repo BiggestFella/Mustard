@@ -23,18 +23,40 @@ public struct NotesView: View {
     @State private var expanded: Set<String> = []
     @State private var creating: CreateTarget?
     @State private var newNoteTitle = ""
+    @State private var renaming: RenameTarget?
+    @State private var renameTitle = ""
+    @State private var deleting: DeleteTarget?
     /// An unresolved wikilink target the user tapped — drives the create-from-link
     /// offer (Task 9). Non-nil presents the alert; the target is created in the
     /// currently-open note's project.
     @State private var pendingWikilinkTarget: String?
+    /// A note handed in from outside (the ⌘⇧F search palette) for this surface to
+    /// select — consumed then cleared, mirroring RootView's notch-task handoff.
+    @Binding private var pendingOpen: NoteRef?
 
-    public init() {}
+    public init(pendingOpen: Binding<NoteRef?> = .constant(nil)) {
+        self._pendingOpen = pendingOpen
+    }
 
     /// The project the create sheet is currently targeting. `SourceConfig` isn't
     /// Identifiable, so key `.sheet(item:)` by the project string.
     private struct CreateTarget: Identifiable {
         let config: SourceConfig
         var id: String { config.project }
+    }
+
+    /// The note the rename sheet is targeting (polish pack E).
+    private struct RenameTarget: Identifiable {
+        let ref: NoteRef
+        let currentTitle: String
+        var id: String { ref.project + "/" + ref.relativePath }
+    }
+
+    /// The note the delete confirmation is targeting (polish pack E).
+    private struct DeleteTarget: Identifiable {
+        let ref: NoteRef
+        let title: String
+        var id: String { ref.project + "/" + ref.relativePath }
     }
 
     /// Enabled sources with a real working directory — the projects we can browse.
@@ -54,6 +76,35 @@ public struct NotesView: View {
         }
         .sheet(item: $creating) { target in
             createNoteSheet(target)
+        }
+        .sheet(item: $renaming) { target in
+            // Reuses the NewNoteSheet shape with the current title prefilled —
+            // return commits, Escape cancels, same calm prompt (polish pack E).
+            NewNoteSheet(heading: "Rename “\(target.currentTitle)”",
+                         confirmLabel: "Rename", title: $renameTitle,
+                         onCancel: { renaming = nil },
+                         onCreate: { performRename(target, newTitle: renameTitle) })
+        }
+        .confirmationDialog(
+            "Delete “\(deleting?.title ?? "")”?",
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            presenting: deleting
+        ) { target in
+            Button("Move to Trash", role: .destructive) { performDelete(target) }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: { _ in
+            Text("The file moves to the system Trash — recoverable in Finder. Links pointing at it will dangle.")
+        }
+        // Consume a search-palette selection: setting `selected` flushes any open
+        // note's save-on-switch, same as sidebar navigation. `initial: true` covers
+        // the handoff landing before this surface is on screen (⌘⇧F from another tab).
+        .onChange(of: pendingOpen, initial: true) { _, ref in
+            guard let ref else { return }
+            selected = ref
+            pendingOpen = nil
         }
     }
 
@@ -192,6 +243,15 @@ public struct NotesView: View {
         }
         .buttonStyle(.plain)
         .padding(.leading, CGFloat(depth) * 14)
+        .contextMenu {
+            Button("Rename…") {
+                renameTitle = leaf.title
+                renaming = RenameTarget(ref: ref, currentTitle: leaf.title)
+            }
+            Button("Delete…", role: .destructive) {
+                deleting = DeleteTarget(ref: ref, title: leaf.title)
+            }
+        }
     }
 
     /// While a filter query is active, folders are force-expanded (matches are only
@@ -217,7 +277,7 @@ public struct NotesView: View {
     /// disabled.
     @ViewBuilder
     private func createNoteSheet(_ target: CreateTarget) -> some View {
-        NewNoteSheet(project: target.config.project, title: $newNoteTitle,
+        NewNoteSheet(heading: "New note in \(target.config.project)", title: $newNoteTitle,
                      onCancel: { creating = nil },
                      onCreate: { create(in: target) })
     }
@@ -251,6 +311,91 @@ public struct NotesView: View {
         do { try io.write(rel, NoteCreation.stub(title: title)) } catch { return nil }
         noteIndex.reindex(project: project, workingDirectory: workingDirectory)
         return rel
+    }
+
+    // MARK: - Rename / delete (polish pack E)
+
+    /// Moves the file to the system Trash (Finder-recoverable — Mustard isn't
+    /// git-backed yet, so this is the reversible delete). Inbound links dangle;
+    /// they already offer create-from-link. No link rewrite on delete (spec).
+    private func performDelete(_ target: DeleteTarget) {
+        deleting = nil
+        if selected == target.ref {
+            // Unmount the open editor FIRST (same reasoning as performRename):
+            // its onDisappear autosave writes to the note's path, and firing
+            // AFTER the trash would quietly resurrect the file. The flush lands
+            // before the async hop; trashing then removes the flushed file.
+            selected = nil
+            DispatchQueue.main.async { executeDelete(target) }
+        } else {
+            executeDelete(target)
+        }
+    }
+
+    private func executeDelete(_ target: DeleteTarget) {
+        let io = FileVaultIO(rootPath: target.ref.workingDirectory)
+        try? io.trash(target.ref.relativePath)
+        noteIndex.reindex(project: target.ref.project, workingDirectory: target.ref.workingDirectory)
+    }
+
+    /// Link-aware rename: `NoteRename.plan` computes the new path + retitled
+    /// content + every inbound-link rewrite (from the index's contentSnapshots);
+    /// `executeRename` applies it — snapshot-before-write for each touched file,
+    /// mirroring the editor's save flow — then reindexes and follows the note.
+    private func performRename(_ target: RenameTarget, newTitle: String) {
+        renaming = nil
+        let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != target.currentTitle else { return }
+        if selected == target.ref {
+            // The note is open — unmount its editor FIRST. onDisappear flushes any
+            // dirty edits to the (still-)old path, so the rename transforms the
+            // user's latest content, and a later save-on-switch can't write to the
+            // old path and resurrect the file the rename just moved. The async hop
+            // runs after the unmount transaction completes; `executeRename`
+            // re-selects the new ref when done.
+            selected = nil
+            DispatchQueue.main.async { executeRename(target, newTitle: trimmed, reselect: true) }
+        } else {
+            executeRename(target, newTitle: trimmed, reselect: false)
+        }
+    }
+
+    private func executeRename(_ target: RenameTarget, newTitle: String, reselect: Bool) {
+        let io = FileVaultIO(rootPath: target.ref.workingDirectory)
+        // Read LIVE files, never index snapshots — this vault has three writers
+        // (Obsidian, the sweep agent, the connected worker) and the index refreshes
+        // on a 300s tick, so a snapshot-based rewrite could clobber up to ~5 min
+        // of external edits in every linking note (final-review #3). A rename is
+        // rare; a whole-project read is cheap at that frequency.
+        guard let oldContent = io.read(target.ref.relativePath) else { return }
+        let projectEntries = entries.filter { $0.project == target.ref.project }
+        let others: [(relativePath: String, content: String)] = projectEntries
+            .filter { $0.relativePath != target.ref.relativePath }
+            .compactMap { entry in
+                io.read(entry.relativePath).map { (relativePath: entry.relativePath, content: $0) }
+            }
+        // Exclude self so a pure retitle of the same note can't collide-suffix.
+        let existing = others.map(\.relativePath)
+        let plan = NoteRename.plan(oldRelativePath: target.ref.relativePath,
+                                   oldContent: oldContent, newTitle: newTitle,
+                                   others: others, existingPaths: existing)
+        do {
+            try io.snapshot(target.ref.relativePath, oldContent)
+            if plan.newRelativePath != plan.oldRelativePath {
+                try io.move(from: plan.oldRelativePath, to: plan.newRelativePath)
+            }
+            try io.write(plan.newRelativePath, plan.renamedNoteContent)
+            for edit in plan.linkEdits {
+                if let prior = io.read(edit.relativePath) { try io.snapshot(edit.relativePath, prior) }
+                try io.write(edit.relativePath, edit.newContent)
+            }
+        } catch { return }   // partial failure leaves snapshots; the note stays put
+        noteIndex.reindex(project: target.ref.project, workingDirectory: target.ref.workingDirectory)
+        if reselect {
+            selected = NoteRef(project: target.ref.project,
+                               workingDirectory: target.ref.workingDirectory,
+                               relativePath: plan.newRelativePath)
+        }
     }
 
     /// Centered glyph + line — the calm empty-state pattern (Craft pass Phase 1).
@@ -314,6 +459,14 @@ public struct NotesView: View {
                 } else {
                     self.pendingWikilinkTarget = target
                 }
+            },
+            // Autocomplete's Create row (polish pack D): write + reindex WITHOUT
+            // navigating — same reasoning as the slash menu's Sub-page command
+            // (yanking the caret mid-typing would be hostile). Returns the created
+            // path so the splice can link by ITS stem (sanitization/collision).
+            onCreateNote: { title in
+                self.writeNote(title: title, project: selected.project,
+                               workingDirectory: selected.workingDirectory)
             }
         )
         .alert(
@@ -343,10 +496,12 @@ public struct NotesView: View {
     }
 }
 
-/// The calm "New note" prompt (BAK-153). Kept a small dedicated view so `@FocusState`
-/// autofocuses the field on present; return submits, Escape/Cancel dismisses.
+/// The calm one-field title prompt (BAK-153; generalized for rename, polish pack E).
+/// Kept a small dedicated view so `@FocusState` autofocuses the field on present;
+/// return submits, Escape/Cancel dismisses.
 private struct NewNoteSheet: View {
-    let project: String
+    let heading: String
+    var confirmLabel = "Create"
     @Binding var title: String
     let onCancel: () -> Void
     let onCreate: () -> Void
@@ -354,7 +509,7 @@ private struct NewNoteSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New note in \(project)")
+            Text(heading)
                 .font(Theme.Fonts.title)
                 .foregroundStyle(Theme.Palette.textPrimary)
             TextField("Note title", text: $title)
@@ -374,7 +529,7 @@ private struct NewNoteSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button("Create", action: onCreate)
+                Button(confirmLabel, action: onCreate)
                     .keyboardShortcut(.defaultAction)
             }
         }

@@ -40,4 +40,13 @@ final class SourceBadgeTests: XCTestCase {
     func test_jira_fromRaw() {
         XCTAssertEqual(SourceBadge.badge(forRaw: "jira").label, "Jira")
     }
+
+    func test_voice_badge_agentPurplePill() {
+        let b = SourceBadge.badge(for: .voice)
+        XCTAssertFalse(b.isQuiet)
+        XCTAssertEqual(b.label, "Voice")
+        XCTAssertEqual(b.symbol, "mic.fill")
+        XCTAssertEqual(b.fgHex, "#7F77DD")
+        XCTAssertEqual(SourceBadge.badge(forRaw: "voice").label, "Voice")
+    }
 }

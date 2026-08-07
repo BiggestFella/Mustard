@@ -1,0 +1,7 @@
+{"ts":"2026-07-12T16:30:00+10:00","event":"run_start","run_id":"20260712-163000-bak252-turn-into","issue":"BAK-252","epic":"BAK-248","branch":"agent/bak-252-turn-into","base":"origin/main@418f88d"}
+{"ts":"2026-07-12T16:30:30+10:00","event":"risk_classified","class":"medium","basis":"labels risk:medium; paths Logic/Views/Tests; no outward actions"}
+{"ts":"2026-07-12T17:00:00+10:00","event":"implementation","agent":"sonnet-builder","commits":["7a4f622","7354947"],"detail":"pure BlockTransform (43 tests) + gutter context menu; shared applyWholeDocumentSplice"}
+{"ts":"2026-07-12T17:05:00+10:00","event":"checks","name":"test+build","result":"pass","detail":"790/1/0 + Build complete (orchestrator run)"}
+{"ts":"2026-07-12T17:20:00+10:00","event":"review","kind":"fresh_context","reviewer":"sonnet-subagent","axes":{"standards":"pass","spec":"fail","risk":"pass","test":"pass"},"blocking_findings":1,"non_blocking_findings":2,"verdict":"REQUEST-CHANGES","detail":"classifier echo: turnInto->paragraph output can reclassify as another kind"}
+{"ts":"2026-07-12T17:45:00+10:00","event":"review_fix","agent":"sonnet-fixer","commits":["6d83a83","dc09b45"],"detail":"per-line backslash escapes via shared NoteDecoration.classify; fence-in-fence second instance found+fixed; divider menu gating; frontmatter-adjacent tests; +8 tests (TDD)"}
+{"ts":"2026-07-12T17:50:00+10:00","event":"checks","name":"test+build","result":"pass","detail":"798/1/0 + Build complete (orchestrator post-fix verification; reviewer repro pinned at BlockTransformTests.swift:311)"}

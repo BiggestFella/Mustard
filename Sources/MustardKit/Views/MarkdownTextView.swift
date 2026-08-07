@@ -14,12 +14,54 @@ struct SlashMenuState: Equatable {
     var selectedIndex: Int = 0
 }
 
+/// UI state for the floating inline-format toolbar (Phase 4 / BAK-253),
+/// published by the coordinator exactly like `SlashMenuState`: `anchor` is in
+/// the editor overlay's coordinate space (top-left origin), computed from the
+/// SAME `overlayRect(forCharacterAt:)` geometry helper the slash menu anchors
+/// with. No selection/format state is carried here — a button tap reads the
+/// LIVE selection straight off the text view when it fires (`toggleInlineFormat`),
+/// so this struct only needs to know WHERE to draw.
+struct InlineFormatBarState: Equatable {
+    var anchor: CGRect
+}
+
+/// UI state for the wikilink hover preview (Notes polish pack C), published by
+/// the coordinator like `SlashMenuState`. `resolved` is nil for a dangling link
+/// (the overlay shows a "Create note?" hint instead of an excerpt); `anchor` is
+/// the hovered link's rect in the editor overlay's coordinate space.
+struct WikilinkHoverState: Equatable {
+    var target: String
+    var resolved: NoteRef?
+    var anchor: CGRect
+}
+
+/// UI state for the `[[` wikilink autocomplete popup (Notes polish pack D),
+/// published by the coordinator exactly like `SlashMenuState`. `triggerRange`
+/// covers "[[" + the typed query — replaced wholesale when a title is picked.
+struct WikilinkAutocompleteState: Equatable {
+    var query: String
+    var triggerRange: NSRange
+    var anchor: CGRect
+    var selectedIndex: Int = 0
+}
+
 /// One moveable block's on-screen geometry (2b Task 9), in the editor overlay's
 /// coordinate space. `index` matches `BlockReorder.move`'s moveable indexing
 /// (frontmatter excluded), so the gutter can hand hit-test results straight through.
+///
+/// `kind` (Phase 3 / BAK-252 review fix) is the block's `BlockKind` at
+/// publish time — data plumbing only, computed once here via
+/// `NoteDecoration.blockKind` rather than re-derived by the view layer, so
+/// `BlockGutterOverlay` can gate menu rows (e.g. hide "Turn into" for a
+/// `.divider`) without owning any classification logic itself. Non-optional:
+/// every `MarkdownBlockRect` is built from the FRONTMATTER-FILTERED moveable
+/// list (`publishBlockRects`), and `blockKind` only ever returns `nil` for a
+/// frontmatter block, so there's no real case here — `.paragraph` is a
+/// defensive fallback, never an expected value.
 struct MarkdownBlockRect: Equatable {
     let index: Int
     let rect: CGRect
+    let kind: BlockKind
 }
 
 /// Imperative bridge from NoteEditorView's SwiftUI overlays (slash menu rows,
@@ -34,6 +76,25 @@ final class MarkdownEditorProxy {
     func pick(_ command: SlashCommand) { coordinator?.performSlashCommand(command) }
     func moveBlock(from: Int, to: Int) { coordinator?.moveBlock(from: from, to: to) }
     func openSlashMenu(atBlock index: Int) { coordinator?.openSlashMenu(atBlock: index) }
+
+    // MARK: Wikilink autocomplete (Notes polish pack D)
+
+    func pickWikilink(_ candidate: WikilinkAutocomplete.LinkCandidate) {
+        coordinator?.performWikilinkPick(candidate)
+    }
+    func createWikilinkNote(_ query: String) { coordinator?.performWikilinkCreate(query) }
+
+    // MARK: Block actions (Phase 3 / BAK-252 — gutter context menu)
+
+    func turnIntoBlock(_ index: Int, target: BlockKind) { coordinator?.turnIntoBlock(at: index, target: target) }
+    func duplicateBlock(_ index: Int) { coordinator?.duplicateBlock(at: index) }
+    func deleteBlock(_ index: Int) { coordinator?.deleteBlock(at: index) }
+    func moveBlockUp(_ index: Int) { coordinator?.moveBlockUp(at: index) }
+    func moveBlockDown(_ index: Int) { coordinator?.moveBlockDown(at: index) }
+
+    // MARK: Inline format toolbar (Phase 4 / BAK-253)
+
+    func toggleInlineFormat(_ format: InlineFormat.Kind) { coordinator?.toggleInlineFormat(format) }
 }
 
 /// Custom attribute grounding the subpage-card drawing (2b Task 10). The card is
@@ -42,6 +103,21 @@ final class MarkdownEditorProxy {
 /// invariant. The value is the wikilink target (unused by drawing, useful in debug).
 extension NSAttributedString.Key {
     static let mustardSubpageCard = NSAttributedString.Key("mustard.subpageCard")
+    /// Grounds block-glyph drawing (checkbox / bullet / divider). Value is an
+    /// `NSNumber` code (see `BlockGlyphCode`). Like `.mustardSubpageCard` this is
+    /// draw-only: the raw `- [ ] `/`- `/`---` characters stay in the string
+    /// (text == source) but are painted `.clear`, and `CardLayoutManager` draws
+    /// the real glyph over their rect.
+    static let mustardBlockGlyph = NSAttributedString.Key("mustard.blockGlyph")
+}
+
+/// The `.mustardBlockGlyph` attribute's integer codes (NSNumber-boxed — attribute
+/// values must be objc objects, and `NoteDecoration.BlockGlyph` is a Swift enum).
+enum BlockGlyphCode: Int {
+    case checkboxUnchecked = 0
+    case checkboxChecked = 1
+    case bullet = 2
+    case divider = 3
 }
 
 /// The live Craft-style editing surface for Notes (spec 2026-07-06, Phase 2a): one
@@ -65,6 +141,23 @@ struct MarkdownTextView: NSViewRepresentable {
     /// selection for key handling. Defaults to an inert constant so callers that
     /// don't mount the menu never see it.
     var slashMenu: Binding<SlashMenuState?> = Binding<SlashMenuState?>.constant(nil)
+    /// Floating inline-format toolbar presentation state (Phase 4 / BAK-253),
+    /// owned by NoteEditorView the same way `slashMenu` is — the coordinator
+    /// writes it on every selection change, NoteEditorView renders the overlay.
+    var formatBar: Binding<InlineFormatBarState?> = Binding<InlineFormatBarState?>.constant(nil)
+    /// Wikilink hover-preview state (polish pack C) — same ownership pattern.
+    var hoverLink: Binding<WikilinkHoverState?> = Binding<WikilinkHoverState?>.constant(nil)
+    /// `[[` autocomplete popup state (polish pack D) — same ownership pattern.
+    var autocomplete: Binding<WikilinkAutocompleteState?> = Binding<WikilinkAutocompleteState?>.constant(nil)
+    /// Same-project autocomplete candidates: display title + the filename stem
+    /// links actually resolve by (passed by NoteEditorView from its entries; the
+    /// coordinator ranks them via `WikilinkAutocomplete.rank`).
+    var noteCandidates: [WikilinkAutocomplete.LinkCandidate] = []
+    /// Creates a note titled by the autocomplete query WITHOUT navigating (the
+    /// caret must stay put mid-typing) — NotesView's writeNote, threaded through.
+    /// Returns the created relativePath so the splice can target ITS stem (a
+    /// sanitized or collision-suffixed filename diverges from the typed title).
+    var onCreateNote: (String) -> String? = { _ in nil }
     /// Moveable-block geometry publication for the hover gutter (2b Task 9).
     var onBlockRectsChange: ([MarkdownBlockRect]) -> Void = { _ in }
     var proxy: MarkdownEditorProxy? = nil
@@ -87,7 +180,8 @@ struct MarkdownTextView: NSViewRepresentable {
         let textContainer = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         textContainer.widthTracksTextView = true
         layoutManager.addTextContainer(textContainer)
-        let textView = NSTextView(frame: .zero, textContainer: textContainer)
+        let textView = FocusReportingTextView(frame: .zero, textContainer: textContainer)
+        textView.focusCoordinator = context.coordinator
 
         // Attributes come from us, not the pasteboard — and every automatic
         // substitution is off because it would REWRITE markdown syntax under the
@@ -130,6 +224,7 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.string = text
         context.coordinator.isProgrammaticUpdate = false
         context.coordinator.applyDecorations(scopedTo: nil)
+        context.coordinator.refreshMarkerVisibility()
 
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
@@ -184,6 +279,15 @@ struct MarkdownTextView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: min(selected.location, length), length: 0))
             context.coordinator.isProgrammaticUpdate = false
             context.coordinator.applyDecorations(scopedTo: nil)
+            // A new document invalidates every cached block range from the OLD
+            // string — force a full recompute rather than diffing against them.
+            context.coordinator.refreshMarkerVisibility()
+            // A programmatic replace means the OLD selection's toolbar (if any)
+            // is now anchored to a document that no longer exists here — and so
+            // are any hover preview / autocomplete states.
+            if formatBar.wrappedValue != nil { formatBar.wrappedValue = nil }
+            context.coordinator.clearHover()
+            if autocomplete.wrappedValue != nil { autocomplete.wrappedValue = nil }
         }
 
         // Backup focus grab for the rare case the window wasn't attached yet in
@@ -199,6 +303,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.fullPassTask?.cancel()
+        coordinator.clearHover()
         NotificationCenter.default.removeObserver(coordinator)
     }
 
@@ -218,6 +323,16 @@ struct MarkdownTextView: NSViewRepresentable {
         private var isPerformingEdit = false
         private var rectPublishScheduled = false
         private var lastPublishedRects: [MarkdownBlockRect] = []
+
+        /// Phase 1 (BAK-250) focus tracking: true while THIS text view is the
+        /// first responder. Driven by `setFocus(_:)`, called from
+        /// `FocusReportingTextView`'s `become`/`resignFirstResponder` overrides —
+        /// the ACTUAL focus signal, not `textDidBegin/EndEditing` (which fire on
+        /// first/last keystroke, so a plain click-in or click-away would be
+        /// missed). Distinct from `isProgrammaticUpdate`/`isPerformingEdit`, which
+        /// guard OUR OWN writes, not the user's focus state. `nil` `focusedRange`
+        /// (editor has no focus at all) hides every marker in the document.
+        private var hasFocus = false
 
         /// Large-note fallback (spec "never block typing"): above this many UTF-16
         /// units decoration is skipped entirely — plain editable text. 200k units
@@ -246,9 +361,24 @@ struct MarkdownTextView: NSViewRepresentable {
             // full pass below catches edits that change block TOPOLOGY (typing a
             // ``` fence, deleting the blank line that separated two blocks, editing
             // frontmatter fences) which the scoped pass can't see.
-            applyDecorations(scopedTo: caretBlock(in: textView))
+            let block = caretBlock(in: textView)
+            applyDecorations(scopedTo: block)
+            // Recompute which markers are hidden (BAK-250): the block under the
+            // caret is focused, so its markers reveal as you type ("**", "# ",
+            // "> ") while every other block stays hidden. Cheap — it only
+            // re-nulls glyphs whose hidden-state actually changed since the last
+            // call (see `refreshMarkerVisibility`).
+            refreshMarkerVisibility()
             scheduleFullPass()
             refreshSlashMenu()
+            refreshAutocomplete()
+            // Any edit collapses the selection (typing replaces it) — hide the
+            // format toolbar the instant that happens, same "hides on typing"
+            // requirement `refreshFormatBar`'s guard already encodes.
+            refreshFormatBar()
+            // An edit can delete/reflow the hovered link — the popover's anchor
+            // and target are both stale.
+            clearHover()
         }
 
         /// The partition block containing the caret in the NEW string (recomputing
@@ -267,6 +397,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard !Task.isCancelled else { return }
                 self?.applyDecorations(scopedTo: nil)
+                // Topology may have shifted every block's range since the last
+                // full pass — force a fresh recompute rather than diffing.
+                self?.refreshMarkerVisibility()
             }
         }
 
@@ -309,6 +442,7 @@ struct MarkdownTextView: NSViewRepresentable {
                     .sorted(by: { Self.priority($0.kind) < Self.priority($1.kind) }) {
                     apply(span, to: storage)
                 }
+                applyBlockGlyph(source, block: target, to: storage)
             }
             storage.endEditing()
             isProgrammaticUpdate = false
@@ -317,7 +451,7 @@ struct MarkdownTextView: NSViewRepresentable {
         private static func priority(_ kind: NoteDecoration.Kind) -> Int {
             switch kind {
             case .frontmatter, .codeBlock, .heading, .listMarker, .subpageCard: return 0
-            case .bold, .italic, .inlineCode, .wikilink: return 1
+            case .bold, .italic, .inlineCode, .wikilink, .strikethrough, .highlight: return 1
             case .marker: return 2
             }
         }
@@ -341,6 +475,11 @@ struct MarkdownTextView: NSViewRepresentable {
             case .inlineCode:
                 storage.addAttributes([.font: Theme.NSFonts.code,
                                        .backgroundColor: Theme.NSPalette.surface], range: range)
+            case .strikethrough:
+                storage.addAttributes([.strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                                       .strikethroughColor: Theme.NSPalette.strikethrough], range: range)
+            case .highlight:
+                storage.addAttribute(.backgroundColor, value: Theme.NSPalette.highlightBg, range: range)
             case .codeBlock:
                 storage.addAttributes([.font: Theme.NSFonts.code,
                                        .backgroundColor: Theme.NSPalette.surface], range: range)
@@ -371,6 +510,219 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
+        /// Block-glyph prefixes (checkbox / bullet / divider): stamp the drawing
+        /// attribute and paint the raw `- [ ] `/`- `/`---` characters `.clear` so
+        /// they hold their column (keeping the caret hit-testable — unlike the
+        /// nulled text markers) while `CardLayoutManager` draws the real glyph over
+        /// them. Quote is intentionally skipped here: its `> ` is already a hidden
+        /// text marker (nulled by `markerVisibility`), so a quote renders as
+        /// flush-left text today; a dedicated quote treatment is a later touch.
+        private func applyBlockGlyph(_ source: String, block: NoteDecoration.Block,
+                                     to storage: NSTextStorage) {
+            guard let (markerRange, glyph) = NoteDecoration.blockGlyph(source, of: block),
+                  markerRange.upperBound <= storage.length else { return }
+            let code: BlockGlyphCode
+            switch glyph {
+            case .checkbox(let checked): code = checked ? .checkboxChecked : .checkboxUnchecked
+            case .bullet: code = .bullet
+            case .divider: code = .divider
+            case .quote: return
+            }
+            storage.addAttribute(NSAttributedString.Key.mustardBlockGlyph,
+                                 value: NSNumber(value: code.rawValue), range: markerRange)
+            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: markerRange)
+        }
+
+        // MARK: Marker visibility (Phase 1 / BAK-250 — Craft-style focus reveal)
+
+        /// The character ranges whose markers are currently hidden. Read by the
+        /// `shouldGenerateGlyphs` delegate below, which gives every glyph in these
+        /// ranges the `.null` glyph property — a null glyph both draws NOTHING and
+        /// takes ZERO width, so hidden syntax truly disappears and the surrounding
+        /// text reflows into its place (a heading's title slides left to where the
+        /// "# " was), which is exactly the Craft behaviour.
+        ///
+        /// This replaces the original `setNotShownAttribute` approach (2026-07-12
+        /// fix, Leon's eye-check): that API (a) left the hidden glyph's advance
+        /// width in place, so markers would only stop *drawing* while still holding
+        /// their column — never a real reflow — and (b) is a property of
+        /// already-generated glyphs, so it was silently wiped every time
+        /// `applyDecorations` set a font attribute and the glyphs regenerated. Net
+        /// effect in the running app: markers never hid at all. Deciding
+        /// visibility at glyph-GENERATION time (here) is regeneration-safe by
+        /// construction — regeneration just re-consults this set.
+        ///
+        /// The underlying text storage and its attributes are never touched, so
+        /// copy/paste and Save still see the full markdown; only which glyphs get
+        /// laid out changes.
+        private var hiddenMarkerRanges: [NSRange] = []
+        /// `hiddenMarkerRanges` flattened for the delegate hook: O(log n) membership
+        /// instead of an O(ranges) scan per character during glyph generation.
+        private var hiddenMarkerCharacters = IndexSet()
+        /// Document length the hidden set was computed against. Glyph generation can
+        /// run for the edited range BEFORE `textDidChange` refreshes the set; a
+        /// length mismatch means the indexes are stale for THIS pass, so the hook
+        /// stands down (markers briefly visible beats nulling the wrong characters).
+        private var hiddenMarkerDocLength = 0
+
+        /// Recompute which markers are hidden, then, if the set changed, force the
+        /// affected glyphs to regenerate so the `shouldGenerateGlyphs` delegate
+        /// re-applies (or lifts) their `.null` property. Recomputes the whole set
+        /// from the pure `markerVisibility` decision each time — cheap for
+        /// hand-written notes, and there is no cross-call glyph-flag state to keep
+        /// in sync. Driven by text change / load / doc-replace, never by caret
+        /// movement (hiding is focus-independent — see below).
+        func refreshMarkerVisibility() {
+            guard let textView, let layoutManager = textView.layoutManager else { return }
+            let source = textView.string
+            let ns = source as NSString
+
+            // Large-note fallback: no hiding, plain editable text (matches the
+            // decoration + block-rect fallbacks).
+            guard ns.length <= Self.plainTextFallbackLimit else {
+                if !hiddenMarkerRanges.isEmpty {
+                    let stale = hiddenMarkerRanges
+                    hiddenMarkerRanges = []
+                    hiddenMarkerCharacters = IndexSet()
+                    hiddenMarkerDocLength = ns.length
+                    invalidateGlyphs(for: stale, ns: ns, layoutManager: layoutManager)
+                }
+                return
+            }
+
+            // "Always hidden" (Leon, 2026-07-12): markers never reveal, not even on
+            // the line being edited — the Craft/Typora model, not Bear's
+            // reveal-on-active-line. `focusedRange: nil` hides EVERY block's
+            // markers; the raw `# `/`**`/`` ` `` still live in the file
+            // (markdown-as-truth) and the caret can traverse them to edit, they
+            // just never draw. Hiding therefore depends only on the text, so this
+            // runs on text change / load, never on caret movement.
+            let newHidden = NoteDecoration.markerVisibility(source, focusedRange: nil)
+                .hidden
+                .filter { $0.length > 0 && $0.upperBound <= ns.length }
+
+            guard newHidden != hiddenMarkerRanges else {
+                // Same ranges, but the doc length may have changed around them (an
+                // edit that didn't touch any marker) — keep the staleness stamp
+                // current so the delegate hook doesn't stand down forever.
+                hiddenMarkerDocLength = ns.length
+                return
+            }
+            // Regenerate glyphs for everything whose hidden-state may have flipped:
+            // the union of what WAS hidden and what is NOW hidden. The set/stamp are
+            // assigned BEFORE invalidation so a synchronous re-entry into the
+            // delegate hook sees consistent state.
+            let affected = hiddenMarkerRanges + newHidden
+            hiddenMarkerRanges = newHidden
+            var flattened = IndexSet()
+            for range in newHidden {
+                flattened.insert(integersIn: range.location..<range.upperBound)
+            }
+            hiddenMarkerCharacters = flattened
+            hiddenMarkerDocLength = ns.length
+            invalidateGlyphs(for: affected, ns: ns, layoutManager: layoutManager)
+        }
+
+        /// Force glyph regeneration + relayout over the given ranges so the
+        /// `shouldGenerateGlyphs` delegate re-runs against the updated
+        /// `hiddenMarkerRanges`. Ranges past the current length are clamped out
+        /// defensively (they can only be stale pre-edit ranges).
+        private func invalidateGlyphs(for ranges: [NSRange], ns: NSString,
+                                      layoutManager: NSLayoutManager) {
+            for range in ranges {
+                guard range.length > 0, range.upperBound <= ns.length else { continue }
+                layoutManager.invalidateGlyphs(forCharacterRange: range, changeInLength: 0,
+                                               actualCharacterRange: nil)
+                layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+            }
+        }
+
+        /// Glyph-generation hook: any character in a `hiddenMarkerRanges` range
+        /// gets the `.null` glyph property (no draw, no width → reflow). Returning
+        /// 0 when nothing is hidden lets the layout manager use its own defaults —
+        /// the zero-cost common path.
+        func layoutManager(_ layoutManager: NSLayoutManager,
+                           shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                           properties props: UnsafePointer<NSLayoutManager.GlyphProperty>,
+                           characterIndexes charIndexes: UnsafePointer<Int>,
+                           font: NSFont,
+                           forGlyphRange glyphRange: NSRange) -> Int {
+            guard !hiddenMarkerCharacters.isEmpty,
+                  hiddenMarkerDocLength == (layoutManager.textStorage?.length ?? 0),
+                  glyphRange.length > 0
+            else { return 0 }
+
+            // Cheap no-op pre-check: character indexes are monotonic within a
+            // generation chunk, so a chunk whose span misses the hidden set (the
+            // common case) skips the buffer copy entirely.
+            let count = glyphRange.length
+            let spanStart = charIndexes[0]
+            let spanEnd = charIndexes[count - 1]
+            guard spanEnd >= spanStart,
+                  hiddenMarkerCharacters.intersects(integersIn: spanStart...spanEnd)
+            else { return 0 }
+
+            var newProps = [NSLayoutManager.GlyphProperty](repeating: [], count: count)
+            var touched = false
+            for i in 0..<count {
+                if hiddenMarkerCharacters.contains(charIndexes[i]) {
+                    newProps[i] = .null
+                    touched = true
+                } else {
+                    newProps[i] = props[i]
+                }
+            }
+            guard touched else { return 0 }
+            layoutManager.setGlyphs(glyphs, properties: &newProps, characterIndexes: charIndexes,
+                                    font: font, forGlyphRange: glyphRange)
+            return count
+        }
+
+        /// The real first-responder signal (from `FocusReportingTextView`). Markers
+        /// are always hidden regardless of focus (see `refreshMarkerVisibility`), so
+        /// this only governs the format toolbar — which should never hover while the
+        /// editor isn't the first responder.
+        func setFocus(_ focused: Bool) {
+            guard hasFocus != focused else { return }
+            hasFocus = focused
+            refreshFormatBar()
+        }
+
+        /// A click inside a checkbox's marker region toggles `[ ]` ⇄ `[x]` in the
+        /// source (via the undo-safe splice) instead of placing a caret. Returns
+        /// true when it handled the click so the text view skips its default
+        /// mouse handling. `viewPoint` is in the text view's coordinate space.
+        func handleCheckboxClick(at viewPoint: CGPoint, layoutManager: NSLayoutManager,
+                                 textContainer: NSTextContainer, containerOrigin: CGPoint) -> Bool {
+            guard let textView else { return false }
+            let source = textView.string
+            guard (source as NSString).length <= Self.plainTextFallbackLimit else { return false }
+            let containerPoint = CGPoint(x: viewPoint.x - containerOrigin.x,
+                                         y: viewPoint.y - containerOrigin.y)
+            guard layoutManager.numberOfGlyphs > 0 else { return false }
+            let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+            guard glyphIndex < layoutManager.numberOfGlyphs else { return false }
+            // `glyphIndex(for:)` snaps to the NEAREST glyph, so a click in the
+            // blank area below the last line resolves to that line's last glyph.
+            // Reject clicks outside the actual line box so clicking below a
+            // final checkbox line can't silently toggle it.
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            guard NSPointInRect(containerPoint, fragment) else { return false }
+            let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+
+            let blocks = NoteDecoration.blocks(source)
+            guard let block = blocks.first(where: { NSLocationInRange(charIndex, $0.range) }),
+                  let (markerRange, glyph) = NoteDecoration.blockGlyph(source, of: block),
+                  case .checkbox = glyph,
+                  NSLocationInRange(charIndex, markerRange),
+                  let result = CheckboxToggle.toggled(source, at: charIndex)
+            else { return false }
+
+            textView.window?.makeFirstResponder(textView)
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+            return true
+        }
+
         // MARK: Link clicks
 
         /// Wikilink clicks route to the host's existing navigate / create-from-
@@ -380,6 +732,71 @@ struct MarkdownTextView: NSViewRepresentable {
             guard let url = link as? URL, let target = WikilinkURL.target(from: url) else { return false }
             parent.onWikilinkTap(target)
             return true
+        }
+
+        // MARK: Wikilink hover preview (Notes polish pack C)
+
+        /// Debounce before the popover shows — long enough that sweeping the mouse
+        /// across a note never flashes previews, short enough to feel intentional.
+        private static let hoverDelayNanos: UInt64 = 350_000_000
+        private var hoverTask: Task<Void, Never>?
+        /// The link target currently under the mouse (pre-debounce) — dedupes
+        /// mouseMoved streams so we only re-arm the debounce on target CHANGE.
+        private var hoverCandidate: (target: String, location: Int)?
+
+        /// Called from the text view's mouseMoved tracking. Hit-tests the `.link`
+        /// attribute under the pointer (the decoration pass owns which characters
+        /// are links, so this never re-parses markdown) and arms the debounced
+        /// publish. Anything that isn't a wikilink clears the state.
+        func handleHoverMove(at viewPoint: CGPoint) {
+            guard let textView, let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let storage = textView.textStorage,
+                  (textView.string as NSString).length <= Self.plainTextFallbackLimit
+            else { clearHover(); return }
+
+            let origin = textView.textContainerOrigin
+            let containerPoint = CGPoint(x: viewPoint.x - origin.x, y: viewPoint.y - origin.y)
+            guard layoutManager.numberOfGlyphs > 0 else { clearHover(); return }
+            let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+            guard glyphIndex < layoutManager.numberOfGlyphs else { clearHover(); return }
+            // Same nearest-glyph guard as checkbox clicks: only count the pointer
+            // as "on" the link when it's inside the line fragment's box.
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            guard NSPointInRect(containerPoint, fragment) else { clearHover(); return }
+            let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+            guard charIndex < storage.length else { clearHover(); return }
+
+            var linkRange = NSRange(location: 0, length: 0)
+            guard let url = storage.attribute(.link, at: charIndex,
+                                              longestEffectiveRange: &linkRange,
+                                              in: NSRange(location: 0, length: storage.length)) as? URL,
+                  let target = WikilinkURL.target(from: url)
+            else { clearHover(); return }
+
+            // Same link as the armed candidate (or the shown popover) — nothing to do.
+            if hoverCandidate?.target == target, hoverCandidate?.location == linkRange.location { return }
+            hoverCandidate = (target, linkRange.location)
+            hoverTask?.cancel()
+            let anchorLocation = linkRange.location
+            hoverTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: Coordinator.hoverDelayNanos)
+                guard !Task.isCancelled, let self, self.hoverCandidate?.target == target else { return }
+                self.parent.hoverLink.wrappedValue = WikilinkHoverState(
+                    target: target,
+                    resolved: self.parent.resolveWikilink(target),
+                    anchor: self.overlayRect(forCharacterAt: anchorLocation) ?? CGRect.zero
+                )
+            }
+        }
+
+        /// Cancels any pending publish and hides the popover. Called on mouse-exit,
+        /// scroll, text change, and whenever the pointer leaves link glyphs.
+        func clearHover() {
+            hoverTask?.cancel()
+            hoverTask = nil
+            hoverCandidate = nil
+            if parent.hoverLink.wrappedValue != nil { parent.hoverLink.wrappedValue = nil }
         }
 
         // MARK: Slash menu — trigger detection (2b Task 7)
@@ -437,36 +854,83 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            // Close-only path: never opens (allowOpen false).
-            guard parent.slashMenu.wrappedValue != nil else { return }
-            refreshSlashMenu(allowOpen: false)
+            guard !isPerformingEdit, !isProgrammaticUpdate else { return }
+            // Marker visibility is NOT refreshed here: under the "always hidden"
+            // policy (Leon, 2026-07-12) hiding no longer depends on where the
+            // caret is, only on the text, so a pure selection move can't change
+            // it — refreshing happens on text change / load / doc-replace instead.
+            // (This also removes the per-caret-move O(doc) rescan flagged in
+            // BAK-254.) The format bar still tracks the selection.
+            refreshFormatBar()
+
+            // Close-only paths: never open on a pure selection move (allowOpen false).
+            if parent.slashMenu.wrappedValue != nil { refreshSlashMenu(allowOpen: false) }
+            if parent.autocomplete.wrappedValue != nil { refreshAutocomplete(allowOpen: false) }
         }
 
-        /// ↑/↓/⏎/Esc are intercepted ONLY while the slash menu is open — never
-        /// steal arrows or return during normal editing (plan risk register).
+        /// ↑/↓/⏎/Esc are intercepted ONLY while the slash menu or the wikilink
+        /// autocomplete is open — never steal arrows or return during normal
+        /// editing (plan risk register). The two menus are mutually exclusive
+        /// (`refreshAutocomplete` won't open beside the slash menu), so the slash
+        /// branch running first is priority in name only.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard var menu = parent.slashMenu.wrappedValue else { return false }
-            let items = SlashMenu.items(query: menu.query)
-            guard !items.isEmpty else { return false }
+            if var menu = parent.slashMenu.wrappedValue {
+                let items = SlashMenu.items(query: menu.query)
+                guard !items.isEmpty else { return false }
 
-            if commandSelector == #selector(NSResponder.moveDown(_:)) {
-                menu.selectedIndex = min(menu.selectedIndex + 1, items.count - 1)
-                parent.slashMenu.wrappedValue = menu
-                return true
+                if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                    menu.selectedIndex = min(menu.selectedIndex + 1, items.count - 1)
+                    parent.slashMenu.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                    menu.selectedIndex = max(menu.selectedIndex - 1, 0)
+                    parent.slashMenu.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                    performSlashCommand(items[min(menu.selectedIndex, items.count - 1)])
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                    parent.slashMenu.wrappedValue = nil
+                    return true
+                }
+                return false
             }
-            if commandSelector == #selector(NSResponder.moveUp(_:)) {
-                menu.selectedIndex = max(menu.selectedIndex - 1, 0)
-                parent.slashMenu.wrappedValue = menu
-                return true
+
+            if var menu = parent.autocomplete.wrappedValue {
+                let candidates = WikilinkAutocomplete.rank(query: menu.query,
+                                                           candidates: parent.noteCandidates)
+                let rowCount = autocompleteRowCount(for: menu.query)
+                guard rowCount > 0 else { return false }
+
+                if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                    menu.selectedIndex = min(menu.selectedIndex + 1, rowCount - 1)
+                    parent.autocomplete.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                    menu.selectedIndex = max(menu.selectedIndex - 1, 0)
+                    parent.autocomplete.wrappedValue = menu
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                    let index = min(menu.selectedIndex, rowCount - 1)
+                    if index < candidates.count {
+                        performWikilinkPick(candidates[index])
+                    } else {
+                        performWikilinkCreate(menu.query)   // the trailing Create row
+                    }
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                    parent.autocomplete.wrappedValue = nil
+                    return true
+                }
+                return false
             }
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                performSlashCommand(items[min(menu.selectedIndex, items.count - 1)])
-                return true
-            }
-            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-                parent.slashMenu.wrappedValue = nil
-                return true
-            }
+
             return false
         }
 
@@ -517,44 +981,247 @@ struct MarkdownTextView: NSViewRepresentable {
             )
         }
 
+        // MARK: Wikilink autocomplete (Notes polish pack D)
+
+        /// Recomputes the `[[` autocomplete state from the caret — the same
+        /// open-on-text-change / close-only-on-selection-change contract as
+        /// `refreshSlashMenu`. Never open alongside the slash menu (the slash
+        /// trigger requires a line starting "/", so the two can't both be live;
+        /// the guard is belt-and-braces).
+        private func refreshAutocomplete(allowOpen: Bool = true) {
+            guard !isPerformingEdit else { return }
+            guard let textView else { return }
+            let wasOpen = parent.autocomplete.wrappedValue != nil
+            guard allowOpen || wasOpen else { return }
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0,
+                  parent.slashMenu.wrappedValue == nil,
+                  let query = WikilinkAutocomplete.activeQuery(text: textView.string,
+                                                               caretUTF16: selection.location),
+                  autocompleteRowCount(for: query.text) > 0
+            else {
+                if wasOpen { parent.autocomplete.wrappedValue = nil }
+                return
+            }
+
+            let previous = parent.autocomplete.wrappedValue
+            let keptIndex = (previous?.query == query.text) ? (previous?.selectedIndex ?? 0) : 0
+            let rowCount = autocompleteRowCount(for: query.text)
+            parent.autocomplete.wrappedValue = WikilinkAutocompleteState(
+                query: query.text,
+                triggerRange: query.range,
+                anchor: overlayRect(forCharacterAt: query.range.location) ?? CGRect.zero,
+                selectedIndex: min(keptIndex, rowCount - 1)
+            )
+        }
+
+        /// Total keyboard rows: ranked candidates + the trailing "Create" row
+        /// (shown only for a non-blank query). One count, owned here, so the
+        /// coordinator's ↑/↓/⏎ and the overlay's rendering can't drift apart —
+        /// `WikilinkAutocompleteView` derives its rows from the same functions.
+        private func autocompleteRowCount(for query: String) -> Int {
+            let candidates = WikilinkAutocomplete.rank(query: query, candidates: parent.noteCandidates)
+            let hasCreateRow = !query.trimmingCharacters(in: .whitespaces).isEmpty
+            return candidates.count + (hasCreateRow ? 1 : 0)
+        }
+
+        /// Commits a pick: replaces the "[["+query trigger with the candidate's
+        /// STEM-targeted link (`[[stem]]` / `[[stem|title]]` — links resolve by
+        /// filename stem, never by display title) through the SAME undo-safe
+        /// channel as slash commands.
+        func performWikilinkPick(_ candidate: WikilinkAutocomplete.LinkCandidate) {
+            guard let textView, let state = parent.autocomplete.wrappedValue else { return }
+            let insertion = WikilinkAutocomplete.insertion(for: candidate)
+            isPerformingEdit = true
+            textView.breakUndoCoalescing()
+            textView.insertText(insertion, replacementRange: state.triggerRange)
+            textView.breakUndoCoalescing()
+            textView.setSelectedRange(NSRange(
+                location: state.triggerRange.location + (insertion as NSString).length, length: 0))
+            isPerformingEdit = false
+            parent.autocomplete.wrappedValue = nil
+            textView.window?.makeFirstResponder(textView)
+        }
+
+        /// The "Create '<query>'" row: creates the note (no navigation — the caret
+        /// must stay here) and links to it BY THE CREATED FILE'S STEM — sanitization
+        /// or a collision suffix can make the filename diverge from the typed title,
+        /// and splicing the raw title would then link the WRONG (pre-existing) note.
+        /// File creation IS outside the undo group, same trade-off as
+        /// create-from-dangling: ⌘Z reverts the text and the created note dangles.
+        func performWikilinkCreate(_ query: String) {
+            let title = query.trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty else { return }
+            let createdPath = parent.onCreateNote(title)
+            let stem = createdPath.map(WikilinkAutocomplete.stem(ofPath:)) ?? title
+            performWikilinkPick(WikilinkAutocomplete.LinkCandidate(title: title, stem: stem))
+        }
+
+        // MARK: Inline format toolbar (Phase 4 / BAK-253 — floating selection toolbar)
+
+        /// Recomputes the format-toolbar's presentation state from the current
+        /// selection. Shows only while THIS view has focus, the selection is
+        /// non-empty, and `InlineFormat.isSingleBlockSelection` agrees the
+        /// selection sits inside one (non-frontmatter) block — the same "single
+        /// block" rule `InlineFormat.toggle` itself enforces before formatting,
+        /// read here from the one function that owns it rather than
+        /// re-derived. Hides on selection collapse (caret-only) and on any
+        /// edit (`textDidChange` calls this too) per the spec's "hides on
+        /// selection collapse/typing".
+        private func refreshFormatBar() {
+            guard let textView else { return }
+            let selection = textView.selectedRange()
+            guard hasFocus, !isPerformingEdit, !isProgrammaticUpdate,
+                  InlineFormat.isSingleBlockSelection(textView.string, selection: selection)
+            else {
+                if parent.formatBar.wrappedValue != nil { parent.formatBar.wrappedValue = nil }
+                return
+            }
+            parent.formatBar.wrappedValue = InlineFormatBarState(
+                anchor: overlayRect(forCharacterAt: selection.location) ?? CGRect.zero
+            )
+        }
+
+        /// Applies one inline-format toggle from the floating toolbar. Pure
+        /// decision in `InlineFormat.toggle` (wrap/unwrap/no-op — reads the
+        /// LIVE selection, never a stale copy); this method only resolves the
+        /// current selection and applies the result through the SAME whole-
+        /// document splice channel `BlockTransform`'s four operations already
+        /// use (`applyWholeDocumentSplice`) rather than `performSlashCommand`'s
+        /// narrower `replacementRange:` channel. `InlineFormat.toggle` returns a
+        /// WHOLE rewritten source (same shape as every `BlockTransform`
+        /// function), not a computed sub-range delta — deriving a minimal diff
+        /// range from two full strings would need its own diffing pass for no
+        /// real benefit, whereas the existing whole-document channel already
+        /// gives one undo step AND the full decoration + marker-visibility
+        /// recompute this toggle needs (adding/removing delimiters can flip
+        /// which markers are hideable in the touched block).
+        func toggleInlineFormat(_ format: InlineFormat.Kind) {
+            guard let textView else { return }
+            let selection = textView.selectedRange()
+            guard let result = InlineFormat.toggle(textView.string, selection: selection, format: format)
+            else { return }
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+        }
+
         // MARK: Block reorder (2b Task 9)
 
-        /// Applies `BlockReorder.move` as ONE undoable edit. The whole-document
-        /// splice goes through `insertText(_:replacementRange:)` — the same
-        /// canonical channel as slash insertions — wrapped in an explicit undo
-        /// group and bracketed by `breakUndoCoalescing` so ⌘Z restores the previous
-        /// order in exactly one step, never merged with surrounding typing. The
-        /// SwiftUI binding updates through the normal `textDidChange` path, so the
-        /// dirty dot and ⌘S semantics hold with zero new save code.
+        /// Applies `BlockReorder.move` as ONE undoable edit through the shared
+        /// whole-document splice channel (`applyWholeDocumentSplice`) — see that
+        /// method's doc for the undo-grouping/decoration/scroll mechanics. Caret
+        /// is clamped to its OLD location (a reorder doesn't ask the caret to
+        /// follow the moved block — unlike the Phase 3 block-actions menu below,
+        /// which computes a specific destination selection per action).
         func moveBlock(from: Int, to: Int) {
             guard let textView else { return }
+            let moved = BlockReorder.move(textView.string, from: from, to: to)
+            let savedSelection = textView.selectedRange()
+            applyWholeDocumentSplice(newSource: moved,
+                                     selection: NSRange(location: savedSelection.location, length: 0))
+        }
+
+        // MARK: Block actions (Phase 3 / BAK-252 — "turn into" + gutter context menu)
+
+        /// Resolves a gutter/menu `index` (moveable-block indexing — the same
+        /// convention `MarkdownBlockRect.index` and `BlockReorder.move`'s
+        /// `from`/`to` already use) to the CURRENT `NoteDecoration.Block` it
+        /// names. `nil` for a stale index (block count changed since the caller
+        /// last read `MarkdownBlockRect`s) rather than acting on the wrong block.
+        private func moveableBlock(at index: Int) -> NoteDecoration.Block? {
+            guard let textView else { return nil }
+            let moveable = NoteDecoration.blocks(textView.string).filter { !$0.isFrontmatter }
+            guard index >= 0, index < moveable.count else { return nil }
+            return moveable[index]
+        }
+
+        /// "Turn into" — the gutter context menu's first section. Pure logic in
+        /// `BlockTransform.turnInto` decides content/selection; this method only
+        /// resolves the index and applies the result through the one undo-safe
+        /// splice channel every 2b/Phase-3 mutation uses.
+        func turnIntoBlock(at index: Int, target: BlockKind) {
+            guard let textView, let block = moveableBlock(at: index),
+                  let result = BlockTransform.turnInto(textView.string, block: block, target: target)
+            else { return }
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+        }
+
+        /// "Actions" section — Duplicate.
+        func duplicateBlock(at index: Int) {
+            guard let textView, let block = moveableBlock(at: index),
+                  let result = BlockTransform.duplicate(textView.string, block: block)
+            else { return }
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+        }
+
+        /// "Actions" section — Delete.
+        func deleteBlock(at index: Int) {
+            guard let textView, let block = moveableBlock(at: index),
+                  let result = BlockTransform.delete(textView.string, block: block)
+            else { return }
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+        }
+
+        /// "Actions" section — Move up. Delegates the actual reorder to
+        /// `BlockTransform.moveUp` (which itself delegates to
+        /// `BlockReorder.move` — no index-math reimplementation anywhere), but
+        /// unlike the gutter's drag path (`moveBlock`, above), the caret follows
+        /// the moved block to its new position (`BlockTransform`'s computed
+        /// selection) rather than staying at its old document offset — the menu
+        /// action reads as "move THIS block", so the caret should stay with it.
+        func moveBlockUp(at index: Int) {
+            guard let textView, let block = moveableBlock(at: index),
+                  let result = BlockTransform.moveUp(textView.string, block: block)
+            else { return }
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+        }
+
+        /// "Actions" section — Move down (see `moveBlockUp`'s doc).
+        func moveBlockDown(at index: Int) {
+            guard let textView, let block = moveableBlock(at: index),
+                  let result = BlockTransform.moveDown(textView.string, block: block)
+            else { return }
+            applyWholeDocumentSplice(newSource: result.source, selection: result.selection)
+        }
+
+        /// The ONE undo-safe whole-document splice channel: every mutation that
+        /// can't stay caret-scoped (`moveBlock`, and every Phase 3 block action
+        /// above) funnels through here. `insertText(_:replacementRange:)` is the
+        /// same canonical channel slash insertions use, wrapped in an explicit
+        /// undo group and bracketed by `breakUndoCoalescing` so ⌘Z reverts in
+        /// exactly one step, never merged with surrounding typing. Always a FULL
+        /// decoration + marker-visibility recompute (never the caret-scoped
+        /// incremental path) — these splices can move, retype, duplicate, or
+        /// remove whole blocks, invalidating ranges the incremental path assumes
+        /// are stable. `selection` is clamped to the new document length (never
+        /// negative) so a caller's computed offset can't crash on a shrinking
+        /// edit (e.g. Delete at EOF). A no-op splice (`newSource == current`,
+        /// e.g. `BlockReorder.move`'s identity/out-of-range case) is skipped
+        /// entirely — no empty undo group, no spurious re-decoration.
+        private func applyWholeDocumentSplice(newSource: String, selection: NSRange) {
+            guard let textView else { return }
             let current = textView.string
-            let moved = BlockReorder.move(current, from: from, to: to)
-            guard moved != current else { return }
+            guard newSource != current else { return }
 
             let fullRange = NSRange(location: 0, length: (current as NSString).length)
-            let savedSelection = textView.selectedRange()
             let clipView = textView.enclosingScrollView?.contentView
             let savedScrollOrigin = clipView?.bounds.origin
 
             isPerformingEdit = true
             textView.breakUndoCoalescing()
             textView.undoManager?.beginUndoGrouping()
-            textView.insertText(moved, replacementRange: fullRange)
+            textView.insertText(newSource, replacementRange: fullRange)
             textView.undoManager?.endUndoGrouping()
             textView.breakUndoCoalescing()
             isPerformingEdit = false
 
-            // A whole-document splice invalidates every block — the caret-scoped
-            // pass that ran inside textDidChange can't cover it, and waiting for
-            // the 150 ms debounce would flash undecorated text.
             applyDecorations(scopedTo: nil)
+            refreshMarkerVisibility()
 
-            // Restore caret (clamped) and scroll — a reorder must not teleport
-            // the viewport (plan: "caret and scroll don't jump").
-            let newLength = (moved as NSString).length
-            textView.setSelectedRange(NSRange(location: min(savedSelection.location, newLength),
-                                              length: 0))
+            let newLength = (newSource as NSString).length
+            let clampedLocation = max(0, min(selection.location, newLength))
+            let clampedLength = max(0, min(selection.length, newLength - clampedLocation))
+            textView.setSelectedRange(NSRange(location: clampedLocation, length: clampedLength))
             if let clipView, let savedScrollOrigin {
                 clipView.scroll(to: savedScrollOrigin)
                 textView.enclosingScrollView?.reflectScrolledClipView(clipView)
@@ -573,6 +1240,10 @@ struct MarkdownTextView: NSViewRepresentable {
 
         @objc func clipViewBoundsDidChange(_ notification: Notification) {
             schedulePublishBlockRects()
+            // A scroll moves the hovered link out from under the pointer — the
+            // anchored popover would drift; hide it. (The slash/autocomplete menus
+            // stay, matching the slash menu's existing scroll behavior.)
+            clearHover()
         }
 
         /// Coalesces to one publication per runloop turn — layout/scroll callbacks
@@ -610,8 +1281,10 @@ struct MarkdownTextView: NSViewRepresentable {
                     rect.origin.x += origin.x
                     rect.origin.y += origin.y
                     let inScrollView = scrollView.convert(rect, from: textView)
+                    let kind = NoteDecoration.blockKind(source, of: block) ?? .paragraph
                     rects.append(MarkdownBlockRect(index: index,
-                                                   rect: flipToOverlay(inScrollView, in: scrollView)))
+                                                   rect: flipToOverlay(inScrollView, in: scrollView),
+                                                   kind: kind))
                 }
             }
             if rects != lastPublishedRects {
@@ -649,6 +1322,77 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 }
 
+// MARK: - Focus-reporting text view (Phase 1 / BAK-250)
+
+/// An `NSTextView` that reports first-responder gain/loss to the coordinator, so
+/// marker hiding keys off ACTUAL focus. `textDidBegin/EndEditing` were the wrong
+/// signal — they fire on the first/last keystroke of an editing session, so a
+/// plain click-in (before typing) or click-away wouldn't toggle focus. Overriding
+/// `become`/`resignFirstResponder` is the reliable hook.
+final class FocusReportingTextView: NSTextView {
+    weak var focusCoordinator: MarkdownTextView.Coordinator?
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome { focusCoordinator?.setFocus(true) }
+        return didBecome
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResign = super.resignFirstResponder()
+        if didResign { focusCoordinator?.setFocus(false) }
+        return didResign
+    }
+
+    // MARK: Wikilink hover tracking (Notes polish pack C)
+
+    /// One tracking area over the visible rect feeds mouseMoved into the
+    /// coordinator's hover hit-test. `.inVisibleRect` keeps the rect in sync with
+    /// scrolling/resizes without manual re-add; the coordinator owns all decisions
+    /// (which link, debounce, publish) — this view only forwards pointer events.
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseMoved, .mouseEnteredAndExited,
+                                            .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        focusCoordinator?.handleHoverMove(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        focusCoordinator?.clearHover()
+    }
+
+    /// A single click on a checkbox glyph toggles it instead of placing a caret.
+    /// Everything else (multi-click, non-checkbox clicks) falls through to normal
+    /// text-view behaviour.
+    override func mouseDown(with event: NSEvent) {
+        // Plain single clicks only — a modifier click (shift/cmd/etc.) must still
+        // extend/place a selection that can start on a checkbox's column.
+        let plainClick = event.modifierFlags
+            .intersection([.shift, .command, .control, .option]).isEmpty
+        if event.clickCount == 1, plainClick, let layoutManager, let textContainer,
+           focusCoordinator?.handleCheckboxClick(
+               at: convert(event.locationInWindow, from: nil),
+               layoutManager: layoutManager,
+               textContainer: textContainer,
+               containerOrigin: textContainerOrigin) == true {
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
 // MARK: - Subpage-card drawing (2b Task 10)
 
 /// TK1 layout manager that draws a Craft-style card BEHIND any range carrying the
@@ -672,11 +1416,72 @@ final class CardLayoutManager: NSLayoutManager {
         }
     }()
 
+    /// One SF Symbol flattened to a single tint (same recipe as `cardIcon`),
+    /// cached. `nil` only if the symbol is unavailable on the OS.
+    private static func glyphImage(_ name: String, pointSize: CGFloat, color: NSColor) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: NSFont.Weight.regular)
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) else { return nil }
+        let size = symbol.size
+        return NSImage(size: size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            color.set()
+            rect.fill(using: NSCompositingOperation.sourceAtop)
+            return true
+        }
+    }
+    private static let checkboxUnchecked = glyphImage("square", pointSize: 15, color: Theme.NSPalette.textTertiary)
+    private static let checkboxChecked = glyphImage("checkmark.square", pointSize: 15, color: Theme.NSPalette.accent)
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first else { return }
 
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+
+        // Block glyphs (checkbox / bullet / divider) drawn over their transparent
+        // raw-markdown characters (Phase: block-glyph rendering).
+        storage.enumerateAttribute(NSAttributedString.Key.mustardBlockGlyph,
+                                   in: charRange, options: []) { value, range, _ in
+            guard let code = (value as? NSNumber)?.intValue,
+                  let glyph = BlockGlyphCode(rawValue: code) else { return }
+            let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { return }
+            var markerRect = self.boundingRect(forGlyphRange: glyphRange, in: container)
+            markerRect.origin.x += origin.x
+            markerRect.origin.y += origin.y
+
+            switch glyph {
+            case .checkboxUnchecked, .checkboxChecked:
+                let image = (glyph == .checkboxChecked)
+                    ? CardLayoutManager.checkboxChecked : CardLayoutManager.checkboxUnchecked
+                guard let image else { return }
+                let iconRect = NSRect(x: markerRect.minX + 1.0,
+                                      y: markerRect.midY - image.size.height / 2.0,
+                                      width: image.size.width, height: image.size.height)
+                image.draw(in: iconRect, from: NSRect.zero,
+                           operation: NSCompositingOperation.sourceOver,
+                           fraction: 1.0, respectFlipped: true, hints: nil)
+            case .bullet:
+                let diameter: CGFloat = 5.0
+                let dot = NSRect(x: markerRect.minX + 3.0, y: markerRect.midY - diameter / 2.0,
+                                 width: diameter, height: diameter)
+                Theme.NSPalette.textPrimary.setFill()
+                NSBezierPath(ovalIn: dot).fill()
+            case .divider:
+                // Span the whole line fragment, not the narrow "---" glyph rect.
+                var lineRect = self.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+                lineRect.origin.x += origin.x
+                lineRect.origin.y += origin.y
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: lineRect.minX + 2.0, y: lineRect.midY))
+                path.line(to: NSPoint(x: lineRect.maxX - 8.0, y: lineRect.midY))
+                Theme.NSPalette.hairline.setStroke()
+                path.lineWidth = 1.0
+                path.stroke()
+            }
+        }
+
         storage.enumerateAttribute(NSAttributedString.Key.mustardSubpageCard,
                                    in: charRange,
                                    options: []) { value, range, _ in

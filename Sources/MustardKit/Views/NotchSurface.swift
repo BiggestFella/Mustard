@@ -112,6 +112,8 @@ public struct NotchView: View {
     @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
     @Environment(NotchNavigation.self) private var nav
+    /// Optional: absent in previews/tests that don't wire the recorder.
+    @Environment(MeetingCaptureCoordinator.self) private var meetingRecorder: MeetingCaptureCoordinator?
     @Query private var tasks: [MustardTask]
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query(sort: \CalendarEvent.start) private var events: [CalendarEvent]
@@ -140,7 +142,9 @@ public struct NotchView: View {
     }
 
     private var waitingCount: Int {
-        pending.count + needsReviewCount
+        // Both agent attention stages count — a Needs You question waits on you just like a
+        // Needs Review output (mirrors PersonalBoard.waitingCount / AgentInbox).
+        pending.count + AgentInbox.attentionTaskCount(tasks)
     }
 
     private var nextMeeting: CalendarEvent? {
@@ -245,6 +249,11 @@ public struct NotchView: View {
                 )
                 let tick = Int(timeline.date.timeIntervalSinceReferenceDate / 4)
                 HStack(spacing: 5) {
+                    // Persistent recording indicator (meeting recorder spec):
+                    // visible for the whole recording, even on the idle strip.
+                    if case .recording = meetingRecorder?.state {
+                        Circle().fill(Color(hex: "#FF5F57")).frame(width: 5, height: 5)
+                    }
                     if agent.isExecuting {
                         Circle().fill(Color(hex: "#7F77DD")).frame(width: 5, height: 5)
                     } else if waitingCount > 0 {
@@ -276,6 +285,10 @@ public struct NotchView: View {
             agendaSection
 
             Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+
+            // Manual meeting recorder (Meetings Task 6): consent-gated
+            // Start Meeting, live controls while recording.
+            MeetingRecordingNotchView()
 
             captureBar
         }

@@ -29,6 +29,11 @@ public enum BridgeExport {
         for t in tasks where exportStages.contains(t.stage) {
             guard let target = route(t) else { continue }
             activeByDir[target.workingDir, default: []].insert(t.uid)
+            // The local task coordinator owns ordinary agent-lane work. Only a run
+            // explicitly handed off to a connected worker may create a new bridge
+            // order. Keep this after active bookkeeping so historical live orders
+            // remain represented and are not spuriously cancelled.
+            guard t.agentRun?.requiresConnectedWorker == true else { continue }
             // A queued task with no actionType would export an `execute` order with
             // actionType="" — the worker can't act on it (BAK-89). Skip it; the UI
             // surfaces "needs an action type". forAgent/prep is exempt: an empty action

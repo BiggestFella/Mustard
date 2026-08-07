@@ -18,6 +18,8 @@ public struct FileVaultIO: MeetingVaultIO {
         self.init(root: URL(fileURLWithPath: rootPath, isDirectory: true))
     }
 
+    public var rootPath: String { root.path }
+
     public func meetingNotePaths() -> [String] {
         // Subtrees never worth descending into — pruning keeps the 60s harvest cheap
         // even when a KB embeds a built site (node_modules can be tens of thousands of
@@ -87,6 +89,8 @@ public protocol NoteVaultIO {
     func write(_ relativePath: String, _ contents: String) throws
     func snapshot(_ relativePath: String, _ contents: String) throws
     func modificationDate(_ relativePath: String) -> Date?
+    func move(from: String, to: String) throws
+    func trash(_ relativePath: String) throws
 }
 
 extension FileVaultIO: NoteVaultIO {
@@ -110,5 +114,20 @@ extension FileVaultIO: NoteVaultIO {
     public func modificationDate(_ relativePath: String) -> Date? {
         let path = root.appendingPathComponent(relativePath).path
         return (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    }
+
+    public func move(from: String, to: String) throws {
+        let src = root.appendingPathComponent(from)
+        let dst = root.appendingPathComponent(to)
+        try fileManager.createDirectory(at: dst.deletingLastPathComponent(),
+                                        withIntermediateDirectories: true)
+        try fileManager.moveItem(at: src, to: dst)
+    }
+
+    /// System Trash (Finder-recoverable) — Mustard isn't git-backed yet, so this is
+    /// the reversible delete (Notes polish pack: no hard delete in this slice).
+    public func trash(_ relativePath: String) throws {
+        try fileManager.trashItem(at: root.appendingPathComponent(relativePath),
+                                  resultingItemURL: nil)
     }
 }

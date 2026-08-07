@@ -11,6 +11,17 @@ import Observation
 @MainActor
 @Observable
 public final class AgentService {
+    private struct DelegationRunSnapshot {
+        let state: AgentRunState
+        let requiresConnectedWorker: Bool
+        let completedAt: Date?
+        let lastOutcomeRaw: String?
+        let lastError: String?
+        let lastActivityAt: Date
+        let nextAttemptAt: Date?
+        let autoRetryCount: Int
+    }
+
     public private(set) var isSweeping = false
     public private(set) var isExecuting = false
     public private(set) var lastError: String?
@@ -25,12 +36,19 @@ public final class AgentService {
     private let context: ModelContext
     private let claude: ClaudeRun
     private let bridge: BridgeIO
+    private let executionGate: AgentExecutionGate
+    private let persist: () throws -> Void
+    private let busyHint = "The agent is finishing another task. This work will stay queued and retry shortly."
 
     public init(context: ModelContext, claude: @escaping ClaudeRun = ClaudeRunner.run,
-                bridge: BridgeIO = FileBridgeIO()) {
+                bridge: BridgeIO = FileBridgeIO(),
+                executionGate: AgentExecutionGate? = nil,
+                persist: (() throws -> Void)? = nil) {
         self.context = context
         self.claude = claude
         self.bridge = bridge
+        self.executionGate = executionGate ?? AgentExecutionGate()
+        self.persist = persist ?? { try context.save() }
     }
 
     /// Manual vault sweep: ask claude for recommendations, ingest them through the
@@ -42,7 +60,11 @@ public final class AgentService {
         lastError = nil
         defer { isSweeping = false }
 
-        let result = await claude(VaultSweep.prompt, vaultPath)
+        guard let result = await runClaude(
+            VaultSweep.prompt,
+            workingDirectory: vaultPath,
+            owner: "source sweep"
+        ) else { return }
         guard result.ok else {
             lastError = "Sweep failed: \(result.text)"
             return
@@ -112,7 +134,11 @@ public final class AgentService {
                 lastSweptAt: state?.lastSweptAt, intervalHours: config.intervalHours, now: now
             ) else { continue }
 
-            let result = await claude(VaultSweep.prompt, config.workingDirectory)
+            guard let result = await runClaude(
+                VaultSweep.prompt,
+                workingDirectory: config.workingDirectory,
+                owner: "scheduled source sweep"
+            ) else { continue }
             guard result.ok else {
                 updated.upsertState(SourceState(id: config.id, project: config.project, lastSweptAt: state?.lastSweptAt, lastError: result.text))
                 continue
@@ -169,20 +195,102 @@ public final class AgentService {
         for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
     }
 
+    /// Export area-less connected-worker tasks to the default KB's outbox (F26,
+    /// ADR-0011 addendum). The per-source `exportWorkOrders` filters by area, so an
+    /// approved voice hand-off that inferred no client area is invisible to it and
+    /// strands (BAK-90). This routes exactly those orphans — tasks with no area — to
+    /// the injected default working dir instead, so the connected worker can still
+    /// pick them up. `BridgeExport.plan` still applies the real gates (export stage +
+    /// `requiresConnectedWorker`), so ordinary local tasks are never exported here.
+    /// The default dir must be distinct from the enabled source dirs (it is — the
+    /// meeting vault isn't a sweep source) so the two passes never cancel each other.
+    public func exportAreaLessWork(workingDir: String, project: String) {
+        guard !workingDir.isEmpty else { return }
+        let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
+        let target = BridgeExport.RouteTarget(workingDir: workingDir, project: project)
+        let orphans = all.filter { $0.list?.area == nil }
+        let plan = BridgeExport.plan(
+            tasks: orphans, route: { _ in target },
+            liveOutboxUIDs: [workingDir: bridge.liveOutboxUIDs(workingDir: workingDir)],
+            liveResultUIDs: [workingDir: bridge.liveResultUIDs(workingDir: workingDir)], now: .now)
+        for w in plan.writes { try? bridge.writeWorkOrder(w.order, workingDir: workingDir) }
+        for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
+    }
+
     /// Ingest `_agent/results/` for one KB working dir: apply each (guarded) and archive it.
     public func ingestAgentResults(workingDir: String) {
         let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
         let byUID = Dictionary(all.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         for (result, path) in bridge.readResults(workingDir: workingDir) {
-            let outcome = BridgeIngest.apply(result, to: byUID[result.uid])
-            if outcome == .applied, result.status == "failed" {
-                lastError = "Agent run failed: \(result.error ?? "unknown")"
+            let task = byUID[result.uid]
+            let outcome = BridgeIngest.apply(result, to: task)
+            if outcome == .applied {
+                if result.status == "failed" {
+                    lastError = "Agent run failed: \(result.error ?? "unknown")"
+                }
+                if let task, let run = task.agentRun {
+                    normalizeConnectedResult(result, into: run)
+                }
             }
             try? bridge.archiveResult(path, workingDir: workingDir)
         }
         // Hygiene (BAK-84): move any undecodable / empty-uid result aside so it isn't
         // silently re-scanned every loop. (readResults already skipped it above.)
         bridge.quarantineUndecodableResults(workingDir: workingDir)
+    }
+
+    /// Fold a connected-worker bridge result into the task's durable conversation and run
+    /// state, so bridge-executed work lands in the same timeline as local Claude turns.
+    /// - execute done → `.result`, run `.completed`, clear the fallback flag
+    /// - prep done    → `.progress`, run `.queued` (retain the flag for the execute pass)
+    /// - declined     → `.error`, run `.cancelled`, clear the fallback flag
+    /// - failed       → `.error`, run `.failed`, retain the flag so export re-issues (retry)
+    private func normalizeConnectedResult(_ r: AgentResult, into run: AgentRun) {
+        let now = Date.now
+        let summary = (r.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (r.mode, r.status) {
+        case ("execute", "done"):
+            run.state = .completed
+            run.completedAt = now
+            run.requiresConnectedWorker = false
+            run.lastError = nil
+            AgentConversation.append(
+                to: run, role: .agent, kind: .result,
+                content: summary.isEmpty ? "Connected worker completed the task." : summary,
+                links: r.links ?? [], now: now, in: context)
+
+        case ("prep", "done"):
+            run.state = .queued
+            run.completedAt = nil
+            AgentConversation.append(
+                to: run, role: .agent, kind: .progress,
+                content: summary.isEmpty ? "Connected worker prepared the task for approval." : summary,
+                now: now, in: context)
+
+        case (_, "declined"):
+            run.state = .cancelled
+            run.completedAt = now
+            run.requiresConnectedWorker = false
+            AgentConversation.append(
+                to: run, role: .agent, kind: .error,
+                content: "Connected worker passed on this" + (summary.isEmpty ? "." : ": \(summary)"),
+                now: now, in: context)
+
+        case (_, "failed"):
+            run.state = .failed
+            run.completedAt = now
+            run.lastError = r.error ?? "Connected worker failed."
+            // Retain requiresConnectedWorker so the next export re-issues the order (retry).
+            AgentConversation.append(
+                to: run, role: .agent, kind: .error,
+                content: "Connected worker failed: \(r.error ?? "unknown").",
+                now: now, in: context)
+
+        default:
+            break
+        }
+
+        AgentConversation.materializeDrafts(r.drafts ?? [], into: run, in: context)
     }
 
     private func ingest(_ proposals: [SourceProposal], vaultPath: String) {
@@ -356,10 +464,14 @@ public final class AgentService {
         promote(rec, to: .queued, owner: .agent)
     }
 
-    /// Delegate a task to the agent ("Ask agent to do this"). Trivial under the
-    /// board model (ADR-0010): the task simply hands off to the agent at `.forAgent`;
-    /// a prep session picks it up, fleshes it out, and moves it to `.needsApproval`.
+    /// Delegate a task to the agent ("Ask agent to do this"). The hand-off creates
+    /// one durable queued run and its initial human transcript; re-delegating reuses
+    /// that same run so provider session and message history remain intact.
     public func delegate(_ task: MustardTask) {
+        // Agent-owned calls (including repeated clicks while active) are deliberately
+        // inert. Human re-delegation is only legal from an explicit human lane.
+        let humanStages: Set<TaskStage> = [.inbox, .planned, .scheduled, .inProgress, .blocked]
+        guard task.owner == .me, humanStages.contains(task.stage) else { return }
         // BAK-90: require a client area first — the bridge export filters by area, so an
         // area-less hand-off would silently never route. Block it and surface a hint.
         guard PersonalBoard.canHandOffToAgent(task) else {
@@ -367,9 +479,77 @@ public final class AgentService {
                 + "file it under Digital Licence / Sales Buddi / Sandvik / Code Heroes first."
             return
         }
+        let previousOwner = task.owner
+        let previousStage = task.stage
+        let previousRun = task.agentRun
+        let previousRunState = previousRun.map {
+            DelegationRunSnapshot(
+                state: $0.state,
+                requiresConnectedWorker: $0.requiresConnectedWorker,
+                completedAt: $0.completedAt,
+                lastOutcomeRaw: $0.lastOutcomeRaw,
+                lastError: $0.lastError,
+                lastActivityAt: $0.lastActivityAt,
+                nextAttemptAt: $0.nextAttemptAt,
+                autoRetryCount: $0.autoRetryCount
+            )
+        }
+
         lastHint = nil
         task.owner = .agent
         task.stage = .forAgent
+
+        let run: AgentRun
+        if let existing = previousRun {
+            run = existing
+        } else {
+            run = AgentRun(task: task)
+            task.agentRun = run
+            context.insert(run)
+        }
+
+        let message = AgentMessage(
+            run: run,
+            sequence: (run.messages?.map(\.sequence).max() ?? -1) + 1,
+            role: .human,
+            kind: .delegation,
+            content: delegationBody(for: task)
+        )
+        context.insert(message)
+        run.state = .queued
+        run.requiresConnectedWorker = false
+        run.completedAt = nil
+        run.lastOutcomeRaw = nil
+        run.lastError = nil
+        // A human re-delegation is a clean slate: drop any stale backoff window / retry
+        // budget so the coordinator picks it up immediately with a full retry allowance.
+        run.nextAttemptAt = nil
+        run.autoRetryCount = 0
+        run.lastActivityAt = message.createdAt
+
+        do {
+            try persist()
+        } catch {
+            task.owner = previousOwner
+            task.stage = previousStage
+            task.agentRun = previousRun
+            run.messages?.removeAll { $0 === message }
+            context.delete(message)
+            if let previousRun, let snapshot = previousRunState {
+                previousRun.state = snapshot.state
+                previousRun.requiresConnectedWorker = snapshot.requiresConnectedWorker
+                previousRun.completedAt = snapshot.completedAt
+                previousRun.lastOutcomeRaw = snapshot.lastOutcomeRaw
+                previousRun.lastError = snapshot.lastError
+                previousRun.lastActivityAt = snapshot.lastActivityAt
+                previousRun.nextAttemptAt = snapshot.nextAttemptAt
+                previousRun.autoRetryCount = snapshot.autoRetryCount
+            } else {
+                context.delete(run)
+            }
+            lastError = "Could not save the agent hand-off: \(error.localizedDescription)"
+            lastHint = "The hand-off wasn’t saved. Your task is still with you."
+        }
     }
 
     /// Clear the transient hand-off hint (e.g. after a successful drop into an agent lane).
@@ -387,6 +567,12 @@ public final class AgentService {
         // (approved-but-no-task). If we're busy, it simply stays queued for a later run.
         let task = promote(rec, to: .queued, owner: .agent)
         guard !isExecuting else { return }
+        guard let token = executionGate.tryAcquire(owner: "recommendation execution") else {
+            lastHint = busyHint
+            return
+        }
+        defer { executionGate.release(token) }
+        if lastHint == busyHint { lastHint = nil }
         isExecuting = true
         currentTitle = rec.title
         rec.executionState = .running
@@ -408,5 +594,23 @@ public final class AgentService {
             lastError = "Execution failed: \(result.text)"
             task.stage = .queued
         }
+    }
+
+    private func runClaude(
+        _ prompt: String,
+        workingDirectory: String,
+        owner: String
+    ) async -> ClaudeResult? {
+        guard let token = executionGate.tryAcquire(owner: owner) else {
+            lastHint = busyHint
+            return nil
+        }
+        defer { executionGate.release(token) }
+        if lastHint == busyHint { lastHint = nil }
+        return await claude(prompt, workingDirectory)
+    }
+
+    private func delegationBody(for task: MustardTask) -> String {
+        task.notes.isEmpty ? task.title : "\(task.title)\n\n\(task.notes)"
     }
 }

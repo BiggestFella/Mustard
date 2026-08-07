@@ -42,3 +42,8 @@ targets:
         excludes:
           - "Views/**"
           - "PreviewData.swift"
+          # The resumable CLI runtime and its serial coordinator run the `claude`
+          # process (macOS-only, ADR-0003) and are used only by the macOS Views/app.
+          # iOS reads/writes the shared conversation data but never executes turns.
+          - "Agent/ClaudeTaskRuntime.swift"
+          - "Agent/AgentTaskCoordinator.swift"

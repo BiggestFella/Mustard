@@ -1,5 +1,12 @@
 # Agent Bridge — File Contract (Phase 2)
 
+> **Scope note (2026-07-13, F24):** the file bridge is now the **connected-worker fallback
+> only**. Ordinary delegated tasks run locally on `AgentTaskCoordinator` and never touch the
+> bridge; a card is exported **only** once a turn returns `requires_connected_worker` (its
+> run's `requiresConnectedWorker == true`). `BridgeExport` enforces this, so the local
+> coordinator and this bridge never both claim the same work. See CLAUDE.md → "Delegated
+> agent tasks & the connected-worker fallback".
+
 This is the interface between **Mustard** (the macOS app) and a **connected Claude
 session** (Phase 3: the worker skill/routine with the Shortcut/Gmail connectors and the
 DL skill). They cannot call each other directly — headless `claude -p` has no connectors

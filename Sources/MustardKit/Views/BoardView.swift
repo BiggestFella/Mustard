@@ -2,14 +2,15 @@ import SwiftUI
 import SwiftData
 
 /// The owner-segmented task board (BAK-79). A single board whose visible columns
-/// change with the owner lens (Everyone / Mine / Agent). Pipeline + two human gates
-/// (Needs Approval, Needs Review). Recreated from the design handoff; all hex/sizes
+/// change with the owner lens (Everyone / Mine / Agent). Pipeline + three attention
+/// columns (Needs Approval, Needs You, Needs Review). Recreated from the design handoff; all hex/sizes
 /// that Theme lacks (column kind tints) come straight from the handoff.
 ///
 /// Scope note: only the board content right of the existing app sidebar lives here.
 public struct BoardView: View {
     @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
+    @Environment(AgentTaskCoordinator.self) private var taskAgent
     @Query private var allTasks: [MustardTask]
     @Query(sort: \Area.name) private var areas: [Area]
 
@@ -38,7 +39,7 @@ public struct BoardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.Palette.bg)
-        .sheet(item: $selectedTask) { TaskDetailSheet(task: $0) }
+        .taskDetailDrawer(item: $selectedTask)
     }
 
     // MARK: Hand-off hint (BAK-90) — area required before agent hand-off
@@ -77,7 +78,7 @@ public struct BoardView: View {
                             .overlay(Capsule().stroke(reviewFocus ? Color.clear : Theme.Palette.agentTintBorder, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
-                    .help(reviewFocus ? "Show the full board." : "Focus the board on just the two gate columns.")
+                    .help(reviewFocus ? "Show the full board." : "Focus the board on just the three attention columns.")
                 }
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
@@ -100,7 +101,7 @@ public struct BoardView: View {
 
             HStack(spacing: 6) {
                 Text("●").foregroundStyle(Theme.Palette.agent)
-                Text(reviewFocus ? "Review queue — everything waiting on you, both gates." : view.caption)
+                Text(reviewFocus ? "Review queue — everything waiting on you across all three attention columns." : view.caption)
             }
             .font(.system(size: 12.5))
             .foregroundStyle(Theme.Palette.statusMutedText)
@@ -274,16 +275,34 @@ public struct BoardView: View {
                 agent.delegate(task)   // no-ops the hand-off and sets the hint banner
                 return false
             }
+            // Your own lanes — pulling an agent task into one of these is a take-back.
+            let personalLanes: Set<TaskStage> = [.planned, .scheduled, .blocked]
+            let hasLiveRun = task.owner == .agent && task.agentRun?.state == .running
             if stage == .done {
+                // Cancel a live agent turn through the coordinator before marking its task
+                // done, or the running claude process is orphaned and holds the serial slot
+                // until it finishes (Task 7 quality review).
+                if hasLiveRun { taskAgent.takeBack(task) }
                 TaskCompletion.complete(task, in: context)
+            } else if task.owner == .agent, personalLanes.contains(stage) || (hasLiveRun && stage == .inbox) {
+                // Take-back: route through the coordinator so any live run is cancelled and
+                // the slot released, then honour the exact lane it was dropped into. Inbox is
+                // a shared lane, but a *running* task dragged there is still a take-back —
+                // otherwise its turn would be orphaned exactly like the Done case above.
+                taskAgent.takeBack(task)
+                if stage != .planned { PersonalBoard.move(task, to: stage) }
+                task.owner = .me   // guarantee owner coherence even if takeBack no-ops
             } else {
+                // NOTE (Task 10 board-hardening follow-up): dragging a *running* agent task
+                // between agent lanes here still does not cancel its turn — the requeue
+                // semantics there are a product question, not a mechanical take-back.
                 PersonalBoard.move(task, to: stage)
                 // Keep owner coherent with the lane dropped into; Inbox/Done are shared.
                 switch stage {
-                case .forAgent, .needsApproval, .queued, .needsReview:
+                case .forAgent, .needsApproval, .queued, .inProgress, .needsInput, .needsReview:
                     task.owner = .agent
                     agent.clearHint()   // successful hand-off clears any prior hint
-                case .planned, .scheduled, .inProgress, .blocked: task.owner = .me
+                case .planned, .scheduled, .blocked: task.owner = .me
                 case .inbox, .done: break
                 }
             }
@@ -449,5 +468,6 @@ struct QuickColumnAdd: View {
         .frame(width: 1100, height: 700)
         .modelContainer(PreviewData.container)
         .environment(AgentService(context: PreviewData.container.mainContext))
+        .environment(AgentTaskCoordinator(context: PreviewData.container.mainContext))
 }
 #endif

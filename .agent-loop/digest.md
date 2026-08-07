@@ -2,6 +2,16 @@
 
 Append-only ledger of merges and holds. Each entry carries a ready `git revert` line.
 
+## 2026-07-24 — MERGED · Fix: compile shared task chips into the iOS target (PR #99)
+- **Risk:** low (mechanical file move, no behaviour change) · **Deep-review:** n/a
+- **Checks:** macOS swift build clean + swift test 1033 pass/1 skip · **iOS Simulator + device(arm64) CLEAN build SUCCEEDED (fresh DerivedData)** · CI (self-hosted, macOS-only) green 56s
+- **Review:** fresh-context APPROVE — byte-compared the moved FlowMeta (identical), confirmed exactly one definition, no AppKit/Views-only deps remain, desktop unaffected; independently reproduced the clean iOS build.
+- **Root cause:** `main`'s iOS app did NOT clean-build — MobileTaskSheet/MobileTodayView reference `PriorityFlag`/`TaskChipRow` (BAK-244/245 shared chips) + the `FlowMeta` layout, all living in `Sources/MustardKit/Views/**` which project.yml excludes from the iOS target. Prior `build-ios.sh` passes were stale-incremental-cache illusions. **CI never caught it: the self-hosted CI runs only `swift test`/`swift build` (macOS SPM), never the iOS xcodebuild.**
+- **Fix:** moved the shared, pure-SwiftUI UI to a new (non-excluded) `Sources/MustardKit/SharedUI/` — `TaskChips.swift` (git mv, history preserved) + `FlowMeta.swift` (extracted verbatim from MustardBoardCard.swift). Both targets compile it; desktop unchanged (same module).
+- **Follow-up (open):** add an iOS `xcodebuild` lane to CI so `Views/**`-boundary regressions can't land silently again.
+- **Revert:** `git revert df60dfcf01f64842bd916a529ac16e0cab52e11c`
+
+
 ## 2026-07-06 — MERGED · Craft pass — Theme tokens, surface polish, live Notes editor (PR #78)
 - **Risk:** HIGH (new live editing surface over vault files — spec's own call; an earlier
   mechanical-medium classification was corrected after fresh-context review flagged it)
@@ -476,3 +486,143 @@ Append-only ledger of merges and holds. Each entry carries a ready `git revert` 
 - **Remaining:** manual live connect test (Task 10, Leon) — paste Desktop client id+secret in Settings → Connect
 - **Follow-ups:** BAK-71 (Theme error token, test stub dedup, window edge)
 - **Revert:** `git revert e7675bd7da0536f1dcc263ebe19eb8e87c6c8b65`
+
+## 2026-07-10 — MERGED · hotfix: duplicate Theme.Motion enum (PR #85)
+- **Risk:** low–medium (design tokens; Sources/) · **Auto-merged** (no deep-review needed)
+- **Checks:** swift build clean · swift test 686 pass/1 skip/0 fail
+- **Why:** main did not compile — PR #83 left a 2nd `Theme.Motion` enum beside PR #78's (CI runner was down, so no build gate caught it). Blocked all ticket work.
+- **What landed:** merged both enums into one canonical Motion (easeOut/easeInOut/drag/settle/expand/pop); `settle` = snappy(0.16) from #83's set. No call-site changes.
+- **Outward actions:** none
+- **Prerequisite for:** BAK-246/247/245/244 (Linear kickoff pickup)
+- **Revert:** `git revert d38c95054ab62f0fddf2e09eacb5c311ad0e8e57`
+
+## 2026-07-10 — MERGED · BAK-246 Scheduled tasks stuck in Inbox (PR #86)
+- **Risk:** medium (Logic/Views + idempotent store migration) · **Auto-merged** (no deep-review)
+- **Checks:** swift build clean · swift test 692 pass/1 skip/0 fail
+- **Fresh-context review:** PASS (standards/spec/risk/tests; all scheduledAt write sites traced)
+- **What landed:** `PersonalBoard.normalizePlacement` invariant helper (scheduled ⇒ never .inbox; timed→.scheduled else .planned), called at every scheduledAt write site (desktop+iOS), + `BoardMigration.normalizeScheduledPlacement` one-time launch repair. 6 new tests.
+- **Outward actions:** none
+- **iOS:** build-ios.sh not run in-session (no toolchain); mobile change mirrors desktop, Leon eye-check pending
+- **Run:** `.agent-loop/runs/20260710-200334-bak-246-inbox-placement/`
+- **Revert:** `git revert ce72ce24546520c80862a1a66f748e0ddae9e6b7`
+
+## 2026-07-10 — MERGED · BAK-247 FOCUS pins duplicating in timeline (PR #87)
+- **Risk:** medium (Logic/Views display filter) · **Auto-merged** (no deep-review)
+- **Checks:** swift build clean · swift test 696 pass/1 skip/0 fail
+- **Fresh-context review:** PASS (mobile "no FOCUS section" claim independently verified)
+- **What landed:** `RitualPlanner.timeline` = tasksForDay minus focus-starred-today; TodayView filters the timeline + empty-state guards FOCUS. Display dedup (confirmed not a data dup). 4 new tests.
+- **Mobile:** unchanged — MobileTodayView has no FOCUS section, so no dup; filtering would regress.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260710-202258-bak-247-planner-dup/`
+- **Revert:** `git revert 470e9859b1f70c5f2c1617724bafa578c22d28ec`
+
+## 2026-07-10 — MERGED · BAK-245 TimelineRow condensed detail-card styling (PR #88)
+- **Risk:** medium (view restyle) · **Auto-merged** (no deep-review)
+- **Checks:** swift build clean · swift test 696 pass/1 skip/0 fail
+- **Fresh-context review:** PASS (token/vocab reuse verified; Week/WeekBlock + iOS-mirror claims verified; 4 non-blocking nits all fixed)
+- **What landed:** shared public chip vocabulary (TaskChips.swift: TaskRowDensity/PriorityFlag/MetaChip/TaskChipRow); TimelineRow → checkbox+bold title+inline flag+chip strip, gutter dropped; board card adopts shared PriorityFlag; iOS Today row mirrored; ListBadge removed.
+- **⚠ Leon eye-check PENDING (desktop + iOS) — iOS not built by swift build (needs build-ios.sh/xcodegen).**
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/*bak-245-timelinerow/`
+- **Revert:** `git revert e4648e8c8094ebe24818fb71193697be77e08d1a`
+
+## 2026-07-10 — MERGED · BAK-244 Opened-task detail design pass (PR #89)
+- **Risk:** medium (view restyle) · **Auto-merged** (no deep-review)
+- **Decision:** Leon chose live-edit-restyled (not read-first) during brainstorm; approved the mockup.
+- **Checks:** swift build clean · swift test 696 pass/1 skip/0 fail
+- **Fresh-context review:** PASS (live-edit fully preserved — all 14 controls + title binding intact; field helper unused; gating logic untouched)
+- **What landed:** TaskDetailSheet new header (stage badge+owner, editable docH1 title+inline flag, shared TaskChipRow) + calm hairline sections replacing grey cards; agentContext + BAK-136 footer kept; iOS MobileTaskSheet header mirrored.
+- **⚠ Leon eye-check PENDING (desktop + iOS) — iOS not built by swift build.**
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/*bak-244-task-detail/`
+- **Revert:** `git revert ac2b2964a67f1af60989555f45006281de47fd35`
+
+## 2026-07-11 — MERGED · Task detail right-side drawer (PR #90)
+- **Risk:** medium (view presentation) · **Auto-merged** (no deep-review)
+- **Origin:** Leon request during BAK-244 eye-check; docked style eye-confirmed in the running app.
+- **Checks:** swift build clean · swift test 696 pass/1 skip/0 fail
+- **Fresh-context review:** PASS (all close paths via close(); all 5 sheet sites converted; no surface missed)
+- **What landed:** reusable `.taskDetailDrawer(item:)` docks TaskDetailSheet on the trailing edge (reflow, full height, expand-motion slide, .id per task); TaskDetailSheet gained onClose + fills height; Today/Week/Board/Lists/notch swapped from .sheet.
+- **Desktop only;** iOS MobileTaskSheet keeps its bottom sheet.
+- **Note:** in-screen drawers now route SourceLinkButton to the source inspector (intended).
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/*task-detail-drawer/`
+- **Revert:** `git revert cd049eece8bd869e710b2b3502963a277dd23e50`
+
+## 2026-07-12 — MERGED · Craft editor Phase 0: shared BlockKind model (PR #91, BAK-249)
+- **Risk:** medium (Logic/+Tests/+docs only) · **Auto-merged** (no deep-review)
+- **Origin:** Leon brainstorm 2026-07-12 (four Craft/Tolaria screenshots) → spec `docs/specs/2026-07-12-craft-editor-menus-design.md` + epic BAK-248 (F23); this is sub-issue BAK-249.
+- **Checks:** swift build clean · swift test 717 pass/1 skip/0 fail (baseline 696 + 21 new BlockKindTests)
+- **Fresh-context review:** APPROVE, 0 blocking (additive-only confirmed; round-trip clause legitimately deferred to BAK-251/252; no premature consumers)
+- **What landed:** canonical `BlockKind` enum + additive `NoteDecoration.blockKind(_:of:)` classifier; new table/image/todo-vs-bullet classification (classification only, no rendering change); spec + F23 build-order entry ride along.
+- **⚠ Leon note:** heading levels 5-6 classify unclamped (spec's "1...4" read as the Phase-2 insert-menu range, not a classification cap — rationale in `BlockKind.swift`). Flag if you disagree.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260712-150000-bak249-blockkind/`
+- **Revert:** `git revert 5afbeca`
+
+## 2026-07-12 — MERGED · Craft editor Phase 1: fully-hidden markdown (PR #92, BAK-250)
+- **Risk:** medium (Logic/+Views/+Tests) · **Auto-merged** (no deep-review)
+- **Origin:** epic BAK-248 (spec `docs/specs/2026-07-12-craft-editor-menus-design.md`), flagged there as the epic's highest technical risk (NSTextView).
+- **Checks:** swift build clean · ./build-app.sh assembles · swift test 728 pass/1 skip/0 fail (baseline 717 + 11 new)
+- **Fresh-context review:** APPROVE-WITH-FOLLOW-UPS, 0 blocking. Finding 1 (stale-baseline selection guard) fixed inline on the PR; findings 2-3 → BAK-254.
+- **What landed:** pure `NoteDecoration.markerVisibility` focus-aware decision layer + TextKit-1 `setNotShownAttribute` glyph-flag hiding in MarkdownTextView — heading/quote/emphasis/inline-code markers hide when the block is unfocused, reveal on cursor-enter; text storage and `.md` on disk never change. Bullets/fences/rules/wikilink brackets deliberately stay visible (documented); checkbox brackets deferred (BAK-254).
+- **⚠ Leon eye-check PENDING:** hide/reveal feel, caret stability, cmd-tab-away behavior (may leave focused block's markers revealed — BAK-254 note), pills/cards/slash-menu/drag-reorder unaffected.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260712-153000-bak250-hidden-markdown/`
+- **Revert:** `git revert 8be3adc`
+
+## 2026-07-12 — MERGED · Craft editor Phase 2: expanded insert menu (PR #93, BAK-251)
+- **Risk:** medium (Logic/+Views/+Tests) · **Auto-merged** (no deep-review)
+- **Origin:** epic BAK-248 (spec `docs/specs/2026-07-12-craft-editor-menus-design.md`).
+- **Checks:** swift build clean · ./build-app.sh assembles · swift test 747 pass/1 skip/0 fail (baseline 728; SlashMenuTests 14→33)
+- **Fresh-context review:** APPROVE-WITH-FOLLOW-UPS, 0 blocking; reviewer verified the SlashMenuTests rewrite test-by-test (strengthening only, byte-exact original templates). Sole finding (highlight scrolls off-screen) fixed inline.
+- **What landed:** slash menu 5→16 grouped commands (Headings H1-4 / Basic blocks Quote·Bullet·Numbered·Check·Paragraph·Code·Divider / Advanced Table·Link·Sub-page·Ask-agent / Media Image syntax-only); grouped SlashMenuView with height cap + auto-scroll; round-trip guard on all new templates; MarkdownTextView keyboard code untouched. Table renders plain (full layout out of scope).
+- **⚠ Leon eye-check PENDING:** grouped menu look, ↑/↓ + auto-scroll feel, table/image insertion carets.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260712-160000-bak251-insert-menu/`
+- **Revert:** `git revert <squash-sha>` (see PR #93 merge commit on main)
+
+## 2026-07-12 — MERGED · Craft editor Phase 3: Turn into + block actions (PR #94, BAK-252)
+- **Risk:** medium (Logic/+Views/+Tests) · **Merged after review fix** (fresh-context review initially REQUEST-CHANGES)
+- **Origin:** epic BAK-248 (spec `docs/specs/2026-07-12-craft-editor-menus-design.md`).
+- **Checks:** swift build clean · ./build-app.sh assembles · swift test 798 pass/1 skip/0 fail (747 → 790 impl → 798 post-fix; BlockTransformTests 51)
+- **Fresh-context review:** caught a real blocking bug — turn-into→Paragraph could silently reclassify (`# > note` → quote); fixed with per-line backslash escapes reusing NoteDecoration.classify; audit found+fixed a 2nd instance (table-cell ``` closing a code fence). Divider menu gating + frontmatter-adjacent tests also fixed. 0 remaining blockers.
+- **What landed:** pure `BlockTransform` (turnInto/duplicate/delete/moveUp/moveDown, adversarial round-trip matrix), gutter ⠿ context menu (Turn into submenu + Actions, divider-gated), shared undo-safe `applyWholeDocumentSplice`, `MarkdownBlockRect.kind`.
+- **⚠ Leon eye-check PENDING:** menu feel, one-step undo per action, caret placement, escaped-output readability.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260712-163000-bak252-turn-into/`
+- **Revert:** `git revert 17d52e1`
+
+## 2026-07-12 — MERGED · Craft editor Phase 4: inline formatting toolbar (PR #95, BAK-253) — EPIC BAK-248 COMPLETE
+- **Risk:** medium (Logic/+Views/+Tests) · **Merged on green** (auto-merge arming disabled repo-side; merged post-CI)
+- **Origin:** epic BAK-248 final phase (spec `docs/specs/2026-07-12-craft-editor-menus-design.md`).
+- **Checks:** swift build clean · ./build-app.sh assembles · swift test 835 pass/1 skip/0 fail (798 + 37)
+- **Fresh-context review:** APPROVE-WITH-FOLLOW-UPS, 0 blocking; findings (== prose false-positive, 2nd O(doc) scan per selection change, unwrap-test completeness) appended to BAK-254.
+- **What landed:** floating selection toolbar (Bold/Italic/Strikethrough/Inline code/Highlight/Link) over pure `InlineFormat.toggle` with a re-parse wrap guard + involution tests; new `.strikethrough`/`.highlight` span kinds with Phase 1 hiding for free; undo-safe splice channel reused.
+- **Epic BAK-248 (F23) now fully merged: PRs #91 #92 #93 #94 #95 · suite 696 → 835 · follow-ups consolidated in BAK-254.**
+- **⚠ Leon eye-check PENDING (whole epic):** hidden-markdown feel + cmd-tab case · grouped slash menu + auto-scroll · turn-into/actions menu + one-step undo · toolbar toggles + link url-slot · escaped-output readability.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260712-170000-bak253-format-toolbar/`
+- **Revert:** `git revert 1456f77`
+
+## 2026-07-13 — MERGED · Craft editor eye-check fixes: working marker-hiding + block glyphs (PR #96)
+- **Risk:** medium (Logic/+Views/+Tests) · **Merged on green** (post-CI)
+- **Origin:** Leon's eye-check of the BAK-248 epic — markers weren't hiding in the running app, and checkboxes/bullets/dividers showed raw markdown.
+- **Checks:** swift build clean · ./build-app.sh assembles · swift test 866 pass/1 skip/0 fail (baseline 840) · Leon eye-confirmed
+- **Fresh-context review:** APPROVE, 0 blocking; below-last-line checkbox false-toggle fixed inline (fragment-rect guard + modifier-click exclusion).
+- **What landed:** (1) marker hiding rewritten setNotShownAttribute → shouldGenerateGlyphs `.null` glyph property (real reflow + regeneration-safe; the old API never actually hid in-app); focus via FocusReportingTextView; "always hidden" policy (Leon). (2) block glyphs — clickable checkbox toggling [ ]↔[x], bullet dot, divider rule — drawn over transparent raw markdown via .mustardBlockGlyph + CardLayoutManager (text==source, no NSTextAttachment). Pure NoteDecoration.blockGlyph + CheckboxToggle, 26 tests.
+- **Follow-ups (BAK-254):** per-keystroke full-doc marker rescan (bounded); blockquote still renders as plain text (no quote-bar yet); `* [X]` indented test gap.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260713-bak254-craft-glyphs/`
+- **Revert:** `git revert 26976fd`
+
+## 2026-07-20 — MERGED · Resumable agent task sessions + file-backed drafts (F24) (PR #97)
+- **Risk:** high (Agent/+Logic/+Models/+Views/+contract) · **Merged on green** (post-CI), Leon explicit approval after hands-on testing
+- **Origin:** Codex handoff (docs/handoffs/2026-07-13-agent-task-sessions-claude-handoff.md); Tasks 1–6 pre-built, Tasks 7–12 + drafts follow-on built this run.
+- **Checks:** swift build clean · ./build-app.sh assembles + worker-contract probe · swift test 1033 pass/1 skip/0 fail (baseline 866) · CI green on the mustard runner
+- **Fresh-context reviews:** core Tasks 1–12 (spec SPEC-COMPLETE; quality CRITICAL fixed: structured `outcome:failed` looped uncapped every 2s), drafts+editor (6 Important remediated: draft dedup, honest autosave, symlink confinement, rollback coverage, glyph-hook perf, env landmine doc).
+- **What landed:** durable AgentRun/AgentMessage conversations; serial AgentTaskCoordinator behind AgentExecutionGate; Needs You stage releases the slot; every completion → Needs Review; pure AgentTaskQueue/Transition/RetryPolicy (auth pause, 60/300/900s backoff cap 3, gated-action timeouts → completion-uncertain review); bridge reserved for requiresConnectedWorker fallback with results normalized into the conversation; all take-backs route through the coordinator; conversation/reply/review UI + console attention queue; file-backed drafts (`_agent/drafts/<uid>/`, drafts[] contract field, AgentDraft refs, companion side panel with debounced honest autosave + resolvedDraftURL symlink confinement); merged main's PR #96 marker hiding and added a staleness stamp + IndexSet span pre-check to the glyph hook.
+- **Safety:** drafts only — worker contract forbids sending/posting; task UID is binding idempotency metadata for ticket creation.
+- **Follow-ups (tracked):** running agent-lane→agent-lane drag doesn't cancel the live turn; pre-existing iOS shared-view-atom build break; bridge failed-result re-export has no retry cap; learning loop is phase two (docs/superpowers/plans/2026-07-13-agent-learning-loop.md).
+- **Outward actions:** none
+- **Revert:** `git revert d04a340`

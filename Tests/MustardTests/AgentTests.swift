@@ -179,7 +179,8 @@ final class AgentServiceTests: XCTestCase {
     private func makeContext() throws -> ModelContext {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
-            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self, CalendarEvent.self,
+            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
+            AgentRun.self, AgentMessage.self, CalendarEvent.self,
             configurations: config
         )
         return ModelContext(container)
@@ -408,9 +409,9 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(task.stage, .planned)
     }
 
-    // MARK: - delegate (trivial board hand-off)
+    // MARK: - delegate
 
-    func test_delegate_handsTaskToAgent_atForAgent() {
+    func test_delegate_handsTaskToAgent_atForAgent_andQueuesRunWithDelegationMessage() throws {
         let ctx = try! makeContext()
         let service = AgentService(context: ctx, claude: { _, _ in ClaudeResult(ok: true, text: "x") })
         let task = MustardTask(title: "Do this", owner: .me)
@@ -422,21 +423,204 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(task.owner, .agent)
         XCTAssertEqual(task.stage, .forAgent)
         XCTAssertNil(service.lastHint)
+
+        let run = try XCTUnwrap(task.agentRun)
+        XCTAssertEqual(run.state, .queued)
+        XCTAssertFalse(run.requiresConnectedWorker)
+        XCTAssertEqual(run.orderedMessages.map(\.kind), [.delegation])
+        XCTAssertEqual(run.orderedMessages.map(\.role), [.human])
+        XCTAssertEqual(run.orderedMessages.map(\.sequence), [0])
+        XCTAssertEqual(run.orderedMessages.map(\.content), ["Do this"])
+
+        try ctx.save()
+        let fetchedRun = try XCTUnwrap(ctx.fetch(FetchDescriptor<AgentRun>()).first)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<AgentRun>()).count, 1)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<AgentMessage>()).count, 1)
+        XCTAssertEqual(fetchedRun.task, task)
+        XCTAssertEqual(task.agentRun, fetchedRun)
     }
 
     // BAK-90: an area-less task can't be handed off (the bridge export filters by area,
     // so it would silently never route). Block it and surface a hint instead.
-    func test_delegate_areaLessTask_isBlocked_withHint() {
+    func test_delegate_areaLessTask_isBlocked_withHint() throws {
         let ctx = try! makeContext()
         let service = AgentService(context: ctx, claude: { _, _ in ClaudeResult(ok: true, text: "x") })
         let task = MustardTask(title: "Prep release DLV 2.21.0", owner: .me)  // no area
+        task.stage = .planned
         ctx.insert(task)
 
         service.delegate(task)
 
         XCTAssertEqual(task.owner, .me, "owner must not flip without an area")
-        XCTAssertNotEqual(task.stage, .forAgent, "must not stage for the agent")
+        XCTAssertEqual(task.stage, .planned, "stage must not change without an area")
         XCTAssertNotNil(service.lastHint, "should surface a 'needs an area' hint")
+        XCTAssertNil(task.agentRun)
+        XCTAssertTrue(try ctx.fetch(FetchDescriptor<AgentRun>()).isEmpty)
+        XCTAssertTrue(try ctx.fetch(FetchDescriptor<AgentMessage>()).isEmpty)
+    }
+
+    func test_delegate_existingRun_appendsCurrentRequest_andPreservesHistoryAndSession() throws {
+        let ctx = try makeContext()
+        let service = AgentService(context: ctx, claude: { _, _ in ClaudeResult(ok: true, text: "x") })
+        let task = MustardTask(title: "Prep release", owner: .me)
+        task.notes = "Check the changelog and draft release notes."
+        task.list = TaskList(name: "DL", area: Area(name: "Digital Licence"))
+        ctx.insert(task)
+
+        service.delegate(task)
+        let originalRun = try XCTUnwrap(task.agentRun)
+        originalRun.providerSessionID = "session-123"
+        originalRun.state = .completed
+        originalRun.requiresConnectedWorker = true
+        let priorResult = AgentMessage(
+            run: originalRun,
+            sequence: 1,
+            role: .agent,
+            kind: .result,
+            content: "Earlier result"
+        )
+        ctx.insert(priorResult)
+        originalRun.messages = (originalRun.messages ?? []) + [priorResult]
+        task.owner = .me
+        task.stage = .planned
+        task.title = "Prep release 2.0"
+        task.notes = "Use the edited changelog and include migration notes."
+
+        service.delegate(task)
+
+        XCTAssertEqual(task.agentRun, originalRun)
+        XCTAssertEqual(originalRun.providerSessionID, "session-123")
+        XCTAssertEqual(originalRun.state, .queued)
+        XCTAssertFalse(originalRun.requiresConnectedWorker)
+        XCTAssertEqual(originalRun.orderedMessages.map(\.kind), [.delegation, .result, .delegation])
+        XCTAssertEqual(originalRun.orderedMessages.map(\.sequence), [0, 1, 2])
+        XCTAssertEqual(originalRun.orderedMessages.last?.content,
+                       "Prep release 2.0\n\nUse the edited changelog and include migration notes.")
+        XCTAssertNil(originalRun.completedAt)
+        XCTAssertNil(originalRun.lastOutcomeRaw)
+        XCTAssertNil(originalRun.lastError)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<AgentRun>()).count, 1)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<AgentMessage>()).count, 3)
+    }
+
+    func test_delegate_agentOwnedActiveTask_isStrictNoOp() throws {
+        let ctx = try makeContext()
+        var persistCalls = 0
+        let service = AgentService(
+            context: ctx,
+            claude: { _, _ in ClaudeResult(ok: true, text: "x") },
+            persist: { persistCalls += 1; try ctx.save() }
+        )
+        let task = MustardTask(title: "Already running", owner: .agent)
+        task.stage = .inProgress
+        task.list = TaskList(name: "DL", area: Area(name: "Digital Licence"))
+        let run = AgentRun(task: task)
+        run.state = .running
+        run.providerSessionID = "active-session"
+        task.agentRun = run
+        let message = AgentMessage(
+            run: run, sequence: 0, role: .human, kind: .delegation, content: "Original"
+        )
+        ctx.insert(task); ctx.insert(run); ctx.insert(message)
+
+        service.delegate(task)
+
+        XCTAssertEqual(task.owner, .agent)
+        XCTAssertEqual(task.stage, .inProgress)
+        XCTAssertEqual(run.state, .running)
+        XCTAssertEqual(run.providerSessionID, "active-session")
+        XCTAssertEqual(run.orderedMessages.map(\.content), ["Original"])
+        XCTAssertEqual(persistCalls, 0)
+    }
+
+    func test_delegate_doneHumanTask_isStrictNoOp() throws {
+        let ctx = try makeContext()
+        var persistCalls = 0
+        let service = AgentService(
+            context: ctx,
+            claude: { _, _ in ClaudeResult(ok: true, text: "x") },
+            persist: { persistCalls += 1; try ctx.save() }
+        )
+        let task = MustardTask(title: "Finished", owner: .me)
+        task.stage = .done
+        task.list = TaskList(name: "DL", area: Area(name: "Digital Licence"))
+        ctx.insert(task)
+
+        service.delegate(task)
+
+        XCTAssertEqual(task.owner, .me)
+        XCTAssertEqual(task.stage, .done)
+        XCTAssertNil(task.agentRun)
+        XCTAssertEqual(persistCalls, 0)
+    }
+
+    func test_delegate_firstSaveFailure_rollsBackRunMessageAndTask_preservesUnrelatedEdit() throws {
+        let ctx = try makeContext()
+        let service = AgentService(
+            context: ctx,
+            claude: { _, _ in ClaudeResult(ok: true, text: "x") },
+            persist: { throw CocoaError(.fileWriteUnknown) }
+        )
+        let task = MustardTask(title: "Hand this off", owner: .me)
+        task.stage = .planned
+        task.list = TaskList(name: "DL", area: Area(name: "Digital Licence"))
+        let unrelated = MustardTask(title: "Before")
+        ctx.insert(task); ctx.insert(unrelated)
+        unrelated.title = "Keep this edit"
+
+        service.delegate(task)
+
+        XCTAssertEqual(task.owner, .me)
+        XCTAssertEqual(task.stage, .planned)
+        XCTAssertNil(task.agentRun)
+        XCTAssertTrue(try ctx.fetch(FetchDescriptor<AgentRun>()).isEmpty)
+        XCTAssertTrue(try ctx.fetch(FetchDescriptor<AgentMessage>()).isEmpty)
+        XCTAssertEqual(unrelated.title, "Keep this edit")
+        XCTAssertNotNil(service.lastError)
+        XCTAssertNotNil(service.lastHint)
+    }
+
+    func test_delegate_existingRunSaveFailure_restoresTerminalStateAndHistory_preservesUnrelatedEdit() throws {
+        let ctx = try makeContext()
+        let service = AgentService(
+            context: ctx,
+            claude: { _, _ in ClaudeResult(ok: true, text: "x") },
+            persist: { throw CocoaError(.fileWriteUnknown) }
+        )
+        let task = MustardTask(title: "Edited request", owner: .me)
+        task.notes = "New notes"
+        task.stage = .planned
+        task.list = TaskList(name: "DL", area: Area(name: "Digital Licence"))
+        let run = AgentRun(task: task)
+        run.state = .completed
+        run.providerSessionID = "session-1"
+        run.requiresConnectedWorker = true
+        run.completedAt = Date(timeIntervalSince1970: 10)
+        run.lastOutcomeRaw = "completed"
+        run.lastError = "old error"
+        task.agentRun = run
+        let original = AgentMessage(
+            run: run, sequence: 0, role: .human, kind: .delegation, content: "Old request"
+        )
+        let unrelated = MustardTask(title: "Before")
+        ctx.insert(task); ctx.insert(run); ctx.insert(original); ctx.insert(unrelated)
+        unrelated.title = "Keep this edit"
+
+        service.delegate(task)
+
+        XCTAssertEqual(task.owner, .me)
+        XCTAssertEqual(task.stage, .planned)
+        XCTAssertEqual(task.agentRun, run)
+        XCTAssertEqual(run.state, .completed)
+        XCTAssertEqual(run.providerSessionID, "session-1")
+        XCTAssertTrue(run.requiresConnectedWorker)
+        XCTAssertEqual(run.completedAt, Date(timeIntervalSince1970: 10))
+        XCTAssertEqual(run.lastOutcomeRaw, "completed")
+        XCTAssertEqual(run.lastError, "old error")
+        XCTAssertEqual(run.orderedMessages.map(\.content), ["Old request"])
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<AgentMessage>()).count, 1)
+        XCTAssertEqual(unrelated.title, "Keep this edit")
+        XCTAssertNotNil(service.lastError)
     }
 
     // MARK: - applyTrust

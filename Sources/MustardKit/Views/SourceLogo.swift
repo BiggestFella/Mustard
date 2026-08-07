@@ -31,6 +31,13 @@ public struct SourceLogo: View {
                 .font(.system(size: size * 0.85))
                 .foregroundStyle(.secondary)
                 .frame(width: size, height: size)
+        case .voice:
+            // A push-to-talk capture is Mustard's own, not a third party — there is no
+            // brand mark to trace, so it keeps the SF Symbol in the agent purple.
+            Image(systemName: "mic.fill")
+                .font(.system(size: size * 0.85))
+                .foregroundStyle(Color(hex: "#7F77DD"))
+                .frame(width: size, height: size)
         }
     }
 

@@ -6,7 +6,8 @@ final class AgentAreaStampingTests: XCTestCase {
     @MainActor
     private func ctx() throws -> ModelContext {
         let c = try ModelContainer(
-            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self, CalendarEvent.self,
+            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
+            AgentRun.self, AgentMessage.self, CalendarEvent.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         return ModelContext(c)
     }

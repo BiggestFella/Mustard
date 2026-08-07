@@ -140,7 +140,7 @@ struct RecommendationDetailView: View {
                     let cal = Calendar.current
                     if let tomorrow = cal.date(byAdding: .day, value: 1, to: .now) {
                         task.scheduledAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
-                        task.stage = .planned
+                        PersonalBoard.normalizePlacement(task)
                     }
                     context.insert(task)
                 }

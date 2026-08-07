@@ -200,19 +200,19 @@ public struct MorningRitualView: View {
 
     @ViewBuilder private var agentStep: some View {
         let pending = RecommendationQueue.pending(recs, now: .now)
-        let outputs = AgentInbox.outputCount(tasks)
-        if pending.isEmpty && outputs == 0 {
+        let attentionTasks = AgentInbox.attentionTaskCount(tasks)
+        if pending.isEmpty && attentionTasks == 0 {
             emptyLine("Nothing from the agent overnight.")
         } else {
             ForEach(pending) { rec in
                 standupRow(rec)
                 Divider().overlay(Theme.Palette.hairline)
             }
-            if outputs > 0 {
+            if attentionTasks > 0 {
                 Button {
                     onOpenConsole()
                 } label: {
-                    Text("\(outputs) output\(outputs == 1 ? "" : "s") waiting review — Open in console →")
+                    Text("\(attentionTasks) item\(attentionTasks == 1 ? "" : "s") waiting on you — Open in console →")
                         .font(Theme.Fonts.meta)
                         .foregroundStyle(Theme.Palette.accent)
                 }

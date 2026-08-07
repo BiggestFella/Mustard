@@ -87,41 +87,23 @@ struct MobileTodayView: View {
                                          : (task.owner == .agent ? Theme.Palette.agent : .secondary))
                 }.buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(task.title)
-                        .strikethrough(done)
-                        .foregroundStyle(done ? .secondary : .primary)
-                    HStack(spacing: 8) {
-                        if task.owner == .agent {
-                            Text("✦ Agent").font(.caption2).foregroundStyle(Theme.Palette.agentText)
-                        }
-                        if let area = task.list?.area {
-                            HStack(spacing: 4) {
-                                Circle().fill(Color(hex: area.colorHex)).frame(width: 6, height: 6)
-                                Text(area.name)
-                            }.font(.caption2).foregroundStyle(.secondary)
-                        }
-                        if let pill = gatePill(task) {
-                            Text(pill.0).font(.caption2.weight(.medium))
-                                .foregroundStyle(pill.1)
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(pill.1.opacity(0.14), in: Capsule())
-                        }
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        PriorityFlag(priority: task.priority)
+                        Text(task.title)
+                            .font(.system(size: 15.5, weight: done ? .regular : .semibold))
+                            .strikethrough(done)
+                            .foregroundStyle(done ? .secondary : .primary)
+                    }
+                    // Same condensed detail-card chip vocabulary as the desktop row
+                    // (BAK-245) — blocked · time · due · estimate · area · agent · subtasks.
+                    if TaskChipRow.hasChips(task) {
+                        TaskChipRow(task: task)
                     }
                 }
                 Spacer()
             }
             .padding(.vertical, 6)
         }.buttonStyle(.plain)
-    }
-
-    /// Mobile-only gate-status pill on the timeline row.
-    private func gatePill(_ task: MustardTask) -> (String, Color)? {
-        switch task.stage {
-        case .needsApproval: ("Approve", Theme.Palette.agentText)
-        case .needsReview: ("Review", Theme.Palette.reviewText)
-        case .blocked: ("Blocked", Theme.Palette.warnText)
-        default: nil
-        }
     }
 }

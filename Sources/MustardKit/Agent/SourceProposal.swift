@@ -7,6 +7,9 @@ public enum SourceID: String, Codable, CaseIterable, Sendable {
     case vault
     case jira
     case shortcut
+    /// A push-to-talk voice capture (F25, ADR-0011) — recs the cleanup pass routes
+    /// into triage carry this so the deck shows where they came from.
+    case voice
 }
 
 /// A source agent's output: a recommendation draft plus the provenance needed to

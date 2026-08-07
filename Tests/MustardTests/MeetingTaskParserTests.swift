@@ -133,6 +133,29 @@ final class MeetingTaskParserTests: XCTestCase {
         XCTAssertNil(t.desc); XCTAssertNil(t.transcriptQuote); XCTAssertEqual(t.tags, [])
     }
 
+    /// Task Ledger lines carry `src:` — the meeting that raised the task. It must
+    /// not leak into the title, and the trailing `^t-` id stays hidden as usual.
+    func test_srcNote_parsedAndStrippedFromTitle() {
+        let note = """
+        ## Code Heroes tasks
+        - [ ] Reply to TMR on the delete wording — desc: "Blocked on Leon.", owner: [[Leon Creed-Baker]], due: not stated, src: [[2026-07-16-dla-defect-review]] #task #app-store #ch — [T: "waiting on you"] ^t-20260716-delete-wording
+        """
+        let t = MeetingTaskParser.parse(note, notePath: "DL/meetings/Task Ledger.md")[0]
+        XCTAssertEqual(t.title, "Reply to TMR on the delete wording")
+        XCTAssertEqual(t.srcNote, "2026-07-16-dla-defect-review")
+        XCTAssertEqual(t.owner, "Leon Creed-Baker")
+        XCTAssertEqual(t.tags, ["app-store"])
+        XCTAssertEqual(t.desc, "Blocked on Leon.")
+    }
+
+    func test_srcNote_nilWhenAbsent() {
+        let note = """
+        ## Code Heroes tasks
+        - [ ] Email Kamil the SDK spec
+        """
+        XCTAssertNil(MeetingTaskParser.parse(note, notePath: "m.md")[0].srcNote)
+    }
+
     func test_originKey_differsByNoteAndByLine() {
         let line = "- [ ] Same text"
         XCTAssertNotEqual(
