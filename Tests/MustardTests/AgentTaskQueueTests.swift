@@ -181,6 +181,50 @@ final class AgentTaskQueueTests: XCTestCase {
         )
     }
 
+    // MARK: - Default route for area-less hand-offs (F26, ADR-0011 addendum)
+
+    func test_route_areaLessTask_fallsBackToDefaultRoute() {
+        // A voice-routed capture with no client area would otherwise strand (BAK-90);
+        // the injected default KB rescues it so the connected worker can pick it up.
+        let noArea = makeTask()
+        let noAreaList = makeTask()
+        noAreaList.list = TaskList(name: "Unfiled")   // list but no area
+        let settings = settings(project: "DL-Knowledge-Base", workingDirectory: "/kb/DL")
+        let fallback = AgentTaskRoute(project: "Code Heroes", workingDirectory: "/kb/ch-work")
+
+        XCTAssertEqual(AgentTaskQueue.route(noArea, settings: settings, defaultRoute: fallback), fallback)
+        XCTAssertEqual(AgentTaskQueue.route(noAreaList, settings: settings, defaultRoute: fallback), fallback)
+    }
+
+    func test_route_areaLessTask_stillNilWhenNoDefaultProvided() {
+        // Absent a default, behaviour is unchanged — the strand is surfaced, not hidden.
+        let noArea = makeTask()
+        let settings = settings(project: "DL-Knowledge-Base", workingDirectory: "/kb/DL")
+        XCTAssertNil(AgentTaskQueue.route(noArea, settings: settings))
+    }
+
+    func test_route_areadTask_prefersMatchingSourceOverDefault() {
+        // A task WITH an area routes by area; the default never shadows a real match.
+        let task = makeTask(areaName: "Digital Licence")
+        let settings = settings(project: "DL-Knowledge-Base", workingDirectory: "/kb/DL")
+        let fallback = AgentTaskRoute(project: "Code Heroes", workingDirectory: "/kb/ch-work")
+
+        XCTAssertEqual(
+            AgentTaskQueue.route(task, settings: settings, defaultRoute: fallback),
+            AgentTaskRoute(project: "DL-Knowledge-Base", workingDirectory: "/kb/DL")
+        )
+    }
+
+    func test_route_areadButUnmatched_staysNilEvenWithDefault() {
+        // A task that HAS an area but no enabled matching source is a config gap
+        // (the manual BAK-90 nudge case) — the default only rescues area-LESS tasks.
+        let task = makeTask(areaName: "Digital Licence")
+        let settings = settings(project: "Unknown", workingDirectory: "/kb/unknown")
+        let fallback = AgentTaskRoute(project: "Code Heroes", workingDirectory: "/kb/ch-work")
+
+        XCTAssertNil(AgentTaskQueue.route(task, settings: settings, defaultRoute: fallback))
+    }
+
     private func makeTask(
         uid: String = UUID().uuidString,
         owner: TaskOwner = .agent,

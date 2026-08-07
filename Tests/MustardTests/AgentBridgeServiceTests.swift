@@ -60,6 +60,50 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertEqual(io.written.first?.mode, "execute")
     }
 
+    // MARK: - F26: area-less hand-offs export to the default KB
+
+    @MainActor
+    func test_exportAreaLessWork_writesAreaLessConnectedTask() throws {
+        let io = StubIO(); let (svc, ctx) = try service(io)
+        // A voice hand-off with NO area (BAK-90 strander) + connected-worker flag.
+        let t = MustardTask(title: "Email Bree"); t.uid = "v1"; t.stage = .queued; t.actionType = .draftEmail
+        let run = AgentRun(task: t); run.requiresConnectedWorker = true; t.agentRun = run
+        ctx.insert(t); ctx.insert(run)
+
+        svc.exportAreaLessWork(workingDir: "/kb/ch-work", project: "Code Heroes")
+
+        XCTAssertEqual(io.written.map(\.uid), ["v1"])
+        XCTAssertEqual(io.written.first?.mode, "execute")
+        XCTAssertEqual(io.written.first?.actionType, "draft_email")
+    }
+
+    @MainActor
+    func test_exportAreaLessWork_ignoresAreadTasks() throws {
+        let io = StubIO(); let (svc, ctx) = try service(io)
+        // A task WITH an area belongs to its KB's export, not the default sweep.
+        let area = Area(name: "Digital Licence"); let list = TaskList(name: "DL", area: area)
+        let t = MustardTask(title: "ship"); t.uid = "u1"; t.stage = .queued; t.actionType = .ticket
+        t.list = list
+        let run = AgentRun(task: t); run.requiresConnectedWorker = true; t.agentRun = run
+        ctx.insert(area); ctx.insert(list); ctx.insert(t); ctx.insert(run)
+
+        svc.exportAreaLessWork(workingDir: "/kb/ch-work", project: "Code Heroes")
+
+        XCTAssertTrue(io.written.isEmpty, "area'd tasks route through their own KB, not the default")
+    }
+
+    @MainActor
+    func test_exportAreaLessWork_skipsOrdinaryLocalAreaLessTask() throws {
+        let io = StubIO(); let (svc, ctx) = try service(io)
+        // No connected-worker flag → the local coordinator owns it; never exported.
+        let t = MustardTask(title: "jot"); t.uid = "u1"; t.stage = .queued; t.actionType = .draftEmail
+        ctx.insert(t)
+
+        svc.exportAreaLessWork(workingDir: "/kb/ch-work", project: "Code Heroes")
+
+        XCTAssertTrue(io.written.isEmpty)
+    }
+
     // BAK-92 regression: a queued task whose result is written but NOT yet ingested
     // (outbox already archived, so no live outbox) must not be re-exported — otherwise
     // the worker runs it twice (e.g. a second Gmail draft / Shortcut story).

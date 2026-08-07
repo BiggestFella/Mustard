@@ -40,6 +40,17 @@ public enum TaskPriority: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Voice-capture cleanup lifecycle (F25, ADR-0011). Stored on
+/// `MustardTask.captureStateRaw`; nil there means "not a voice capture".
+public enum CaptureState: String, Codable, CaseIterable {
+    /// Captured, awaiting the agent cleanup pass.
+    case raw
+    /// Cleanup applied (title/description/schedule structured).
+    case cleaned
+    /// Cleanup exhausted its retries — the task stays usable with its raw title.
+    case failed
+}
+
 public enum Recurrence: String, Codable, CaseIterable, Identifiable {
     case daily, weekdays, weekly, monthly
     public var id: String { rawValue }

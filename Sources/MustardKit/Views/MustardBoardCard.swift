@@ -64,6 +64,9 @@ public struct MustardBoardCard: View {
                 PriorityFlag(priority: task.priority)   // shared with TimelineRow (BAK-245)
                 if hovering { ownerToggle }   // hover-revealed (handoff); agent shown via the left accent
                 Spacer(minLength: 0)
+                if let capture = task.captureState, capture != .cleaned {
+                    capturePill(capture)
+                }
                 if task.isProposed { proposedPill }
                 if task.isGated {
                     Image(systemName: "lock")
@@ -75,6 +78,24 @@ public struct MustardBoardCard: View {
             .frame(minHeight: 18)
             .padding(.bottom, 7)
         }
+    }
+
+    // MARK: 🎙 Voice-capture pill (F25) — raw = cleanup pending, failed = gave up
+
+    private func capturePill(_ state: CaptureState) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "mic.fill").font(.system(size: 8))
+            Text(state == .raw ? "Raw" : "Cleanup failed")
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(state == .raw ? Theme.Palette.textSecondary : Theme.Palette.warning)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 1)
+        .background(Theme.Palette.surface, in: Capsule())
+        .overlay(Capsule().stroke(Theme.Palette.divider, lineWidth: 0.5))
+        .help(state == .raw
+              ? "Voice capture — the agent will tidy the title and details shortly"
+              : "Voice cleanup gave up — the raw transcript is kept as the title")
     }
 
     // MARK: ✦ Proposed pill (agent-surfaced inbox task)

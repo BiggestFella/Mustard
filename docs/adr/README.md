@@ -15,3 +15,4 @@ consequences. Supersede rather than edit when a decision changes.
 | [0008](0008-local-only-email-scout.md) | Email scout is local-only — no cloud routine, no git | Accepted |
 | [0009](0009-curated-kb.md) | Curated KB: store only Kept items; retire the email→KB firehose | Accepted |
 | [0010](0010-decoupled-agent-execution-via-board-queue.md) | Decoupled agent execution via the board queue; `stage` model; retire OutputCard | Accepted |
+| [0011](0011-voice-capture-push-to-talk-cleanup-queue.md) | Voice capture: push-to-talk hotkey, instant raw task, queued agent cleanup + triage routing | Accepted |
