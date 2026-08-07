@@ -117,8 +117,27 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       - Acceptance: approve the "Email Bree" voice rec → card moves Queued → (worker) →
         Needs Review with a live Gmail draft link.
 
-- [ ] **F27 Console/board attention consolidation** *(planning — raised by Leon
-      2026-07-23)*. The Agent Console left column stacks three visually-similar things:
+- [ ] **F28 On-device rewrite (⌃⌥R)** *(spec + plan approved 2026-08-05; Linear
+      BAK-313..327 filed in **Backlog**, deliberately NOT agent-ready — Leon asked for
+      the ticket and plan only)*. Select text in any app → ⌃⌥R → review an Apple
+      Foundation Models rewrite in a floating card → Return replaces the selection.
+      Completes the hotkey family (⌃⌥Space captures, ⌃⌥D dictates, ⌃⌥R rewrites).
+      Phase 1 is four fixed intents; phase 2 adds a voice profile distilled from the
+      vault, phase 3 live Mustard context. **Unblocked 2026-08-07** — PR #101 merged,
+      so every dependency (`OnDeviceLanguageService`, `AccessibilityFocusReader`,
+      `TextInserter`, `PasteboardSnapshot`) is now on `main`. Still gated on dictation
+      being hardware-verified (BAK-292), since rewrite inherits its secure-field refusal.
+      Spec: `docs/superpowers/specs/2026-08-05-on-device-rewrite-design.md`.
+      Plan: `docs/superpowers/plans/2026-08-05-on-device-rewrite.md`.
+
+- [x] **F29 Console/board attention consolidation** — ✅ **MERGED 2026-08-07 (PR #104)**
+      *(raised by Leon 2026-07-23; renumbered from F27, which is the Voice Suite)*.
+      Shipped: `AgentInbox` inFlight bucket + `gateAction` + unified count, gate-stage
+      set derived from `TaskStage.isGate` (single source), `AgentAttention` collapsed to
+      one bucket, console two-tier attention (gate rows vs proposals), console↔board
+      count parity pinned by tests. ⚠️ Leon eye-check still outstanding.
+      Original problem statement: the Agent Console left column stacked three
+      visually-similar things:
       **NEEDS YOU** (tasks with a question), **NEEDS REVIEW** (completed agent work
       awaiting accept/reject), and the **RECOMMENDATIONS** triage deck (proposals not yet
       started). The first two are tasks mid-execution and *also* appear in their board
@@ -213,9 +232,10 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       runtime layer before attempting the first fix** — three speculative hotkey
       fixes made things worse; an `os_log` trace found each cause in one pass.
 
-- [ ] **F28 Voice Suite hardening & meeting quality** *(drafted 2026-08-05 from
-      hardware verification of F27; file B before A — B removes the false
-      positives A would otherwise scan for)*:
+- [ ] **F30 Voice Suite hardening & meeting quality** *(drafted 2026-08-05 from
+      hardware verification of F27; renumbered from F28, which is the on-device
+      rewrite; file B before A — B removes the false positives A would otherwise
+      scan for)*:
       - [ ] **B Clean up recording intermediates** — `recovery.json` and both
         `.partial.caf` sources are retained after a successful export (~22 MB/min;
         an hour-long call leaves ~1.3 GB). Delete them only once the m4a export
