@@ -4,6 +4,7 @@ import SwiftUI
 import SwiftData
 import Observation
 import AVFoundation
+import MustardShims
 import os
 
 /// Voice-capture diagnostics. `.notice` so it persists without enabling
@@ -534,7 +535,13 @@ public final class VoiceTaskCaptureCoordinator {
 @MainActor
 private final class MicrophoneFeed {
     private let makeSession: @MainActor () throws -> any VoiceTranscribing
-    private let engine = AVAudioEngine()
+    /// One engine per capture, created in `begin`. A long-lived engine caches
+    /// the input device's format across sleep/wake and device swaps, and
+    /// installing a tap with that stale format makes AVFAudio raise an
+    /// NSException (observed 2026-08-11: hw 44.1kHz vs cached 48kHz after an
+    /// overnight sleep — the exception poisoned Swift concurrency and crashed
+    /// the app on the next button click).
+    private var engine: AVAudioEngine?
     private var session: (any VoiceTranscribing)?
     private var pump: Task<Void, Never>?
     private var chunks: AsyncStream<AudioChunk>.Continuation?
@@ -570,23 +577,43 @@ private final class MicrophoneFeed {
 
         let (buffers, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
         chunks = continuation
+        let engine = AVAudioEngine()
+        self.engine = engine
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         // A device mid-switch (Bluetooth connecting, input changing) reports a
-        // degenerate format; installing a tap on it yields silence at best.
-        // Fail loudly so the pill says so instead of recording nothing.
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            await session.cancel()
-            self.session = nil
+        // degenerate or inconsistent format; installing a tap on it yields
+        // silence at best and an NSException at worst. Fail loudly so the
+        // pill says so instead of recording nothing.
+        guard format.sampleRate > 0, format.channelCount > 0,
+              format.sampleRate == input.inputFormat(forBus: 0).sampleRate else {
+            await abandonFailedStart(session)
             throw VoiceSessionError.audioFormatUnavailable
         }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, when in
-            guard let copy = buffer.deepCopy() else { return }
-            continuation.yield(AudioChunk(buffer: copy, time: when))
+        // AVFAudio signals misconfiguration by raising ObjC exceptions, and
+        // one escaping through this async frame poisons the concurrency
+        // runtime (delayed SIGSEGV in MainActor.assumeIsolated). Catch and
+        // convert to a thrown error the pill's recovery path already handles.
+        var startError: Error?
+        let raised = MSTDCatchException {
+            input.removeTap(onBus: 0)
+            input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, when in
+                guard let copy = buffer.deepCopy() else { return }
+                continuation.yield(AudioChunk(buffer: copy, time: when))
+            }
+            engine.prepare()
+            do { try engine.start() } catch { startError = error }
         }
-        engine.prepare()
-        try engine.start()
+        if let raised {
+            voiceLog.error(
+                "feed: audio engine raised \(raised.name.rawValue, privacy: .public): \(raised.reason ?? "no reason", privacy: .public)")
+            await abandonFailedStart(session)
+            throw VoiceSessionError.audioEngineFailure(raised.reason ?? raised.name.rawValue)
+        }
+        if let startError {
+            await abandonFailedStart(session)
+            throw startError
+        }
         voiceLog.notice(
             "feed: tap installed rate=\(format.sampleRate, privacy: .public) ch=\(format.channelCount, privacy: .public)")
         pump = Task {
@@ -632,8 +659,20 @@ private final class MicrophoneFeed {
     }
 
     private func stopAudio() {
+        guard let engine else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        self.engine = nil
+    }
+
+    /// Undo a partially-started capture: the mic must never stay hot and the
+    /// analyzer session must not dangle behind a thrown `begin`.
+    private func abandonFailedStart(_ session: any VoiceTranscribing) async {
+        stopAudio()
+        chunks?.finish()
+        chunks = nil
+        self.session = nil
+        await session.cancel()
     }
 }
 

@@ -51,6 +51,26 @@ public enum VoiceSessionError: Error, Equatable {
     case notStarted
     case alreadyStarted
     case audioFormatUnavailable
+    /// The audio engine refused to start — an NSException AVFAudio raised
+    /// (stale device format across sleep/wake, device mid-switch), caught by
+    /// `MSTDCatchException` and converted so it can never unwind through
+    /// async frames. The payload is the exception's reason.
+    case audioEngineFailure(String)
+}
+
+extension VoiceSessionError: LocalizedError {
+    /// The capture/dictation pill shows `localizedDescription` as the
+    /// recovery reason — these two must read as instructions, not codes.
+    public var errorDescription: String? {
+        switch self {
+        case .audioFormatUnavailable:
+            return "The microphone's audio format is changing — try again in a moment."
+        case .audioEngineFailure(let reason):
+            return "The microphone couldn't start (\(reason)) — try again."
+        case .notReady, .notStarted, .alreadyStarted:
+            return nil
+        }
+    }
 }
 
 // MARK: - Contextual vocabulary

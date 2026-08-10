@@ -5,8 +5,16 @@ let package = Package(
     name: "Mustard",
     platforms: [.macOS(.v26)],
     targets: [
+        // Objective-C micro-target: catches NSExceptions that Apple frameworks
+        // (AVFAudio) raise, which Swift cannot catch and which corrupt the
+        // Swift-concurrency runtime if they unwind through async frames.
+        .target(
+            name: "MustardShims",
+            path: "Sources/MustardShims"
+        ),
         .target(
             name: "MustardKit",
+            dependencies: ["MustardShims"],
             path: "Sources/MustardKit",
             resources: [
                 .process("Resources"),
@@ -21,7 +29,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MustardTests",
-            dependencies: ["MustardKit"],
+            dependencies: ["MustardKit", "MustardShims"],
             path: "Tests/MustardTests"
         ),
     ],
