@@ -703,3 +703,32 @@ CI "Build & test (macOS)" success. Local runs need
 **Open follow-up (not fixed here):** `AgentConsoleView.gateSubmeta`/`gateSpineColor` label
 *every* Needs Review card "finished · check the output" in green, including runs that
 genuinely failed into review. Task chip filed for Leon.
+
+## 2026-08-11 — fix(voice): AVFAudio NSException poisoned Swift concurrency → dictation crash (PR #111)
+
+Leon's overnight-running build crashed this morning (incident A1C1C3AB): a ⌃⌥D dictation
+hold froze the pill at "Listening…" on release, and the next button click SIGSEGVed in
+`MainActor.assumeIsolated` on a garbage executor pointer. Unified logs pinned the chain:
+the app-lifetime `AVAudioEngine` in `MicrophoneFeed` cached a 48kHz input format across
+sleep/wake while the device moved to 44.1kHz; `installTap(onBus:)` raised an NSException
+that unwound through Swift-concurrency frames, corrupting the main thread's executor
+tracking. HIServices swallowed it, so every later main-actor task silently died (frozen
+pill, release never handled) until the delayed crash 35s later.
+
+Fix: fresh `AVAudioEngine` per capture (no stale format cache survives sleep/wake), plus
+a new `MustardShims` ObjC micro-target whose `MSTDCatchException` wraps tap install +
+engine start — Swift cannot catch NSExceptions, so mid-switch TOCTOU raises are converted
+to `VoiceSessionError.audioEngineFailure` and flow into the pill's existing tested
+recovery path. Failed starts now tear down fully; the two audio errors carry friendly
+pill messages via `LocalizedError`. Covers both ⌃⌥Space capture and ⌃⌥D dictation.
+
+**Risk:** low-medium — audio-capture start path, no schema or outward action; recovery
+paths already covered by existing coordinator tests.
+**Checks:** `swift test` exit 0 (1499 tests, 1 skipped, 0 failures, incl. 4 new red-first
+shim tests); `swift build` exit 0; CI "Build & test (macOS)" pass. Fresh-context review
+PASS.
+**Revert:** `git revert b81e486`
+
+**Open follow-up (not fixed here, pre-existing):** `MicrophoneFeed.end()` doesn't bump
+`generation`, so a release finalizing while `begin()` is still awaiting `session.start`
+can leave the mic hot with an orphaned pump until the next capture. Task chip filed.
