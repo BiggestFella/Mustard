@@ -10,8 +10,10 @@ public enum MeetingStatus: String, Codable, CaseIterable, Sendable {
 
 /// The on-device digest's own lifecycle — independent of the audio, so a
 /// digest failure never degrades the recording (spec: locally retryable).
+/// `partial` (BAK-330): the digest generated usable content but one or more
+/// chunks failed — the summary is real, just incomplete.
 public enum MeetingDigestStatus: String, Codable, CaseIterable, Sendable {
-    case pending, generating, ready, failed
+    case pending, generating, ready, partial, failed
 }
 
 /// One recorded meeting (meeting recorder Task 1, BAK-293). Audio never lives
@@ -51,6 +53,12 @@ public final class MeetingRecord {
     public var summaryText: String?
     public var decisions: [String] = []
     public var unresolvedQuestions: [String] = []
+    /// BAK-330: set when `digestStatus == .partial` — a human-readable note
+    /// of which transcript spans the digest could not summarise.
+    public var digestOmissionNote: String?
+    /// BAK-331: set when `digestStatus == .failed` — why, in a persistable,
+    /// user-facing form (never the raw model error string).
+    public var digestFailureReasonRaw: String?
     public var createdAt: Date = Date.now
 
     public var calendarEvent: CalendarEvent?
@@ -71,6 +79,11 @@ public final class MeetingRecord {
     public var digestStatus: MeetingDigestStatus {
         get { MeetingDigestStatus(rawValue: digestStatusRaw) ?? .pending }
         set { digestStatusRaw = newValue.rawValue }
+    }
+
+    public var digestFailureReason: MeetingDigestFailureReason? {
+        get { digestFailureReasonRaw.flatMap(MeetingDigestFailureReason.init(rawValue:)) }
+        set { digestFailureReasonRaw = newValue?.rawValue }
     }
 
     /// Audio paths persist as validated RELATIVE paths only (spec §Files):

@@ -327,25 +327,47 @@ public struct MeetingReviewView: View {
                 switch meeting.digestStatus {
                 case .generating:
                     ProgressView().controlSize(.mini)
-                case .failed, .pending:
+                case .pending:
                     if meeting.status == .ready, recorder != nil {
-                        Button(meeting.digestStatus == .failed ? "Retry digest" : "Generate digest") {
+                        Button("Generate digest") {
                             Task { await recorder?.retryDigest(for: meeting) }
                         }
                         .buttonStyle(.plain)
                         .font(Theme.Fonts.caption)
                         .foregroundStyle(Theme.Palette.accent)
                     }
-                case .ready:
+                case .failed:
+                    // BAK-331: a permanent-cause failure (e.g. this Mac can't
+                    // run the model) hides Retry — trying again can't help.
+                    if meeting.status == .ready, recorder != nil,
+                       meeting.digestFailureReason?.offersRetry ?? true {
+                        Button("Retry digest") {
+                            Task { await recorder?.retryDigest(for: meeting) }
+                        }
+                        .buttonStyle(.plain)
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.accent)
+                    }
+                case .ready, .partial:
                     EmptyView()
                 }
             }
             if let summary = meeting.summaryText, !summary.isEmpty {
+                // BAK-330: .partial renders exactly like .ready — the summary
+                // is real, just incomplete — plus the omission caption below.
                 Text(summary)
                     .font(Theme.Fonts.body)
                     .foregroundStyle(Theme.Palette.textPrimary)
             } else if meeting.digestStatus == .failed {
-                Text("The on-device digest failed — the recording and transcript are unaffected.")
+                Text(
+                    meeting.digestFailureReason?.userMessage
+                        ?? "The on-device digest failed — the recording and transcript are unaffected."
+                )
+                .font(Theme.Fonts.caption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+            }
+            if meeting.digestStatus == .partial, let note = meeting.digestOmissionNote {
+                Text(note)
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
