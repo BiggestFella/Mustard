@@ -764,3 +764,14 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak330-331-digest-resilience/`
 - **Revert:** `git revert 2942dc8`
+
+## 2026-08-12 — MERGED · Writer-failure surfacing + finalize source parity (BAK-332, PR #115)
+- **Risk:** medium (Meeting/+Logic/+Tests) · **Merged on green** (post-CI, 47s)
+- **Origin:** the 2026-08-05 standup lost ALL mic audio while persisting 413 mic transcript segments and reporting clean `ready`/`audioFinalized`. Root cause: writer appends wrapped in bare `try?` while the same buffers fed transcription; unopened tracks never checkpoint into recovery.json; nothing compared transcript evidence to finalized audio.
+- **Checks:** swift test 1549 pass/1 skip/0 fail (+10) · swift build clean · regression red-first proven by reverting the fix
+- **Fresh-context review:** mergeable, 0 blocking; verified the errorMessage-vs-.partial deviation against the view code and traced all errorMessage writers for collisions (none). Non-blocking follow-up: transcription-append `try?` still swallowed.
+- **What landed:** once-per-channel writer-failure logging on the capture hot path (buffers always still reach transcription); pure `MeetingSourceParity` (positive-evidence-only — quiet meetings never flagged); finalize sets a user-facing `errorMessage` naming the lost channel. **Deviation:** status stays `.ready` (not the ticket's `.partial`) — `.partial` renders "Interrupted" and hides digest actions.
+- **Note:** the 2026-08-05 mic audio itself is unrecoverable (never written).
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak332-audio-source-parity/`
+- **Revert:** `git revert 05d08d7`
