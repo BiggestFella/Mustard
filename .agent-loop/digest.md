@@ -754,3 +754,13 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak329-utterance-merge/`
 - **Revert:** `git revert 882fac6`
+
+## 2026-08-12 — MERGED · Partial digests + persisted failure reasons (BAK-330 + BAK-331, PR #114)
+- **Risk:** medium (Logic/+Meeting/+Models/+Views/+Tests; additive schema: 2 optional fields + 1 enum case, lightweight migration) · **Merged on green** (post-CI, 47s)
+- **Origin:** digest-resilience follow-ons from the standup-transcript eval — one bad chunk used to discard every good one, and the only failure copy was "the digest failed" with a Retry that could never work.
+- **Checks:** swift test 1539 pass/1 skip/0 fail (+25) · swift build clean
+- **Fresh-context review:** mergeable, 0 blocking; non-blocking: reduce-phase failure still all-or-nothing (documented + regression-tested); partial-degradation tests under-assert surviving content; `.partial` excluded from retry guard (forward-looking note).
+- **What landed:** BAK-330 — `MeetingDigest.omittedSpans`, new `.partial` status, mm:ss omission note on the record, zero-successful-chunks still fails. BAK-331 — pure `MeetingDigestFailureReason` (userMessage + offersRetry per cause) persisted on `MeetingRecord`, review panel shows the real reason, Retry gated on it, voiceLog reason-only logging, success clears stale reasons. **Deviation:** appleIntelligenceDisabled offers retry (enable-then-retry IS the fix), against the ticket's table — flagged in code/tests/risk-report.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak330-331-digest-resilience/`
+- **Revert:** `git revert 2942dc8`
