@@ -291,6 +291,185 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         XCTAssertNil(record.errorMessage, "a clean recording never gets a spurious parity message")
     }
 
+    // MARK: - Working-file cleanup after finalize (BAK-333)
+
+    /// A clean stop finalizes both channels to real `.m4a` files — the
+    /// crash-recovery scratch files (`*.partial.caf` + `recovery.json`) that
+    /// made that possible are now dead weight and should be gone once
+    /// `stop()` returns. The finals + playback mix must survive untouched.
+    func test_stopPipeline_cleanFinalize_deletesPartialsAndManifest_keepsFinalsAndPlayback() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]))
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+
+        capturing.continuations[.microphone]?.yield(
+            MeetingAudioSample(source: .microphone, buffer: pcm(), hostSeconds: 1))
+        capturing.continuations[.systemAudio]?.yield(
+            MeetingAudioSample(source: .systemAudio, buffer: pcm(), hostSeconds: 1))
+        for _ in 0..<25 { await Task.yield() }
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.status, .ready)
+        XCTAssertTrue(record.audioFinalized)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .youPartial, meetingUID: record.uid).path),
+            "the you partial is dead weight once you.m4a is verified on disk")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .meetingPartial, meetingUID: record.uid).path),
+            "the meeting partial is dead weight once meeting.m4a is verified on disk")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .recoveryManifest, meetingUID: record.uid).path),
+            "every started source finalized — the manifest has nothing left to protect")
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .you, meetingUID: record.uid).path),
+            "the finalized you.m4a is never touched by cleanup")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .meeting, meetingUID: record.uid).path),
+            "the finalized meeting.m4a is never touched by cleanup")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .playback, meetingUID: record.uid).path),
+            "playback.m4a is never a working file and is never deleted")
+    }
+
+    private final class MeetingSessionAlwaysInsufficient: VoiceTranscribing, @unchecked Sendable {
+        struct Overloaded: Error {}
+        func readiness() async -> VoiceReadiness { .ready }
+        func prepare() async throws {}
+        func start(source: VoiceAudioSource) async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error> {
+            throw Overloaded()
+        }
+        func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) async throws {}
+        func finish() async throws -> [VoiceTranscriptSegment] { [] }
+        func cancel() async {}
+    }
+
+    /// Drives the real fallback transcription mode (BAK-297: the meeting
+    /// session fails to start with an "insufficient resources" error, so the
+    /// Meeting channel keeps RECORDING and its file is transcribed after
+    /// Stop) and makes that after-Stop file transcription throw. This
+    /// reaches `interrupt()` — a real, reachable failure path — AFTER the
+    /// writer already finalized both channels to disk but BEFORE
+    /// `stampAudioPaths`/`audioFinalized = true`/cleanup ever run.
+    private func transcriptionWhoseFileFallbackFails() -> MeetingTranscriptionService {
+        struct FileTranscribeFailed: Error {}
+        var handed: [any VoiceTranscribing] = [StubSession(finals: []), MeetingSessionAlwaysInsufficient()]
+        return MeetingTranscriptionService(
+            makeSession: { handed.isEmpty ? StubSession(finals: []) : handed.removeFirst() },
+            isInsufficientResources: { $0 is MeetingSessionAlwaysInsufficient.Overloaded },
+            transcribeFile: { _ in throw FileTranscribeFailed() })
+    }
+
+    /// Crash safety must not regress: an interrupted stop leaves every
+    /// working file exactly where it was — cleanup only ever runs after a
+    /// fully successful finalize.
+    func test_stopPipeline_interruptedAfterAudioFinalizes_leavesPartialsAndManifestIntact() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcriptionWhoseFileFallbackFails())
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+
+        capturing.continuations[.microphone]?.yield(
+            MeetingAudioSample(source: .microphone, buffer: pcm(), hostSeconds: 1))
+        capturing.continuations[.systemAudio]?.yield(
+            MeetingAudioSample(source: .systemAudio, buffer: pcm(), hostSeconds: 1))
+        for _ in 0..<25 { await Task.yield() }
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(
+            record.status, .partial,
+            "the after-Stop file transcription failed — the meeting is interrupted, not ready")
+        XCTAssertFalse(record.audioFinalized, "cleanup's gate never flipped")
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .youPartial, meetingUID: record.uid).path),
+            "interrupted before cleanup ran — the partial survives")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .meetingPartial, meetingUID: record.uid).path),
+            "interrupted before cleanup ran — the partial survives")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: try store.fileURL(for: .recoveryManifest, meetingUID: record.uid).path),
+            "interrupted before cleanup ran — the manifest survives")
+    }
+
+    /// The one-off launch sweep (BAK-333): a meeting that finalized before
+    /// this cleanup existed is already `.ready`/`audioFinalized` but still
+    /// has its manifest and finalized partials sitting on disk. Launch
+    /// recovery must clean those up WITHOUT touching the record's status —
+    /// promoting an already-`ready` meeting to `.partial` would be wrong.
+    func test_recoverOnLaunch_cleansUpLeftoverWorkingFiles_forAnAlreadyReadyRecord() async throws {
+        let context = try ctx()
+        let uid = "already-ready-meeting"
+        try store.createMeetingDirectory(forMeetingUID: uid)
+
+        let record = MeetingRecord(title: "Old standup")
+        record.uid = uid
+        record.status = .ready
+        record.audioFinalized = true
+        record.captureSources = ["microphone", "systemAudio"]
+        record.youAudioPath = "Recordings/\(uid)/you.m4a"
+        record.meetingAudioPath = "Recordings/\(uid)/meeting.m4a"
+        context.insert(record)
+        try context.save()
+
+        // The finalized tracks + the leftover crash-recovery scratch files —
+        // exactly the ~285 MB-per-meeting shape from the real incident.
+        try Data("final".utf8).write(to: store.fileURL(for: .you, meetingUID: uid))
+        try Data("final".utf8).write(to: store.fileURL(for: .meeting, meetingUID: uid))
+        try Data("partial".utf8).write(to: store.fileURL(for: .youPartial, meetingUID: uid))
+        try Data("partial".utf8).write(to: store.fileURL(for: .meetingPartial, meetingUID: uid))
+        let manifest = MeetingRecoveryManifest(
+            meetingUID: uid,
+            relativeDirectory: "Recordings/\(uid)",
+            sources: [
+                .init(fileName: "you.partial.caf", safeByteOffset: 7, safeSampleOffset: 4800),
+                .init(fileName: "meeting.partial.caf", safeByteOffset: 7, safeSampleOffset: 4800),
+            ],
+            startedAt: t0,
+            lastState: .ready)
+        try manifest.writeAtomically(to: store.fileURL(for: .recoveryManifest, meetingUID: uid))
+
+        let coordinator = makeCoordinator(context: context, capturing: StubCapturing())
+        coordinator.recoverOnLaunch()
+
+        let reloaded = try XCTUnwrap(try records(in: context).first { $0.uid == uid })
+        XCTAssertEqual(reloaded.status, .ready, "an already-ready meeting is never demoted to partial")
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: try store.fileURL(for: .youPartial, meetingUID: uid).path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: try store.fileURL(for: .meetingPartial, meetingUID: uid).path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: try store.fileURL(for: .recoveryManifest, meetingUID: uid).path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: try store.fileURL(for: .you, meetingUID: uid).path),
+            "the launch sweep never touches finalized audio")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: try store.fileURL(for: .meeting, meetingUID: uid).path),
+            "the launch sweep never touches finalized audio")
+    }
+
     // MARK: - Failures
 
     func test_noPermittedSources_failsWithoutCreatingARecord() async throws {
