@@ -775,3 +775,13 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak332-audio-source-parity/`
 - **Revert:** `git revert 05d08d7`
+
+## 2026-08-12 — MERGED · Working-file cleanup after finalize (BAK-333, PR #116)
+- **Risk:** medium (Logic/+Meeting/+Tests; deletes only regenerable scratch via validated store URLs) · **Merged on green** (post-CI, 51s)
+- **Origin:** finalized meetings kept `.partial.caf` + `recovery.json` forever — ~285 MB per 23-min meeting, ~7× the kept audio.
+- **Checks:** swift test 1559 pass/1 skip/0 fail (+10) · swift build clean · re-run in full after the reviewer-found fix
+- **Fresh-context review:** mergeable, 0 blocking; its one real non-blocking finding (manifest deleted before `audioFinalized` durably saved → crash strands the meeting at "Finishing…") was FIXED in the PR (persist before cleanup).
+- **What landed:** pure `MeetingWorkingFileCleanup` — partial deletes when its channel's final exists; manifest only when EVERY started channel's final exists (a BAK-332-style missing final keeps both); finals/playback unreachable by construction; best-effort deletion; `recoverOnLaunch` sweeps pre-existing leftovers (~570 MB on disk today) without ever re-promoting a finished meeting to `.partial`. Retention already whole-directory — untouched.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak333-finalize-cleanup/`
+- **Revert:** `git revert ed23287`
