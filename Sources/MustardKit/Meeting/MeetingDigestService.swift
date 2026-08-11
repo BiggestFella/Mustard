@@ -114,20 +114,40 @@ public struct MeetingDigestService {
         let chunks = MeetingDigestChunker.chunks(
             segments: utterances.map(\.asSegment), budgetTokens: budget, tokenCount: tokenCount)
 
-        // Map: one fresh generation per chunk.
+        // Map: one fresh generation per chunk. A failed chunk no longer
+        // aborts the whole digest (BAK-330) — its span is recorded as
+        // omitted and the map continues, so one bad chunk never discards
+        // transcript the model summarised successfully.
         var partials: [GeneratedMeetingDigest] = []
+        var omittedSpans: [ClosedRange<Double>] = []
+        var lastChunkFailure: MeetingDigestFailure?
         for chunk in chunks {
             switch await generate(
                 instructions: instructions,
                 prompt: Self.chunkPrompt(chunk, now: now, calendar: calendar)
             ) {
-            case .success(let partial): partials.append(partial)
-            case .failure(let failure): return .failure(failure)
+            case .success(let partial):
+                partials.append(partial)
+            case .failure(let failure):
+                lastChunkFailure = failure
+                if let first = chunk.first, let last = chunk.last {
+                    omittedSpans.append(first.startSeconds...last.endSeconds)
+                }
             }
         }
 
+        // Every chunk that existed failed: zero usable output is still a
+        // failure. (Zero chunks at all — an empty transcript — is NOT this
+        // case; that falls through to the empty-summary success below, same
+        // as before BAK-330.)
+        if !chunks.isEmpty, partials.isEmpty, let failure = lastChunkFailure {
+            return .failure(failure)
+        }
+
         // Reduce: partial digests are tiny relative to the transcript, so a
-        // single reduction pass combines them.
+        // single reduction pass combines them. A reduce failure still fails
+        // the whole digest — a known limitation; partial-chunk collection
+        // only covers the map phase.
         let combined: GeneratedMeetingDigest
         if partials.isEmpty {
             combined = GeneratedMeetingDigest(summary: "")
@@ -168,7 +188,8 @@ public struct MeetingDigestService {
             unresolvedQuestions: combined.unresolvedQuestions,
             actions: actions,
             promptVersion: PromptCatalog.promptVersion,
-            osBuild: capabilities.osBuild))
+            osBuild: capabilities.osBuild,
+            omittedSpans: omittedSpans))
     }
 
     // MARK: - Generation

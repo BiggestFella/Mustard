@@ -43,11 +43,15 @@ final class MeetingDigestServiceTests: XCTestCase {
         var capabilitiesResult: Result<LocalModelCapabilities, LocalModelFailure> =
             .success(LocalModelCapabilities(contextSize: 4096, promptBand: "27", osBuild: "27A5194q"))
         var results: [GeneratedMeetingDigest]
+        /// 0-indexed generate() calls that should throw instead of returning
+        /// a result — BAK-330's per-chunk failure tests.
+        var failures: [Int: LocalModelFailure] = [:]
         private final class Cursor: @unchecked Sendable { var index = 0 }
         private let cursor = Cursor()
 
-        init(results: [GeneratedMeetingDigest]) {
+        init(results: [GeneratedMeetingDigest], failures: [Int: LocalModelFailure] = [:]) {
             self.results = results
+            self.failures = failures
         }
 
         func capabilities(locale: Locale) async -> Result<LocalModelCapabilities, LocalModelFailure> {
@@ -59,8 +63,10 @@ final class MeetingDigestServiceTests: XCTestCase {
         ) async throws -> Output {
             recorder.instructions.append(instructions)
             recorder.prompts.append(prompt)
-            let result = results[min(cursor.index, results.count - 1)]
+            let index = cursor.index
             cursor.index += 1
+            if let failure = failures[index] { throw failure }
+            let result = results[min(index, results.count - 1)]
             return result as! Output
         }
     }
@@ -244,6 +250,99 @@ final class MeetingDigestServiceTests: XCTestCase {
             digest.actions.count, 1,
             "an action citing the first constituent's persistent id survives evidence validation")
         XCTAssertEqual(digest.actions.first?.evidenceSegmentIDs, [pid(segments[0])])
+    }
+
+    // MARK: - Partial degradation (BAK-330: one bad chunk never discards the rest)
+
+    /// Three segments, each costing a flat 2000 "tokens" regardless of text —
+    /// under a ~3052 budget that forces every segment into its own chunk
+    /// (2000 + 2000 > 3052), deterministically, without needing a silence gap.
+    private func threeChunkSegments() -> [VoiceTranscriptSegment] {
+        [
+            seg("seg-1", "first chunk", start: 0),
+            seg("seg-2", "second chunk", start: 10),
+            seg("seg-3", "third chunk", start: 20),
+        ]
+    }
+
+    private func makeThreeChunkService(
+        stub: StubGenerating
+    ) -> MeetingDigestService {
+        makeService(stub: stub, tokenCount: { _ in 2000 })
+    }
+
+    func test_middleChunkFails_othersSurvive_asAPartialDigestWithOmittedSpan() async throws {
+        let segments = threeChunkSegments()
+        let stub = StubGenerating(
+            results: [
+                generated(summary: "Part one."),
+                generated(summary: "UNUSED — this chunk fails"),
+                generated(summary: "Part three."),
+                generated(summary: "Combined summary."),
+            ],
+            failures: [1: .modelNotReady])
+
+        let digest = try await makeThreeChunkService(stub: stub)
+            .digest(segments: segments, now: now).get()
+
+        XCTAssertEqual(digest.summary, "Combined summary.", "the reduction sees only the successful partials")
+        XCTAssertEqual(
+            digest.omittedSpans, [segments[1].startSeconds...segments[1].endSeconds],
+            "the failed chunk's own span is recorded as omitted")
+        XCTAssertEqual(
+            stub.recorder.prompts.count, 4,
+            "3 map attempts (one throws) + 1 reduction over the 2 survivors")
+    }
+
+    func test_lastChunkFails_earlierSuccessesSurvive_reduceCombinesThem() async throws {
+        let segments = threeChunkSegments()
+        let stub = StubGenerating(
+            results: [
+                generated(summary: "Part one."),
+                generated(summary: "Part two."),
+                generated(summary: "UNUSED — this chunk fails"),
+                generated(summary: "Combined summary."),
+            ],
+            failures: [2: .contextOverflow])
+
+        let digest = try await makeThreeChunkService(stub: stub)
+            .digest(segments: segments, now: now).get()
+
+        XCTAssertEqual(digest.summary, "Combined summary.")
+        XCTAssertEqual(digest.omittedSpans, [segments[2].startSeconds...segments[2].endSeconds])
+    }
+
+    func test_allChunksFail_returnsTheLastChunkFailure_asATypedFailure() async {
+        let segments = threeChunkSegments()
+        let stub = StubGenerating(
+            results: [generated()],
+            failures: [0: .modelNotReady, 1: .deviceNotEligible, 2: .contextOverflow])
+
+        let result = await makeThreeChunkService(stub: stub).digest(segments: segments, now: now)
+
+        guard case .failure(.model(.contextOverflow)) = result else {
+            return XCTFail("expected the LAST chunk's failure (.contextOverflow), got \(result)")
+        }
+    }
+
+    func test_reduceFailure_stillFailsTheWholeDigest_knownLimitation() async {
+        // Every chunk succeeds individually but the reduction pass itself
+        // fails — a documented limitation: partial-chunk collection only
+        // covers the map phase, not the final reduce.
+        let segments = threeChunkSegments()
+        let stub = StubGenerating(
+            results: [
+                generated(summary: "Part one."),
+                generated(summary: "Part two."),
+                generated(summary: "Part three."),
+            ],
+            failures: [3: .unavailable("model hiccup")])
+
+        let result = await makeThreeChunkService(stub: stub).digest(segments: segments, now: now)
+
+        guard case .failure(.model(.unavailable("model hiccup"))) = result else {
+            return XCTFail("expected the reduction's own failure to surface, got \(result)")
+        }
     }
 
     // MARK: - Failures (typed, retryable)

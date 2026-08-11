@@ -226,7 +226,7 @@ public final class MeetingCaptureCoordinator {
             try? context.save()
             switch await generateDigest(segments, now()) {
             case .success(let digest): applyDigest(digest, to: record)
-            case .failure: record.digestStatus = .failed
+            case .failure(let failure): applyDigestFailure(failure, to: record)
             }
         } else {
             record.digestStatus = .pending
@@ -249,7 +249,7 @@ public final class MeetingCaptureCoordinator {
             .map(Self.transcriptSegment(from:))
         switch await generateDigest(segments, now()) {
         case .success(let digest): applyDigest(digest, to: record)
-        case .failure: record.digestStatus = .failed
+        case .failure(let failure): applyDigestFailure(failure, to: record)
         }
         try? context.save()
     }
@@ -329,7 +329,9 @@ public final class MeetingCaptureCoordinator {
 
     /// Land a validated digest: summary/decisions/questions on the record,
     /// pending proposals replaced (approved/rejected ones are Leon's history
-    /// and stay), traceability stamped.
+    /// and stay), traceability stamped. BAK-330: any omitted transcript span
+    /// degrades the digest to `.partial` (still real content) instead of
+    /// `.ready`. BAK-331: success always clears a stale failure reason.
     private func applyDigest(_ digest: MeetingDigest, to record: MeetingRecord) {
         record.summaryText = digest.summary
         record.decisions = digest.decisions
@@ -348,8 +350,20 @@ public final class MeetingCaptureCoordinator {
             proposal.meeting = record
             context.insert(proposal)
         }
-        record.digestStatus = .ready
+        record.digestOmissionNote = MeetingDigest.omissionNote(spans: digest.omittedSpans)
+        record.digestFailureReason = nil
+        record.digestStatus = digest.omittedSpans.isEmpty ? .ready : .partial
         try? context.save()
+    }
+
+    /// Land a digest failure: map it to a persistable, user-facing reason
+    /// (BAK-331) and log the reason's rawValue only — never the raw model
+    /// error or any transcript content.
+    private func applyDigestFailure(_ failure: MeetingDigestFailure, to record: MeetingRecord) {
+        let reason = MeetingDigestFailureReason(failure: failure)
+        record.digestFailureReason = reason
+        record.digestStatus = .failed
+        voiceLog.error("meeting: digest failed reason=\(reason.rawValue, privacy: .public)")
     }
 
     /// Rebuild a transcript segment from its persisted row. The persisted uid

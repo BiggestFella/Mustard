@@ -358,6 +358,121 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
             "the retry reads the persisted transcript back")
     }
 
+    // MARK: - Digest failure reason + partial degradation (BAK-330, BAK-331)
+
+    func test_digestFailure_persistsTheMappedReason() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]),
+            digest: { _, _ in .failure(.model(.deviceNotEligible)) })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.digestStatus, .failed)
+        XCTAssertEqual(
+            record.digestFailureReason, .deviceNotEligible,
+            "the failure reason is mapped and persisted alongside .failed")
+    }
+
+    func test_digestRetry_thatFails_persistsTheNewMappedReason() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        var failure: LocalModelFailure = .modelNotReady
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]),
+            digest: { _, _ in .failure(.model(failure)) })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+        await coordinator.stop()
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.digestFailureReason, .modelNotReady)
+
+        failure = .contextOverflow
+        await coordinator.retryDigest(for: record)
+
+        XCTAssertEqual(record.digestStatus, .failed)
+        XCTAssertEqual(
+            record.digestFailureReason, .contextOverflow,
+            "a retry that fails differently updates the persisted reason")
+    }
+
+    func test_successfulDigest_clearsAPreviouslyPersistedFailureReason() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        var digestWorks = false
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]),
+            digest: { segments, _ in
+                digestWorks
+                    ? .success(self.digestResult(
+                        evidence: segments.map { MeetingTranscriptMerge.persistentID(for: $0) }))
+                    : .failure(.model(.appleIntelligenceDisabled))
+            })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+        await coordinator.stop()
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.digestFailureReason, .appleIntelligenceDisabled)
+
+        digestWorks = true
+        await coordinator.retryDigest(for: record)
+
+        XCTAssertEqual(record.digestStatus, .ready)
+        XCTAssertNil(record.digestFailureReason, "a successful retry clears the stale reason")
+    }
+
+    func test_digestWithOmittedSpans_persistsPartialStatus_andAnOmissionNote() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let you = seg("y1", "ship it friday")
+        var partial = digestResult(evidence: [MeetingTranscriptMerge.persistentID(for: you)])
+        partial.omittedSpans = [852.0...1143.0]
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [you]),
+            digest: { _, _ in .success(partial) })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.digestStatus, .partial, "an omitted span degrades ready to partial")
+        XCTAssertEqual(record.summaryText, "We planned the release.", "the surviving content still lands")
+        XCTAssertEqual(
+            record.digestOmissionNote,
+            "14:12–19:03 into the meeting could not be summarised.")
+        XCTAssertNil(record.digestFailureReason, "a partial digest is a success, not a failure")
+    }
+
+    func test_digestWithNoOmittedSpans_persistsReadyStatus_withNoOmissionNote() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let you = seg("y1", "ship it friday")
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [you]),
+            digest: { segments, _ in
+                .success(self.digestResult(
+                    evidence: segments.map { MeetingTranscriptMerge.persistentID(for: $0) }))
+            })
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone])
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.digestStatus, .ready)
+        XCTAssertNil(record.digestOmissionNote)
+    }
+
     // MARK: - Recovery on launch
 
     func test_recoveryOnLaunch_surfacesDiscoverablePartials() async throws {

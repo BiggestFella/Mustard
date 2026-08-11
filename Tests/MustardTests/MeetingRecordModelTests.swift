@@ -36,6 +36,8 @@ final class MeetingRecordModelTests: XCTestCase {
         XCTAssertNil(record.retentionDeadline)
         XCTAssertNil(record.errorMessage)
         XCTAssertFalse(record.uid.isEmpty, "a stable UID exists from birth")
+        XCTAssertNil(record.digestOmissionNote, "BAK-330: no omission until a partial digest lands")
+        XCTAssertNil(record.digestFailureReason, "BAK-331: no failure reason until a digest fails")
     }
 
     func test_freshProposal_defaultsToPending_withNoTask() {
@@ -119,6 +121,37 @@ final class MeetingRecordModelTests: XCTestCase {
         XCTAssertEqual(record.statusRaw, "recording")
         record.status = .partial
         XCTAssertEqual(record.status, .partial)
+    }
+
+    func test_digestStatus_roundTripsPartial() {
+        // BAK-330: a digest that dropped some transcript span but still
+        // produced usable content lands as .partial, not .ready.
+        let record = MeetingRecord(title: "Standup")
+        record.digestStatus = .partial
+        XCTAssertEqual(record.digestStatusRaw, "partial")
+        XCTAssertEqual(record.digestStatus, .partial)
+    }
+
+    func test_digestFailureReason_roundTripsThroughRawStorage() {
+        // BAK-331: the typed accessor mirrors digestStatus's get/set pattern.
+        let record = MeetingRecord(title: "Standup")
+        XCTAssertNil(record.digestFailureReason)
+
+        record.digestFailureReason = .modelNotReady
+        XCTAssertEqual(record.digestFailureReasonRaw, "modelNotReady")
+        XCTAssertEqual(record.digestFailureReason, .modelNotReady)
+
+        record.digestFailureReason = nil
+        XCTAssertNil(record.digestFailureReasonRaw, "clearing the reason clears the raw storage too")
+        XCTAssertNil(record.digestFailureReason)
+    }
+
+    func test_digestFailureReason_unknownRawValue_decodesAsNil() {
+        // CloudKit-shaped forward compatibility: a raw value this build
+        // doesn't recognise (an older client, a future case) never crashes.
+        let record = MeetingRecord(title: "Standup")
+        record.digestFailureReasonRaw = "some-future-reason"
+        XCTAssertNil(record.digestFailureReason)
     }
 
     func test_proposalState_roundTripsThroughRawStorage() {
