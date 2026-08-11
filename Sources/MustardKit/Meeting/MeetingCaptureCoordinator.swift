@@ -238,6 +238,11 @@ public final class MeetingCaptureCoordinator {
         voiceLog.notice("meeting: mix done, recording complete")
         stampAudioPaths(on: record)
         record.audioFinalized = true
+        // The finalized state must be durable BEFORE the recovery manifest
+        // is deleted — a crash between the two would otherwise strand the
+        // meeting at "Finishing…" forever, since recoverOnLaunch discovers
+        // work solely by scanning for manifests.
+        try? context.save()
         cleanUpWorkingFiles(for: record)
 
         // BAK-332: the audio/transcript parity check — the actual fix for
