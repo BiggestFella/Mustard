@@ -9,6 +9,18 @@ public enum MeetingDigestChunker {
     /// A gap this long between segments is a natural cut point.
     public static let silenceBoundary: TimeInterval = 2.0
 
+    /// The exact prompt line `MeetingDigestService.chunkPrompt` renders for
+    /// one segment: `[<persistentID>] (<channel> <start>–<end>s): <text>`.
+    /// This is the single source of truth for that line — the service calls
+    /// it to build the prompt, and `chunks` costs against it, so the budget
+    /// this file enforces can never drift from what the model actually sees.
+    public static func renderedLine(for segment: VoiceTranscriptSegment) -> String {
+        let channel = segment.source == .meeting ? "meeting" : "you"
+        return "[\(MeetingTranscriptMerge.persistentID(for: segment))] (\(channel) "
+            + String(format: "%.1f–%.1fs", segment.startSeconds, segment.endSeconds)
+            + "): \(segment.text)"
+    }
+
     public static func chunks(
         segments: [VoiceTranscriptSegment],
         budgetTokens: Int,
