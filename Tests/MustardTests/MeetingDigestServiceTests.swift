@@ -163,6 +163,51 @@ final class MeetingDigestServiceTests: XCTestCase {
                       "the reduction sees the partial digests")
     }
 
+    // MARK: - Budget (BAK-328: real instructions size + output reserve, not contextSize/2)
+
+    func test_budget_isRealContextMinusInstructionsMinusOutputReserve() async throws {
+        // Old formula: budget = contextSize/2 = 2048. New formula: budget =
+        // contextSize - tokenCount(instructions) - outputReserve(1024). With
+        // contextSize 4096 and the 19-char "DIGEST-INSTRUCTIONS" fixture,
+        // the new budget is ~3053. Two segments whose combined RENDERED
+        // cost sits strictly between 2048 and 3053 fit in ONE chunk under
+        // the real budget, but would have been forced into two chunks (plus
+        // a reduction pass) under the old contextSize/2 guess.
+        let instructions = "DIGEST-INSTRUCTIONS"
+        let contextSize = 4096
+        let outputReserve = 1024 // mirrors MeetingDigestService.outputReserve
+        let oldBudget = max(256, contextSize / 2)
+        let newBudget = max(256, contextSize - instructions.count - outputReserve)
+
+        let pad = String(repeating: "x", count: 1050)
+        let seg1 = VoiceTranscriptSegment(
+            id: "s1", text: pad, startSeconds: 0, endSeconds: 1,
+            isFinal: true, confidence: nil, source: .microphone)
+        let seg2 = VoiceTranscriptSegment(
+            id: "s2", text: pad, startSeconds: 10, endSeconds: 11,
+            isFinal: true, confidence: nil, source: .microphone)
+        let combinedCost = MeetingDigestChunker.renderedLine(for: seg1).count
+            + MeetingDigestChunker.renderedLine(for: seg2).count
+
+        // Sanity check on the fixture itself: if this ever fails, the test
+        // below would pass or fail for the wrong reason.
+        XCTAssertGreaterThan(combinedCost, oldBudget, "fixture must overflow the old budget")
+        XCTAssertLessThanOrEqual(combinedCost, newBudget, "fixture must fit the new budget")
+
+        let stub = StubGenerating(results: [generated(summary: "One pass.")])
+        let service = makeService(
+            stub: stub, prompts: ["meeting-digest-27": instructions],
+            tokenCount: { $0.count })
+
+        let digest = try await service.digest(segments: [seg1, seg2], now: now).get()
+
+        XCTAssertEqual(
+            stub.recorder.prompts.count, 1,
+            "the real budget fits both segments in one chunk; contextSize/2 "
+                + "would have forced a split + reduce")
+        XCTAssertEqual(digest.summary, "One pass.")
+    }
+
     // MARK: - Failures (typed, retryable)
 
     func test_modelUnavailable_failsWithoutGenerating() async {
