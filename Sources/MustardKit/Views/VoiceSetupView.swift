@@ -91,6 +91,10 @@ public struct VoiceSetupView: View {
     @State private var status = VoicePermissionStatus()
     @State private var assets = AssetRowState.unknown
     @State private var requesting: VoiceCapability?
+    /// Custom transcription vocabulary (BAK-334) — newline/comma-separated,
+    /// same raw-string-in-UserDefaults shape as the rest of Voice Setup.
+    /// Parsed by `VoiceLexicon.parseUserTerms` at capture/meeting start.
+    @AppStorage(VoiceLexiconUserTerms.key) private var customVocabularyRaw = ""
 
     public init(probes: VoiceSetupProbes = .live()) {
         self.probes = probes
@@ -126,6 +130,22 @@ public struct VoiceSetupView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     sectionHeader("ON-DEVICE SPEECH ASSETS")
                     assetRow
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionHeader("CUSTOM VOCABULARY")
+                    Text("Names transcription keeps mishearing — clients, colleagues, project codes. One per line or comma-separated. Applied to every capture and meeting alongside your areas, lists, and recent task titles.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    TextEditor(text: $customVocabularyRaw)
+                        .font(Theme.Fonts.body)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 84)
+                        .padding(8)
+                        .background(Theme.Palette.surface)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.Palette.hairline))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
                 if !PushToTalkHotKey.registrationBoard.isEmpty {
