@@ -208,6 +208,44 @@ final class MeetingDigestServiceTests: XCTestCase {
         XCTAssertEqual(digest.summary, "One pass.")
     }
 
+    // MARK: - Utterance merging (BAK-329: near-word-level finals collapse before chunking)
+
+    func test_manyTinyAdjacentSegments_mergeIntoFewerDigestChunksThanUnmerged() async throws {
+        // 100 near-word-level finals, each 0.3s apart (well under the 1.5s
+        // pause threshold) — exactly the shape the live transcriber emits.
+        let segments = (0..<100).map { i in
+            seg("s\(i)", "word here", start: Double(i) * 0.3)
+        }
+        let instructions = "DIGEST-INSTRUCTIONS"
+        let tokenCount: @Sendable (String) -> Int = { $0.count }
+        let outputReserve = MeetingDigestService.outputReserve
+        let budget = max(256, 4096 - instructions.count - outputReserve)
+
+        // What chunking would need WITHOUT merging — the pre-BAK-329 shape.
+        let unmergedChunks = MeetingDigestChunker.chunks(
+            segments: segments, budgetTokens: budget, tokenCount: tokenCount)
+        XCTAssertGreaterThan(
+            unmergedChunks.count, 1,
+            "fixture must actually need multiple chunks before merging, or this test proves nothing")
+
+        let action = GeneratedMeetingAction(
+            title: "Follow up", owner: nil, dueISO8601: nil,
+            evidenceSegmentIDs: [pid(segments[0])])
+        let stub = StubGenerating(results: [generated(actions: [action])])
+        let service = makeService(
+            stub: stub, prompts: ["meeting-digest-27": instructions], tokenCount: tokenCount)
+
+        let digest = try await service.digest(segments: segments, now: now).get()
+
+        XCTAssertLessThan(
+            stub.recorder.prompts.count, unmergedChunks.count,
+            "merging adjacent same-source segments ahead of chunking must cut the digest call count")
+        XCTAssertEqual(
+            digest.actions.count, 1,
+            "an action citing the first constituent's persistent id survives evidence validation")
+        XCTAssertEqual(digest.actions.first?.evidenceSegmentIDs, [pid(segments[0])])
+    }
+
     // MARK: - Failures (typed, retryable)
 
     func test_modelUnavailable_failsWithoutGenerating() async {
