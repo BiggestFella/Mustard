@@ -744,3 +744,13 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak328-digest-chunker/`
 - **Revert:** `git revert 9f2eb0b`
+
+## 2026-08-12 — MERGED · Utterance merge ahead of digest generation (BAK-329, PR #113)
+- **Risk:** medium (Logic/+Meeting/+Tests) · **Merged on green** (post-CI, 49s)
+- **Origin:** follow-on to BAK-328 — near-word-level transcriber finals (1,145 segments / 3,176 words on the 2026-08-05 standup) made ~75% of the digest prompt id/timing bookkeeping.
+- **Checks:** swift test 1514 pass/1 skip/0 fail (+12) · swift build clean · replay on the real standup store: 155 utterances → 3 chunks (was 9), ≥1,027 tokens output headroom per chunk
+- **Fresh-context review:** mergeable, 0 blocking; non-blocking: near-cap merge-cost bound unasserted; single-oversized-segment edge untested (hand-traced correct).
+- **What landed:** pure `MeetingUtteranceMerge` (1.5s same-source pause rule, 2,000-char cap, interleaving preserved); digest consumes `utterances.map(\.asSegment)` — utterance id = first constituent's real persisted id, so evidence citations resolve; `validIDs` still built from original segments; persisted transcript untouched.
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak329-utterance-merge/`
+- **Revert:** `git revert 882fac6`
