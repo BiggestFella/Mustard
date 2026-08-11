@@ -46,8 +46,16 @@ public final class MeetingTranscriptionService {
     /// Start the You session, then try the Meeting session; an
     /// insufficient-resources failure selects the sequential fallback, any
     /// other failure propagates (never a silent degradation).
-    public func start(sources: [MeetingAudioSource]) async throws {
+    ///
+    /// - Parameter lexicon: contextual-vocabulary terms (BAK-334, e.g. area
+    ///   names, meeting-action owners) computed ONCE by the caller at
+    ///   meeting start and forwarded to every session this call creates.
+    ///   Default `[]` keeps existing callers unchanged. A session that
+    ///   doesn't support biasing (the default `VoiceTranscribing.setContext`)
+    ///   ignores it; a failure to apply it never blocks starting the meeting.
+    public func start(sources: [MeetingAudioSource], lexicon: [String] = []) async throws {
         let you = try await makeSession()
+        try? await you.setContext(lexicon)
         _ = try await you.start(source: .microphone)
         youSession = you
 
@@ -60,6 +68,7 @@ public final class MeetingTranscriptionService {
         }
 
         let meeting = try await makeSession()
+        try? await meeting.setContext(lexicon)
         do {
             _ = try await meeting.start(source: .meeting)
             meetingSession = meeting

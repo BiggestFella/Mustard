@@ -89,11 +89,18 @@ public final class VoiceTaskCaptureCoordinator {
         /// (`AppleSpeechSession` is one-shot by design), fed by the built-in
         /// microphone. Only the mic TCC grant is requested — SpeechAnalyzer
         /// transcription is on-device and needs no speech-recognition grant.
+        ///
+        /// - Parameter lexicon: contextual-vocabulary terms (BAK-334)
+        ///   recomputed fresh for EACH capture (called once per `begin()`,
+        ///   never per buffer) so a capture always sees the latest areas/
+        ///   task lists/titles. Default `{ [] }` keeps existing callers of
+        ///   this factory unchanged.
         @MainActor
         public static func liveMicrophone(
-            makeSession: @escaping @MainActor () throws -> any VoiceTranscribing
+            makeSession: @escaping @MainActor () throws -> any VoiceTranscribing,
+            lexicon: @escaping @MainActor () -> [String] = { [] }
         ) -> Speech {
-            let feed = MicrophoneFeed(makeSession: makeSession)
+            let feed = MicrophoneFeed(makeSession: makeSession, lexicon: lexicon)
             return Speech(
                 authorize: { await AVCaptureDevice.requestAccess(for: .audio) },
                 begin: { try await feed.begin() },
@@ -220,13 +227,18 @@ public final class VoiceTaskCaptureCoordinator {
             loadPrompt: VoiceTaskDraftGenerator.bundledPrompt)
         self.init(
             context: context,
-            speech: .liveMicrophone {
-                guard #available(macOS 27.0, *) else {
-                    throw VoiceSessionError.notReady(
-                        .unavailable("Voice capture needs macOS 27"))
-                }
-                return AppleSpeechSession.live()
-            },
+            speech: .liveMicrophone(
+                makeSession: {
+                    guard #available(macOS 27.0, *) else {
+                        throw VoiceSessionError.notReady(
+                            .unavailable("Voice capture needs macOS 27"))
+                    }
+                    return AppleSpeechSession.live()
+                },
+                lexicon: {
+                    VoiceLexiconSource.fetch(
+                        context: context, now: .now, userTerms: VoiceLexiconUserTerms.load())
+                }),
             hotKey: .live(PushToTalkHotKey()),
             pill: .panel(),
             draft: { transcript, areas, now in
@@ -535,6 +547,10 @@ public final class VoiceTaskCaptureCoordinator {
 @MainActor
 private final class MicrophoneFeed {
     private let makeSession: @MainActor () throws -> any VoiceTranscribing
+    /// Contextual-vocabulary provider (BAK-334), called fresh at the top of
+    /// every `begin()` so a capture always biases on the current areas/
+    /// task lists/titles rather than whatever was true at app launch.
+    private let lexicon: @MainActor () -> [String]
     /// One engine per capture, created in `begin`. A long-lived engine caches
     /// the input device's format across sleep/wake and device swaps, and
     /// installing a tap with that stale format makes AVFAudio raise an
@@ -551,8 +567,12 @@ private final class MicrophoneFeed {
     /// (observed: cancel at .978, tap installed at 1.041, buffers climbing).
     private var generation = 0
 
-    init(makeSession: @escaping @MainActor () throws -> any VoiceTranscribing) {
+    init(
+        makeSession: @escaping @MainActor () throws -> any VoiceTranscribing,
+        lexicon: @escaping @MainActor () -> [String] = { [] }
+    ) {
         self.makeSession = makeSession
+        self.lexicon = lexicon
     }
 
     func begin() async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error> {
@@ -566,6 +586,9 @@ private final class MicrophoneFeed {
         let mine = generation
 
         let session = try makeSession()
+        // BAK-334: computed once for this capture, applied before the
+        // session starts. A biasing failure never blocks capture.
+        try? await session.setContext(lexicon())
         let stream = try await session.start(source: .microphone)
         // A cancel that arrived during that await already ran its teardown,
         // so finishing setup now would strand a live tap. Undo and bail.
