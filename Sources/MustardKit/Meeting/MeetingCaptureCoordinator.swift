@@ -238,6 +238,12 @@ public final class MeetingCaptureCoordinator {
         voiceLog.notice("meeting: mix done, recording complete")
         stampAudioPaths(on: record)
         record.audioFinalized = true
+        // The finalized state must be durable BEFORE the recovery manifest
+        // is deleted — a crash between the two would otherwise strand the
+        // meeting at "Finishing…" forever, since recoverOnLaunch discovers
+        // work solely by scanning for manifests.
+        try? context.save()
+        cleanUpWorkingFiles(for: record)
 
         // BAK-332: the audio/transcript parity check — the actual fix for
         // the incident. Before this, a source could produce hundreds of
@@ -316,8 +322,16 @@ public final class MeetingCaptureCoordinator {
                 context.insert(created)
                 return created
             }()
-            // A finished meeting's manifest is just a leftover; only meetings
-            // that never reached ready are surfaced as partial.
+            // BAK-333: a meeting that already finished (`ready` +
+            // `audioFinalized`) has a manifest here for one reason only — it
+            // finalized before this cleanup existed, or a prior cleanup pass
+            // never completed. Either way it is a pure leftover: sweep its
+            // working files now and never touch its status. A finished
+            // meeting is never promoted (back) to partial.
+            if record.status == .ready, record.audioFinalized {
+                cleanUpWorkingFiles(for: record)
+                continue
+            }
             guard record.status != .ready else { continue }
             record.status = .partial
             record.startedAt = manifest.startedAt
@@ -453,6 +467,54 @@ public final class MeetingCaptureCoordinator {
         record.youAudioPath = relative(.you)
         record.meetingAudioPath = relative(.meeting)
         record.playbackAudioPath = relative(.playback)
+    }
+
+    /// BAK-333: reclaim a finalized meeting's crash-recovery working files —
+    /// a real 23-minute `ready` meeting was carrying ~285 MB across both
+    /// `.partial.caf` sources plus a leftover manifest, ~7x the audio it
+    /// actually kept. `MeetingWorkingFileCleanup` makes the decision (which
+    /// files are safe to delete); this only executes it through the
+    /// validated `MeetingAudioStore` URLs. Deletion is strictly
+    /// best-effort — a failure logs and never touches the record, and only
+    /// files that are actually present are removed (deleting an
+    /// already-gone file is success, not failure, matching
+    /// `MeetingAudioStore.deleteAudio`'s idempotence).
+    ///
+    /// Called from two places: right after a clean finalize
+    /// (`stampAudioPaths`/`audioFinalized = true` above), and from
+    /// `recoverOnLaunch` as a one-off sweep for meetings that finalized
+    /// before this cleanup existed.
+    private func cleanUpWorkingFiles(for record: MeetingRecord) {
+        let startedSources = Set(
+            record.captureSources
+                .compactMap(MeetingAudioSource.init(rawValue:))
+                .map(\.trackChannel))
+        func finalExists(_ file: MeetingAudioFile) -> Bool {
+            guard let url = try? store.fileURL(for: file, meetingUID: record.uid) else { return false }
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+        var finalsThatExist: Set<MeetingSegmentSource> = []
+        if finalExists(.you) { finalsThatExist.insert(.you) }
+        if finalExists(.meeting) { finalsThatExist.insert(.meeting) }
+        let manifestURL = try? store.fileURL(for: .recoveryManifest, meetingUID: record.uid)
+        let hasManifest = manifestURL.map {
+            FileManager.default.fileExists(atPath: $0.path)
+        } ?? false
+
+        let toDelete = MeetingWorkingFileCleanup.filesToDelete(
+            startedSources: startedSources,
+            finalsThatExist: finalsThatExist,
+            hasManifest: hasManifest)
+        for file in toDelete {
+            guard let url = try? store.fileURL(for: file, meetingUID: record.uid),
+                  FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                voiceLog.error(
+                    "meeting: working-file cleanup failed uid=\(record.uid, privacy: .public) file=\(file.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     /// The persisted (CloudKit-shaped) status for a machine state; nil keeps
