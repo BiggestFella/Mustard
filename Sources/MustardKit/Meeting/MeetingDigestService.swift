@@ -177,12 +177,7 @@ public struct MeetingDigestService {
     static func chunkPrompt(
         _ chunk: [VoiceTranscriptSegment], now: Date, calendar: Calendar
     ) -> String {
-        let lines = chunk.map { segment in
-            let channel = segment.source == .meeting ? "meeting" : "you"
-            return "[\(MeetingTranscriptMerge.persistentID(for: segment))] (\(channel) "
-                + String(format: "%.1f–%.1fs", segment.startSeconds, segment.endSeconds)
-                + "): \(segment.text)"
-        }
+        let lines = chunk.map(MeetingDigestChunker.renderedLine(for:))
         return """
         Today is \(dayStamp(now: now, calendar: calendar)) (timezone \(calendar.timeZone.identifier)).
 

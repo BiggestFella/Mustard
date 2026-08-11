@@ -35,7 +35,7 @@ public enum MeetingDigestChunker {
         var lastSilenceIndex: Int?
 
         for segment in segments {
-            let cost = tokenCount(segment.text)
+            let cost = tokenCount(Self.renderedLine(for: segment))
             if let previous = current.last,
                segment.startSeconds - previous.endSeconds >= silenceBoundary {
                 lastSilenceIndex = current.count - 1
@@ -45,7 +45,7 @@ public enum MeetingDigestChunker {
                     // Cut on silence: close the head, carry the tail forward.
                     result.append(Array(current[...cut]))
                     current = Array(current[(cut + 1)...])
-                    currentTokens = current.reduce(0) { $0 + tokenCount($1.text) }
+                    currentTokens = current.reduce(0) { $0 + tokenCount(Self.renderedLine(for: $1)) }
                     lastSilenceIndex = nil
                     if !current.isEmpty, currentTokens + cost > budgetTokens {
                         result.append(current)
