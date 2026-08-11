@@ -214,6 +214,83 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .ready)
     }
 
+    // MARK: - Audio/transcript source parity (BAK-332)
+
+    /// Regression for a real incident: a meeting finished `status = ready`,
+    /// `audioFinalized = true`, 413 persisted "you" transcript segments — and
+    /// zero mic bytes on disk. The writer's `append` silently threw on every
+    /// mic buffer (here: a mismatched sample rate, exactly the guard in
+    /// `MeetingAudioWriter.append` that a stale post-crash AVFoundation
+    /// engine state could trip) while the transcription stub kept receiving
+    /// the same buffers and returning real segments regardless — the two
+    /// were never compared. This drives that exact shape and asserts the
+    /// mismatch is no longer silently clean.
+    func test_micWriterNeverWritesAFile_whileTranscriptionSucceeds_flagsParity_keepsRecordingAndTranscript() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]))
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+
+        // Mic samples arrive at the WRONG sample rate: MeetingAudioWriter
+        // .append throws unsupportedFormat on every one, so the writer never
+        // opens a file for this channel — exactly the incident's mechanism.
+        // The system-audio channel writes normally.
+        let badFormat = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+        let badBuffer = AVAudioPCMBuffer(pcmFormat: badFormat, frameCapacity: 4_410)!
+        badBuffer.frameLength = 4_410
+        capturing.continuations[.microphone]?.yield(
+            MeetingAudioSample(source: .microphone, buffer: badBuffer, hostSeconds: 1))
+        capturing.continuations[.systemAudio]?.yield(
+            MeetingAudioSample(source: .systemAudio, buffer: pcm(), hostSeconds: 1))
+        for _ in 0..<25 { await Task.yield() }
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(
+            record.status, .ready,
+            "recording + transcript + digest all completed; .partial would mislabel this as Interrupted and hide digest actions")
+        XCTAssertTrue(record.audioFinalized)
+        XCTAssertNil(record.youAudioPath, "the mic writer never produced a file")
+        XCTAssertEqual(
+            record.meetingAudioPath, "Recordings/\(record.uid)/meeting.m4a",
+            "the system-audio channel finalized normally and stays untouched")
+        XCTAssertEqual(
+            record.errorMessage,
+            "Microphone audio was not saved — the transcript is unaffected.",
+            "the mismatch is surfaced, naming the exact lost channel, instead of being silently clean")
+
+        let segments = try context.fetch(FetchDescriptor<MeetingTranscriptSegment>())
+        XCTAssertEqual(segments.count, 1, "the transcript survives even though its audio did not")
+        XCTAssertEqual(segments.first?.rawText, "ship it friday")
+        XCTAssertEqual(segments.first?.source, .you)
+    }
+
+    func test_bothSourcesFinalize_matchingTheirTranscripts_leavesErrorMessageNil() async throws {
+        let context = try ctx()
+        let capturing = StubCapturing()
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [seg("y1", "ship it friday")]))
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+
+        capturing.continuations[.microphone]?.yield(
+            MeetingAudioSample(source: .microphone, buffer: pcm(), hostSeconds: 1))
+        capturing.continuations[.systemAudio]?.yield(
+            MeetingAudioSample(source: .systemAudio, buffer: pcm(), hostSeconds: 1))
+        for _ in 0..<25 { await Task.yield() }
+
+        await coordinator.stop()
+
+        let record = try XCTUnwrap(try records(in: context).first)
+        XCTAssertEqual(record.status, .ready)
+        XCTAssertNil(record.errorMessage, "a clean recording never gets a spurious parity message")
+    }
+
     // MARK: - Failures
 
     func test_noPermittedSources_failsWithoutCreatingARecord() async throws {

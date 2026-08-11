@@ -156,13 +156,20 @@ consequence anywhere in the pipeline.
 
 ## Acceptance criteria checklist
 
-- [ ] Root cause analysis above, with file:line evidence.
-- [ ] Writer-append failure surfaces a `voiceLog.error` naming the channel.
-- [ ] `MeetingSourceParity` pure unit: all-good, missing-you-audio,
+- [x] Root cause analysis above, with file:line evidence.
+- [x] Writer-append failure surfaces a `voiceLog.error` naming the channel
+      (once per channel per recording, via `writerFailureLogged`).
+- [x] `MeetingSourceParity` pure unit: all-good, missing-you-audio,
       missing-meeting-audio, source-never-started vs started-then-lost,
-      empty-transcript — all green, written before the implementation.
-- [ ] Coordinator regression: mic writer produces no file while transcript
-      persists → NOT silently clean, message names the mic channel,
-      transcript + meeting audio untouched.
-- [ ] `swift test` full suite green, `swift build` exit 0.
-- [ ] No push, no PR.
+      empty-transcript (both the clean and the not-flagged variants), plus a
+      both-sources-missing determinism case — 8 tests, all green, written
+      before the implementation (confirmed red first — see verification.md).
+- [x] Coordinator regression: mic writer produces no file (via a
+      mismatched-sample-rate buffer tripping `MeetingAudioWriter.append`'s
+      existing guard) while transcript persists → NOT silently clean,
+      `errorMessage` names the microphone, transcript + meeting audio
+      untouched. Confirmed red-first by temporarily reverting the
+      coordinator fix — see verification.md.
+- [x] `swift test` full suite green (1549 pass / 1 skip / 0 failures, exit
+      0), `swift build` exit 0.
+- [x] No push, no PR — stopped after local commits.

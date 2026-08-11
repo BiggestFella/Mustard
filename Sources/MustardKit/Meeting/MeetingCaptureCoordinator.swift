@@ -41,6 +41,10 @@ public final class MeetingCaptureCoordinator {
     private var capture: MeetingAudioCapture?
     private var transcriptionFeed: AsyncStream<(MeetingSegmentSource, MeetingAudioSample)>.Continuation?
     private var transcriptionPump: Task<Void, Never>?
+    /// BAK-332: channels whose writer-append failure has already been logged
+    /// this recording — logs once per channel rather than once per buffer.
+    /// Reset at the start of each `confirmStart`.
+    private var writerFailureLogged: Set<MeetingSegmentSource> = []
 
     public init(
         context: ModelContext,
@@ -110,6 +114,7 @@ public final class MeetingCaptureCoordinator {
         do {
             let writer = try makeWriter(record.uid, startedAt)
             self.writer = writer
+            writerFailureLogged = []
             try await transcription.start(sources: sources)
 
             let (feed, continuation) = AsyncStream.makeStream(
@@ -122,9 +127,24 @@ public final class MeetingCaptureCoordinator {
                     try? await transcription.append(sample.buffer, channel: channel)
                 }
             }
+            // BAK-332: a writer-append failure used to vanish behind `try?`
+            // while the very same buffer kept flowing into transcription —
+            // the mechanism behind an incident where 413 "you" transcript
+            // segments persisted with zero mic bytes ever written to disk.
+            // Surface it once per channel; `MeetingSourceParity` at finalize
+            // is what gives the loss a visible, user-facing consequence —
+            // this log is the earliest signal, not the only one.
             let capture = MeetingAudioCapture(capturing: capturing) { [weak self] channel, sample in
-                try? self?.writer?.append(sample.buffer, to: channel)
-                self?.transcriptionFeed?.yield((channel, sample))
+                guard let self else { return }
+                do {
+                    try self.writer?.append(sample.buffer, to: channel)
+                } catch {
+                    if self.writerFailureLogged.insert(channel).inserted {
+                        voiceLog.error(
+                            "meeting: writer append failed channel=\(channel.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                    }
+                }
+                self.transcriptionFeed?.yield((channel, sample))
             }
             try await capture.start(sources: sources)
             self.capture = capture
@@ -218,6 +238,15 @@ public final class MeetingCaptureCoordinator {
         voiceLog.notice("meeting: mix done, recording complete")
         stampAudioPaths(on: record)
         record.audioFinalized = true
+
+        // BAK-332: the audio/transcript parity check — the actual fix for
+        // the incident. Before this, a source could produce hundreds of
+        // real transcript segments while its writer silently never wrote a
+        // file, and NOTHING compared the two: the meeting still finalized
+        // `ready`/`audioFinalized = true`. Recording, transcript and digest
+        // all stay untouched either way; a mismatch only ever adds a
+        // user-visible `errorMessage` naming the lost channel(s).
+        applySourceParity(segments: segments, to: record)
 
         // Digest (Task 7's service): success fills summary + proposals; any
         // failure is marked retryable and never degrades the recording.
@@ -385,6 +414,33 @@ public final class MeetingCaptureCoordinator {
             isFinal: true,
             confidence: persisted.confidence,
             source: source)
+    }
+
+    /// BAK-332: compare what the transcript proves happened against which
+    /// audio channels actually finalized to disk. `status`/`audioFinalized`
+    /// are never touched here — `.partial` renders as "Interrupted" in the
+    /// review UI and would also hide the Generate/Retry digest buttons
+    /// (both gate on `status == .ready`), which is wrong for a meeting whose
+    /// recording and transcript are otherwise completely intact. A mismatch
+    /// only sets `errorMessage`, which the review UI already surfaces
+    /// unconditionally in the header.
+    private func applySourceParity(segments: [VoiceTranscriptSegment], to record: MeetingRecord) {
+        let transcribedChannels = Set(segments.map { segment -> MeetingSegmentSource in
+            segment.source == .meeting ? .meeting : .you
+        })
+        var finalizedChannels: Set<MeetingSegmentSource> = []
+        if record.youAudioPath != nil { finalizedChannels.insert(.you) }
+        if record.meetingAudioPath != nil { finalizedChannels.insert(.meeting) }
+        let startedSources = record.captureSources.compactMap(MeetingAudioSource.init(rawValue:))
+
+        let verdict = MeetingSourceParity.evaluate(
+            startedSources: startedSources,
+            transcribedChannels: transcribedChannels,
+            finalizedChannels: finalizedChannels)
+        guard let message = verdict.userMessage else { return }
+        record.errorMessage = message
+        voiceLog.error(
+            "meeting: source parity mismatch missing=\(verdict.missing.map(\.rawValue).joined(separator: ","), privacy: .public)")
     }
 
     private func stampAudioPaths(on record: MeetingRecord) {
