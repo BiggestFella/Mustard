@@ -55,6 +55,12 @@ public struct GeneratedMeetingDigest: Sendable {
 /// evidence validation. A proposal without a real transcript segment behind
 /// it never survives.
 public struct MeetingDigestService {
+    /// Headroom reserved out of the model's context window for the
+    /// guided-generation structured output and the chunk prompt's date
+    /// preamble — the transcript budget is whatever context is left after
+    /// the real instructions size and this reserve (BAK-328).
+    static let outputReserve = 1024
+
     private let service: any OnDeviceGenerating
     private let calendar: Calendar
     private let locale: Locale
@@ -94,9 +100,10 @@ public struct MeetingDigestService {
         case .success(let value): capabilities = value
         }
 
-        // Half the reported context goes to transcript; the rest is headroom
-        // for instructions and the structured output.
-        let budget = max(256, capabilities.contextSize / 2)
+        // The transcript gets whatever context is left after the real
+        // instructions size and the output reserve — not a flat half-context
+        // guess, which ignored how big the instructions actually are.
+        let budget = max(256, capabilities.contextSize - tokenCount(instructions) - Self.outputReserve)
         let chunks = MeetingDigestChunker.chunks(
             segments: segments, budgetTokens: budget, tokenCount: tokenCount)
 
