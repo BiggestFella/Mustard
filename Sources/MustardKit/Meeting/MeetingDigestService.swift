@@ -104,8 +104,15 @@ public struct MeetingDigestService {
         // instructions size and the output reserve — not a flat half-context
         // guess, which ignored how big the instructions actually are.
         let budget = max(256, capabilities.contextSize - tokenCount(instructions) - Self.outputReserve)
+
+        // Near-word-level transcriber finals collapse into speech-shaped
+        // utterances before chunking (BAK-329) — each raw segment costs a
+        // ~44-char id/timing prefix in the rendered prompt, so hundreds of
+        // tiny segments are mostly bookkeeping. The persisted transcript
+        // (`segments`) is untouched; only the digest's view of it merges.
+        let utterances = MeetingUtteranceMerge.utterances(from: segments)
         let chunks = MeetingDigestChunker.chunks(
-            segments: segments, budgetTokens: budget, tokenCount: tokenCount)
+            segments: utterances.map(\.asSegment), budgetTokens: budget, tokenCount: tokenCount)
 
         // Map: one fresh generation per chunk.
         var partials: [GeneratedMeetingDigest] = []
