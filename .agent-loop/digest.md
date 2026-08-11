@@ -732,3 +732,15 @@ PASS.
 **Open follow-up (not fixed here, pre-existing):** `MicrophoneFeed.end()` doesn't bump
 `generation`, so a release finalizing while `begin()` is still awaiting `session.start`
 can leave the mic hot with an orphaned pump until the next capture. Task chip filed.
+
+## 2026-08-12 — MERGED · Digest chunker rendered-cost fix — digest now fits the on-device context (BAK-328, PR #112)
+- **Risk:** medium (Logic/+Meeting/+Tests) · **Merged on green** (post-CI, 52s on the mustard runner)
+- **Origin:** Leon's standup-transcript eval (2026-08-05 9am standup): `digestStatus = failed` on every real meeting; root-caused to the chunker costing `segment.text` while `chunkPrompt` renders a ~44-char id/timing prefix per segment (~3.4× budget → context overflow past ~5 min of speech). Digest had never succeeded on a real meeting.
+- **Checks:** swift test 1502 pass/1 skip/0 fail (baseline 1495) · swift build clean · red state independently reproduced by the fresh reviewer at b621e94 · replay over the real standup store: 9 chunks, worst 3,077 tokens incl. instructions, ≥1,019 output headroom (was 7,116 in chunk 1 alone)
+- **Fresh-context review:** mergeable, 0 blocking; non-blocking: budget test mirrors outputReserve constant; outputReserve=1024 is documented not measured.
+- **What landed:** `MeetingDigestChunker.renderedLine(for:)` as the single source of truth (chunker costs against it, `chunkPrompt` renders with it); budget = contextSize − tokenCount(instructions) − outputReserve(1024) replacing the flat contextSize/2 guess.
+- **⚠ Leon eye-check PENDING:** open the 2026-08-05 standup in Meetings and hit "Retry digest" — should produce a real summary now.
+- **Known limitation:** the reduce pass is still one generation (BAK-330 degrades gracefully; BAK-329 cuts chunk count ~4×).
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak328-digest-chunker/`
+- **Revert:** `git revert 9f2eb0b`
