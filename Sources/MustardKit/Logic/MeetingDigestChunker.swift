@@ -79,6 +79,70 @@ public enum MeetingDigestFailure: Error, Equatable, Sendable {
     case missingPrompt
 }
 
+/// A persistable, user-facing surface over `MeetingDigestFailure` (BAK-331).
+/// Plain rawValue enum — deliberately drops `LocalModelFailure.unavailable`'s
+/// associated detail string rather than persisting it, since that text could
+/// carry arbitrary model output.
+public enum MeetingDigestFailureReason: String, Codable, CaseIterable, Sendable {
+    case contextOverflow
+    case appleIntelligenceDisabled
+    case deviceNotEligible
+    case modelNotReady
+    case unsupportedLocale
+    case missingPrompt
+    case unavailable
+
+    public init(failure: MeetingDigestFailure) {
+        switch failure {
+        case .missingPrompt:
+            self = .missingPrompt
+        case .model(let modelFailure):
+            switch modelFailure {
+            case .contextOverflow: self = .contextOverflow
+            case .appleIntelligenceDisabled: self = .appleIntelligenceDisabled
+            case .deviceNotEligible: self = .deviceNotEligible
+            case .modelNotReady: self = .modelNotReady
+            case .unsupportedLocale: self = .unsupportedLocale
+            case .unavailable: self = .unavailable
+            }
+        }
+    }
+
+    /// Plain-language copy for `MeetingReviewView`'s digest failure caption.
+    public var userMessage: String {
+        switch self {
+        case .contextOverflow:
+            return "This meeting is too long for the on-device model to summarise in one pass."
+        case .appleIntelligenceDisabled:
+            return "Apple Intelligence is turned off — enable it in System Settings, then retry."
+        case .deviceNotEligible:
+            return "This Mac's hardware can't run the on-device model."
+        case .modelNotReady:
+            return "The on-device model is still downloading. Try again shortly."
+        case .unsupportedLocale:
+            return "The on-device model doesn't support this language."
+        case .missingPrompt:
+            return "Mustard's digest prompt is missing from this build."
+        case .unavailable:
+            return "The on-device model was unavailable. Try again."
+        }
+    }
+
+    /// Whether the view should offer a Retry button. `appleIntelligenceDisabled`
+    /// is a deliberate deviation from a strict "known cause → no retry"
+    /// table: once Leon flips the System Settings switch, retrying is
+    /// exactly the fix, so it offers retry unlike the other permanent-cause
+    /// failures.
+    public var offersRetry: Bool {
+        switch self {
+        case .contextOverflow, .deviceNotEligible, .unsupportedLocale, .missingPrompt:
+            return false
+        case .appleIntelligenceDisabled, .modelNotReady, .unavailable:
+            return true
+        }
+    }
+}
+
 /// The validated digest: every action's evidence verified against the real
 /// transcript, dates resolved deterministically, stamped for traceability.
 public struct MeetingDigest: Equatable, Sendable {
@@ -95,5 +159,44 @@ public struct MeetingDigest: Equatable, Sendable {
     public var actions: [Action]
     public var promptVersion: String
     public var osBuild: String
+    /// Transcript ranges (start–end seconds, offset into the meeting) whose
+    /// chunk generation failed — BAK-330: a bad chunk degrades the digest to
+    /// partial instead of discarding every chunk that DID succeed.
+    public var omittedSpans: [ClosedRange<Double>] = []
+
+    public init(
+        summary: String,
+        decisions: [String],
+        unresolvedQuestions: [String],
+        actions: [Action],
+        promptVersion: String,
+        osBuild: String,
+        omittedSpans: [ClosedRange<Double>] = []
+    ) {
+        self.summary = summary
+        self.decisions = decisions
+        self.unresolvedQuestions = unresolvedQuestions
+        self.actions = actions
+        self.promptVersion = promptVersion
+        self.osBuild = osBuild
+        self.omittedSpans = omittedSpans
+    }
+
+    /// A human-readable note for a partial digest: mm:ss offsets into the
+    /// meeting (deliberately timezone-free — these are elapsed-seconds
+    /// transcript timestamps, not wall-clock times), multiple spans joined
+    /// with "; ". `nil` when nothing was omitted.
+    public static func omissionNote(spans: [ClosedRange<Double>]) -> String? {
+        guard !spans.isEmpty else { return nil }
+        let ranges = spans.map { "\(offset($0.lowerBound))–\(offset($0.upperBound))" }
+        return "\(ranges.joined(separator: "; ")) into the meeting could not be summarised."
+    }
+
+    /// Renders elapsed seconds as `m:ss`, minutes rolling past 60 rather than
+    /// wrapping into an hour component.
+    private static func offset(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
 }
 
