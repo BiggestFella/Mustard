@@ -31,7 +31,8 @@ let package = Package(
         .testTarget(
             name: "MustardTests",
             dependencies: ["MustardKit", "MustardShims"],
-            path: "Tests/MustardTests"
+            path: "Tests/MustardTests",
+            resources: [.copy("Fixtures")]
         ),
     ],
     // Tools 6.x defaults new packages to the Swift 6 language mode; stay in the
