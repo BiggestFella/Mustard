@@ -91,9 +91,14 @@ final class MeetingSpeakerAttributionTests: XCTestCase {
         XCTAssertEqual(handoffs, [Handoff(segmentIndex: 0, name: "Fahad Khan")])
     }
 
+    /// Uses "back to you," rather than bare "over to" — the latter is now
+    /// clause-end restricted (review FINDING 1) and would reject this text
+    /// for an unrelated reason (trailing content after the name), which
+    /// would defeat the point of this test: that the second name token
+    /// stops at punctuation regardless.
     func test_detectHandoffs_secondTokenStopsAtPunctuation() {
         let handoffs = MeetingSpeakerAttribution.detectHandoffs(
-            texts: ["over to Fahad. Can you take it from here?"])
+            texts: ["back to you, Fahad. Can you take it from here?"])
         XCTAssertEqual(handoffs, [Handoff(segmentIndex: 0, name: "Fahad")])
     }
 
@@ -204,6 +209,92 @@ final class MeetingSpeakerAttributionTests: XCTestCase {
         let speakers = MeetingSpeakerAttribution.attribute(
             texts: texts, candidates: ["Fahad", "Alex"])
         XCTAssertEqual(speakers, [nil, "Alex"])
+    }
+
+    // MARK: - FINDING 1 (review): bare "over to" false-positives
+
+    /// The reviewer's exact reproduction: a bare "over to" mid-sentence,
+    /// pointing at something that is NOT the end of the clause, must never
+    /// be treated as a handoff.
+    func test_attribute_bareOverTo_midSentence_isNotAHandoff_reviewerRepro() {
+        let texts = ["let's move over to Sam's slide for revenue", "next update"]
+        let speakers = MeetingSpeakerAttribution.attribute(texts: texts, candidates: ["Sam"])
+        XCTAssertEqual(speakers, [nil, nil])
+    }
+
+    func test_detectHandoffs_bareOverTo_midSentence_producesNoHandoff_reviewerRepro() {
+        XCTAssertTrue(MeetingSpeakerAttribution.detectHandoffs(
+            texts: ["let's move over to Sam's slide for revenue"]).isEmpty)
+    }
+
+    /// A second, unrelated bare "over to" that also isn't clause-ending.
+    func test_attribute_bareOverTo_geographicPhrase_isNotAHandoff() {
+        let texts = ["we went over to the office yesterday", "next update"]
+        let speakers = MeetingSpeakerAttribution.attribute(
+            texts: texts, candidates: ["Office", "Offices"])
+        XCTAssertEqual(speakers, [nil, nil])
+    }
+
+    /// A genuine bare "over to" that DOES end the clause must still fire —
+    /// the tightening is about trailing content, not about the phrase
+    /// itself.
+    func test_detectHandoffs_bareOverTo_stillFiresAtClauseEnd() {
+        let handoffs = MeetingSpeakerAttribution.detectHandoffs(texts: ["Over to Alin."])
+        XCTAssertEqual(handoffs, [Handoff(segmentIndex: 0, name: "Alin")])
+    }
+
+    func test_attribute_bareOverTo_stillFiresAtClauseEnd() {
+        let texts = ["Over to Alin.", "thanks"]
+        let speakers = MeetingSpeakerAttribution.attribute(texts: texts, candidates: ["Alin"])
+        XCTAssertEqual(speakers, [nil, "Alin"])
+    }
+
+    /// The clause-end tightening applies ONLY to the bare "over to"
+    /// pattern — the other four families are unaffected and still fire
+    /// with trailing content after the name.
+    func test_detectHandoffs_passItBackTo_isNotRestrictedByClauseEnd() {
+        let handoffs = MeetingSpeakerAttribution.detectHandoffs(
+            texts: ["I shall pass it back to Alex, thanks everyone"])
+        XCTAssertEqual(handoffs, [Handoff(segmentIndex: 0, name: "Alex")])
+    }
+
+    func test_detectHandoffs_handOverTo_isNotRestrictedByClauseEnd() {
+        let handoffs = MeetingSpeakerAttribution.detectHandoffs(
+            texts: ["I'll hand over to Devi, and she'll take it from here"])
+        XCTAssertEqual(handoffs, [Handoff(segmentIndex: 0, name: "Devi")])
+    }
+
+    // MARK: - FINDING 1a (review): possessive names are never a handoff name
+
+    func test_detectHandoffs_possessiveName_isNeverAHandoff() {
+        XCTAssertTrue(MeetingSpeakerAttribution.detectHandoffs(texts: ["over to Sam's."]).isEmpty)
+    }
+
+    func test_detectHandoffs_possessiveName_isNeverAHandoff_evenWithoutTrailingPunctuation() {
+        // Isolate rule (a) from rule (b): this text ends right after the
+        // possessive token (no trailing content at all), so a clause-end
+        // check alone would let it through — only the possessive check
+        // rejects it.
+        XCTAssertTrue(MeetingSpeakerAttribution.detectHandoffs(texts: ["over to Sam's"]).isEmpty)
+    }
+
+    // MARK: - FINDING 2 (review): ambiguous candidate match stays unattributed
+
+    /// The reviewer's exact reproduction: "Ali" fuzzy-matches both "Alina"
+    /// and "Alison" — an ambiguous match must never silently pick the
+    /// first candidate in list order.
+    func test_attribute_ambiguousCandidateMatch_staysUnattributed_reviewerRepro() {
+        let texts = ["over to Ali", "next update"]
+        let speakers = MeetingSpeakerAttribution.attribute(
+            texts: texts, candidates: ["Alina", "Alison"])
+        XCTAssertEqual(speakers, [nil, nil])
+    }
+
+    func test_attribute_uniqueFuzzyMatch_stillResolves() {
+        let texts = ["over to Ali", "next update"]
+        let speakers = MeetingSpeakerAttribution.attribute(
+            texts: texts, candidates: ["Alina", "Bob"])
+        XCTAssertEqual(speakers, [nil, "Alina"], "only one candidate matches — no ambiguity")
     }
 
     // MARK: - Realism: a standup handoff chain
