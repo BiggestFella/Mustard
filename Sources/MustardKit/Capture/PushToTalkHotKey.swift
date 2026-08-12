@@ -95,7 +95,7 @@ public enum HotKeyChord {
         (0x1000, "⌃"), (0x800, "⌥"), (0x200, "⇧"), (0x100, "⌘"),
     ]
     /// The key codes Mustard's chords actually use, plus a readable fallback.
-    private static let keyNames: [UInt32: String] = [49: "Space", 2: "D"]
+    private static let keyNames: [UInt32: String] = [49: "Space", 2: "D", 15: "R"]
 
     public static func description(keyCode: UInt32, modifiers: UInt32) -> String {
         let mods = masks.filter { modifiers & $0.0 != 0 }.map(\.1).joined()

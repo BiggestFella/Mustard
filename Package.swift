@@ -20,6 +20,7 @@ let package = Package(
                 .process("Resources"),
                 .process("Agent/Prompts"),
                 .process("Voice/Prompts"),
+                .process("Rewrite/Prompts"),
             ]
         ),
         .executableTarget(
