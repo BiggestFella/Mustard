@@ -89,8 +89,8 @@ no longer a single hardcoded frame.
   explicitly. Never auto-pruned.
 - **Custom collections (`+`).** Named buckets (e.g. Prompts, Colors). Clips are
   filed by drag or context menu. Collection tabs render after Shelf, with counts.
-  Deleting a collection returns nothing to history — items in a collection are
-  exempt from pruning while filed.
+  Items filed in a collection are exempt from pruning; deleting a collection
+  unfiles its items (they rejoin plain history and become prunable again).
 
 ### Search
 
