@@ -31,6 +31,42 @@ final class RitualPlannerTests: XCTestCase {
         XCTAssertNil(t.scheduledAt)
     }
 
+    func test_moveMutationsAreNoOpsForRepositoryProjections() {
+        let tomorrowProjection = task("tomorrow", scheduled: day.addingTimeInterval(9 * 3_600))
+        tomorrowProjection.source = CodeHeroesDecisionPolicy.source
+        let inboxProjection = task("inbox", scheduled: day)
+        inboxProjection.source = CodeHeroesDecisionPolicy.source
+        let todayProjection = task("today")
+        todayProjection.source = CodeHeroesDecisionPolicy.source
+        todayProjection.isTimed = true
+
+        RitualPlanner.pushToTomorrow(tomorrowProjection, calendar: cal)
+        RitualPlanner.sendToInbox(inboxProjection)
+        RitualPlanner.planToday(todayProjection, day: day, calendar: cal)
+
+        XCTAssertEqual(tomorrowProjection.scheduledAt, day.addingTimeInterval(9 * 3_600))
+        XCTAssertEqual(inboxProjection.scheduledAt, day)
+        XCTAssertNil(todayProjection.scheduledAt)
+        XCTAssertTrue(todayProjection.isTimed)
+    }
+
+    func test_focusAndRolloverExcludeRepositoryProjectionsWithoutChangingExistingFocus() {
+        let projection = task("Repository decision", scheduled: day)
+        projection.source = CodeHeroesDecisionPolicy.source
+        projection.carriedForwardAt = day
+        projection.focusOnDay = day
+        let ordinary = task("Ordinary task", scheduled: day)
+        ordinary.carriedForwardAt = day
+
+        XCTAssertEqual(RitualPlanner.rollover([projection, ordinary], day: day, calendar: cal).map(\.title),
+                       ["Ordinary task"])
+        XCTAssertEqual(RitualPlanner.focusCandidates([projection, ordinary], day: day, calendar: cal).map(\.title),
+                       ["Ordinary task"])
+        XCTAssertTrue(RitualPlanner.focused([projection], day: day, calendar: cal).isEmpty)
+        XCTAssertFalse(RitualPlanner.toggleFocus(projection, in: [projection, ordinary], day: day, calendar: cal))
+        XCTAssertEqual(projection.focusOnDay, day)
+    }
+
     // BAK-247 — a focus-starred task is pinned in the FOCUS section, so it must not
     // also appear in the chronological timeline below (that was the "duplicate").
     func test_timeline_excludesTodaysFocusStarredTasks() {
@@ -81,6 +117,22 @@ final class RitualPlannerTests: XCTestCase {
         XCTAssertEqual(
             RitualPlanner.plannedToday([mine, agents, done, otherDay, loose], day: day, calendar: cal).map(\.title),
             ["mine"]
+        )
+    }
+
+    func test_pickAndPlannedCandidatesExcludeProjectionEvenIfOwnerMetadataIsLocal() {
+        let inboxProjection = task("Inbox projection")
+        inboxProjection.source = CodeHeroesDecisionPolicy.source
+        let plannedProjection = task("Planned projection", scheduled: day)
+        plannedProjection.source = CodeHeroesDecisionPolicy.source
+        let ordinaryInbox = task("Ordinary inbox")
+        let ordinaryPlanned = task("Ordinary planned", scheduled: day)
+
+        XCTAssertEqual(RitualPlanner.pickCandidates([inboxProjection, ordinaryInbox]).map(\.title),
+                       ["Ordinary inbox"])
+        XCTAssertEqual(
+            RitualPlanner.plannedToday([plannedProjection, ordinaryPlanned], day: day, calendar: cal).map(\.title),
+            ["Ordinary planned"]
         )
     }
 
