@@ -22,6 +22,9 @@ public final class NotchController {
     private var screenObserver: NSObjectProtocol?
     /// The active tab drives the expanded frame (`NotchPanelMetrics`).
     public private(set) var activeTab: NotchTab = .today
+    /// A hotkey's requested landing tab, consumed once by the shell's
+    /// `.onAppear` (see `consumePendingTab`).
+    public private(set) var pendingTab: NotchTab?
 
     /// Set by the shell view so pin/tab changes re-render it.
     public var onStateChange: (() -> Void)?
@@ -165,10 +168,19 @@ public final class NotchController {
     /// ⌘⇧N / ⌃⌥V entry: open pinned on a specific tab.
     public func openPinned(on tab: NotchTab) {
         // Set the tab before showing so the panel opens straight at that tab's
-        // size rather than resizing a frame later.
+        // size rather than resizing a frame later, and hand the shell a
+        // one-shot request so its `.onAppear` doesn't bounce it to the default.
         activeTab = tab
+        pendingTab = tab
         show()
         pin()
+    }
+
+    /// Read-and-clear: the shell asks once per expansion. Nil means "no
+    /// request" — a plain hover-expand lands on the default tab as usual.
+    public func consumePendingTab() -> NotchTab? {
+        defer { pendingTab = nil }
+        return pendingTab
     }
 
     /// Release the AppKit hooks (global click monitor, screen-parameters
@@ -322,11 +334,14 @@ public struct NotchView: View {
         case .meetings:
             return nil
         case .clips:
-            return clips.filter { !$0.pinnedToShelf && $0.collection == nil }.count
+            let loose = clips.filter { !$0.pinnedToShelf && $0.collection == nil }.count
+            return loose > 0 ? loose : nil
         case .shelf:
-            return clips.filter(\.pinnedToShelf).count
+            let kept = clips.filter(\.pinnedToShelf).count
+            return kept > 0 ? kept : nil
         case .collection(let name):
-            return collections.first { $0.name == name }?.items?.count
+            let filed = collections.first { $0.name == name }?.items?.count ?? 0
+            return filed > 0 ? filed : nil
         }
     }
 
@@ -439,11 +454,16 @@ public struct NotchView: View {
         .padding(.horizontal, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            switchTo(NotchTabModel.defaultTab(recordingActive: recordingActive))
+            // A hotkey open (⌘⇧N / ⌃⌥V) names its tab; anything else — a plain
+            // hover-expand — lands on the default tab.
+            switchTo(
+                controller?.consumePendingTab()
+                    ?? NotchTabModel.defaultTab(recordingActive: recordingActive))
         }
         .onChange(of: tabs) { _, current in
-            // A deleted collection must not strand the shell on a dead tab.
-            if !current.contains(activeTab) { switchTo(.clips) }
+            // A deleted collection must not strand the shell on a dead tab;
+            // Today is always present and is where the panel normally lands.
+            if !current.contains(activeTab) { switchTo(.today) }
         }
         .onExitCommand { controller?.unpin() }
     }
