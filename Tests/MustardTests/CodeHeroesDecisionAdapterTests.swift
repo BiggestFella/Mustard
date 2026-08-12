@@ -131,12 +131,48 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).count, 0)
     }
 
+    func test_escapedDecisionSourceDirectorySymlinkSkipsClusterWithoutExternalLink() throws {
+        let fixture = try Fixture()
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try "# DEC-DL-1".write(to: outside.appendingPathComponent("DEC-DL-1.md"), atomically: true, encoding: .utf8)
+        let localDirectory = fixture.root.appendingPathComponent("operations/decisions/open")
+        try FileManager.default.removeItem(at: localDirectory)
+        try FileManager.default.createSymbolicLink(at: localDirectory, withDestinationURL: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.createdCount, 0)
+        XCTAssertEqual(report.skippedCount, 1)
+        XCTAssertEqual(report.findings.first?.reason, "Missing or escaped decision source")
+        XCTAssertEqual(try tasks(context).count, 0)
+    }
+
+    func test_injectedFileManagerReadFailureIsReportedWithoutModelMutation() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, fileManager: FailingReadFileManager(), now: { self.fixedNow })
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.createdCount, 0)
+        XCTAssertEqual(report.findings.first?.reason, "Unable to read queue file")
+        XCTAssertEqual(try tasks(context).count, 0)
+    }
+
     private func makeContext() throws -> ModelContext {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         return ModelContext(try ModelContainer(for: Area.self, TaskList.self, MustardTask.self, Recommendation.self, AgentRun.self, AgentMessage.self, CalendarEvent.self, configurations: configuration))
     }
 
     private func tasks(_ context: ModelContext) throws -> [MustardTask] { try context.fetch(FetchDescriptor<MustardTask>()) }
+}
+
+private final class FailingReadFileManager: FileManager {
+    override func contents(atPath path: String) -> Data? { nil }
 }
 
 private final class Fixture {

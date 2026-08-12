@@ -50,9 +50,9 @@ public final class CodeHeroesDecisionAdapter {
         guard isRegularFile(normalizedQueue), isWithinRoot(normalizedQueue) else {
             return report(nil, nil, [queueFinding("Queue path is not a regular file beneath the configured repository root")])
         }
-        let data: Data
-        do { data = try Data(contentsOf: normalizedQueue) }
-        catch { return report(nil, nil, [queueFinding("Unable to read queue file")]) }
+        guard let data = fileManager.contents(atPath: normalizedQueue.path) else {
+            return report(nil, nil, [queueFinding("Unable to read queue file")])
+        }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let document: CodeHeroesDecisionQueue.Document
         do { document = try JSONDecoder().decode(CodeHeroesDecisionQueue.Document.self, from: data) }
@@ -138,10 +138,12 @@ public final class CodeHeroesDecisionAdapter {
     private func decisionURLs(for ids: [String]) -> [URL] {
         ids.compactMap { id in
             guard (try? CodeHeroesDecisionQueue.SourceReference(id)) != nil else { return nil }
-            let open = repositoryRoot.appendingPathComponent("operations/decisions/open/\(id).md")
-            let resolved = repositoryRoot.appendingPathComponent("operations/decisions/resolved/\(id).md")
-            if isRegularFile(open) { return Self.normalized(open) }
-            if isRegularFile(resolved) { return Self.normalized(resolved) }
+            for directory in ["operations/decisions/open", "operations/decisions/resolved"] {
+                let realDirectory = Self.normalized(repositoryRoot.appendingPathComponent(directory, isDirectory: true))
+                guard isWithinRoot(realDirectory), isDirectory(realDirectory) else { continue }
+                let candidate = Self.normalized(realDirectory.appendingPathComponent("\(id).md"))
+                if isWithinRoot(candidate), isRegularFile(candidate) { return candidate }
+            }
             return nil
         }
     }
@@ -157,9 +159,16 @@ public final class CodeHeroesDecisionAdapter {
         return isWithinRoot(resolved) ? resolved : nil
     }
     private func isWithinRoot(_ url: URL) -> Bool { let path = Self.normalized(url).path; return path == repositoryRoot.path || path.hasPrefix(repositoryRoot.path + "/") }
-    private func isRegularFile(_ url: URL) -> Bool { (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+    private func isRegularFile(_ url: URL) -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else { return false }
+        return (try? fileManager.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeRegular
+    }
+    private func isDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
     private func sourceContainsSecret(_ url: URL) -> Bool {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return true }
+        guard let data = fileManager.contents(atPath: url.path), let text = String(data: data, encoding: .utf8) else { return true }
         return text.range(of: #"(?i)(ghp_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|sk-proj-[a-z0-9_-]{16,}|sk-[a-z0-9]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"#, options: .regularExpression) != nil
     }
     private func queueFinding(_ reason: String) -> CodeHeroesDecisionQueue.Finding { .init(scope: .queue, reason: reason) }
