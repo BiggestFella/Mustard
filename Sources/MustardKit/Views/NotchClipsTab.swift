@@ -66,7 +66,7 @@ struct NotchClipsTab: View {
                                 // the gesture race against the single tap.
                                 .onTapGesture(count: 2) { paste(clip) }
                                 .onTapGesture { select(clip) }
-                                .onDrag { dragProvider(for: clip) }
+                                .onDrag { ClipDragProvider.provider(for: clip) }
                                 .contextMenu { menu(for: clip) }
                         }
                     }
@@ -135,22 +135,6 @@ struct NotchClipsTab: View {
     private func paste(_ clip: ClipItem) {
         guard let services, !clip.payload.isEmpty else { return }
         Task { _ = await services.paster.paste(text: clip.payload) }
-    }
-
-    private func dragProvider(for clip: ClipItem) -> NSItemProvider {
-        switch clip.kind {
-        case .file:
-            return NSItemProvider(contentsOf: URL(fileURLWithPath: clip.payload))
-                ?? NSItemProvider(object: clip.payload as NSString)
-        case .image:
-            if let data = clip.imageData ?? clip.thumbnailData,
-               let image = NSImage(data: data) {
-                return NSItemProvider(object: image)
-            }
-            return NSItemProvider(object: clip.payload as NSString)
-        default:
-            return NSItemProvider(object: clip.payload as NSString)
-        }
     }
 
     @ViewBuilder private func menu(for clip: ClipItem) -> some View {

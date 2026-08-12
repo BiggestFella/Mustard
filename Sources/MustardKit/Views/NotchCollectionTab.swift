@@ -45,7 +45,7 @@ struct NotchCollectionTab: View {
                         ForEach(items, id: \.uid) { clip in
                             ClipCardView(clip: clip)
                                 .onTapGesture { copy(clip) }
-                                .onDrag { NSItemProvider(object: clip.payload as NSString) }
+                                .onDrag { ClipDragProvider.provider(for: clip) }
                                 .contextMenu {
                                     Button("Remove from \(name)") {
                                         clip.collection = nil

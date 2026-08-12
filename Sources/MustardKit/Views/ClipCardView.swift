@@ -1,6 +1,30 @@
 #if os(macOS)
 import SwiftUI
 
+/// What a clip card hands a drop target when it is dragged out. Shared by all
+/// three grids (Clips, Shelf, collections) because the naive
+/// `NSItemProvider(object: clip.payload as NSString)` is wrong for exactly the
+/// kinds the Shelf collects: an image clip's payload is EMPTY (its bytes live
+/// on the model), so the receiver gets an empty string, and a file clip's
+/// payload is a path, so Finder gets text instead of the file.
+enum ClipDragProvider {
+    static func provider(for clip: ClipItem) -> NSItemProvider {
+        switch clip.kind {
+        case .file:
+            return NSItemProvider(contentsOf: URL(fileURLWithPath: clip.payload))
+                ?? NSItemProvider(object: clip.payload as NSString)
+        case .image:
+            if let data = clip.imageData ?? clip.thumbnailData,
+               let image = NSImage(data: data) {
+                return NSItemProvider(object: image)
+            }
+            return NSItemProvider(object: clip.payload as NSString)
+        default:
+            return NSItemProvider(object: clip.payload as NSString)
+        }
+    }
+}
+
 /// One clip card: type-appropriate preview + source badge + relative time.
 /// Shared by the Clips, Shelf and collection grids.
 /// Notch surfaces use explicit dark hex, never `Theme`.

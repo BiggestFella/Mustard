@@ -239,8 +239,13 @@ struct MustardApp: App {
                         didRecoverMeetings = true
                     }
                     // Built BEFORE the notch: the panel's content closure captures
-                    // the services box, so it has to exist first.
-                    if clipboard == nil {
+                    // the services box, so it has to exist first. `services` is a
+                    // plain non-optional local — the escaping closure must never
+                    // read the @State property back out.
+                    let services: ClipboardServices
+                    if let existing = clipboard {
+                        services = existing
+                    } else {
                         // Mustard owns clipboard capture (notch shelf spec §1):
                         // one poller, concealed/transient types skipped, password
                         // managers excluded, 200-item history in SwiftData.
@@ -249,14 +254,11 @@ struct MustardApp: App {
                             store.ingest(candidate)
                         }
                         monitor.start()
-                        clipboard = ClipboardServices(
+                        services = ClipboardServices(
                             store: store, monitor: monitor, paster: .live(monitor: monitor))
+                        clipboard = services
                     }
                     if notch == nil {
-                        // Strong, app-lifetime capture (same shape as `agent`
-                        // above) — the @State optional itself must not be read
-                        // from inside the escaping content closure.
-                        let clipboard = clipboard
                         let controller = NotchController { controller in
                             AnyView(
                                 NotchView(controller: controller)
@@ -265,7 +267,7 @@ struct MustardApp: App {
                                     .environment(notchNav)
                                     .environment(meetingRecorder)
                                     .environment(meetingSuggestions)
-                                    .environment(clipboard)
+                                    .environment(services)
                                     .modelContainer(container)
                             )
                         }

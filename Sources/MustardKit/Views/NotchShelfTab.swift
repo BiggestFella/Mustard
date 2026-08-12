@@ -49,7 +49,7 @@ struct NotchShelfTab: View {
                         ForEach(shelf, id: \.uid) { clip in
                             ClipCardView(clip: clip)
                                 .onTapGesture { copy(clip) }
-                                .onDrag { NSItemProvider(object: clip.payload as NSString) }
+                                .onDrag { ClipDragProvider.provider(for: clip) }
                                 .contextMenu {
                                     Button("Unpin") {
                                         clip.pinnedToShelf = false
