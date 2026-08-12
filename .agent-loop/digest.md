@@ -807,3 +807,52 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak335-speaker-attribution/`
 - **Revert:** `git revert 640854e`
+
+## 2026-08-12 — MERGED · F28 on-device rewrite ⌃⌥R, phase 1 (PR #118, BAK-313 + BAK-314…326)
+
+Leon asked for a ready backlog item to be executed while dev-loop held the meeting
+pack (BAK-328…335). F28 was the largest ready item — spec + plan approved 2026-08-05,
+every dependency on `main` since PR #101 — and touches a disjoint subsystem, so the
+two runs could not collide.
+
+**What landed.** Select text in any app → **⌃⌥R** → a floating card shows an Apple
+Foundation Models rewrite → Return replaces the selection. Entirely on device; no
+network, no fallback. All 14 plan tasks, TDD-first: `RewriteIntent` · `RewriteRoles`
+(own policy admitting `AXWebArea`; dictation's shared set untouched, pinned by test) ·
+`RewriteRefusal`/`RewriteBudget` (oversized selections refused with the word count,
+never truncated) · the three-rung `SelectionLadder` (**unreadable ≠ empty**) ·
+`RewriteGate` split around the read · `RewriteDraft`/`RewritePrompt` + band resources ·
+`AccessibilitySelectionReader` + live AX/⌘C rungs · `SelectionRestorer` ·
+`RewriteCoordinator` · `RewriteLog` · `RewriteHotKey` · card + non-activating panel ·
+`RewriteController` wiring.
+
+**The two orderings that carry the risk, both pinned by journal-order tests:**
+gate-before-read (⌘C can never reach a password field) and reassert-before-write (the
+write lands on the snapshotted range, not on whatever the app left selected).
+
+**Deviations from the plan, deliberate:** (1) the plan's emoji fixture was off by one
+in UTF-16 — corrected, plus a new split-surrogate case; (2) rung 3 awaits instead of
+`Thread.sleep(0.35)`, which would have frozen the card mid-rewrite, and the clipboard
+is restored only while nothing but our own copy has touched it; (3) the hot key mirrors
+`PushToTalkHotKey`'s contract (shared `HotKeyDispatch`, surfaced `.conflict`, id 3)
+rather than the plan's simpler sketch; (4) `AccessibilityFocusReader.snapshot(roles:)`
+is an **overload**, not a defaulted parameter, so the `FocusedTextReading` witness stays
+exact and dictation is byte-for-byte unchanged.
+
+- **Risk:** medium — new subsystem plus one additive change to a shared dictation file;
+  no schema, no outward action, no new permission (Info.plist unchanged).
+- **Checks:** `xcrun swift test` exit 0 — **1645 tests, 1 skipped, 0 failures**
+  (baseline 1577); `xcrun swift build` exit 0; `./build-app.sh` exit 0;
+  CI "Build & test (macOS)" pass on the exact merged head (294e54b).
+- **Fresh-context review:** ⚠️ **NOT run** — this session was told not to spawn agents.
+  A self-review pass instead caught and fixed two real defects before merge: an 80 ms
+  panel poll that would have run forever, and an observer chain that re-armed after
+  `deactivate()`.
+- **⚠ Leon eye-check / hardware matrix OUTSTANDING (BAK-327):** every foreign-app path
+  is unverified — the card, the AX reads, the ⌘C rung, panel focus, write-back, and the
+  non-negotiable password-field refusal. `docs/rewrite-acceptance-checklist.md` is the
+  matrix. The voice suite found eleven runtime bugs in this exact layer that a
+  1,443-test suite could not reach; treat nothing here as working until a row is filled.
+- **Outward actions:** branch pushed, PR #118 opened and merged. No release, no
+  remote deletion, no secrets.
+- **Revert:** `git revert 7943345`
