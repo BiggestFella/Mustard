@@ -51,7 +51,16 @@ public final class ClipboardMonitor {
         let count = pasteboard.changeCount
         guard count != lastChangeCount else { return }
         lastChangeCount = count
-        if ownWriteChangeCounts.remove(count) != nil { return }
+        let matchedOwnWrite = ownWriteChangeCounts.remove(count) != nil
+        // A real write can coalesce over an announced own-write count before
+        // the next poll (we jump straight past it) — that mark is never
+        // consumed by the exact match above, so sweep it here. Otherwise it
+        // sits in the set forever and, if a count were ever revisited, could
+        // wrongly swallow an unrelated later copy.
+        if !ownWriteChangeCounts.isEmpty {
+            ownWriteChangeCounts = ownWriteChangeCounts.filter { $0 > count }
+        }
+        if matchedOwnWrite { return }
         guard let candidate = pasteboard.readCandidate() else { return }
         onCandidate(candidate)
     }
@@ -77,7 +86,11 @@ public final class LivePasteboard: PasteboardReading {
         let fileURLs = (board.readObjects(forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
         let text = board.string(forType: .string)
-        let imageData = fileURLs.isEmpty && text == nil
+        // Read image bytes whenever there's no file URL, even if text is
+        // also present (e.g. browser "Copy Image" pairs image bytes with
+        // the image's URL as text). Image-vs-text precedence is a store
+        // decision (see ClipStore.ingest), not a pasteboard-reading one.
+        let imageData = fileURLs.isEmpty
             ? (board.data(forType: .png) ?? board.data(forType: .tiff)) : nil
         let source = NSWorkspace.shared.frontmostApplication
         return ClipCandidate(

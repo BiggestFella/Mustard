@@ -20,6 +20,14 @@ public final class ClipStore {
     }
 
     /// Pasteboard observation → maybe a stored clip + prune.
+    ///
+    /// Precedence when a candidate carries more than one representation: a
+    /// file URL always wins. Otherwise, image bytes win only when the
+    /// accompanying text is empty or is itself just a link — that's the
+    /// shape of a browser "Copy Image" (image bytes + the image's own URL
+    /// as text). When the accompanying text is substantive prose (e.g. an
+    /// Excel/Numbers cell copy that also renders a bitmap fallback), the
+    /// text is the real intent and wins instead.
     public func ingest(_ candidate: ClipCandidate) {
         guard ClipStoreRules.shouldCapture(candidate, latestPayload: latest?.payload) else {
             return
@@ -28,7 +36,8 @@ public final class ClipStore {
         let clip: ClipItem
         if let fileURL = candidate.fileURLs.first {
             clip = ClipItem(kind: .file, payload: fileURL.path)
-        } else if let image = candidate.imageData {
+        } else if let image = candidate.imageData,
+            trimmed.isEmpty || ClipClassifier.classify(text: trimmed) == .link {
             clip = ClipItem(kind: .image, payload: "")
             store(imageData: image, on: clip)
         } else {

@@ -138,4 +138,37 @@ final class ClipStoreTests: XCTestCase {
         XCTAssertNil(clip.imageData)
         XCTAssertNotNil(clip.thumbnailData)
     }
+
+    /// Browser "Copy Image" puts image bytes on the pasteboard alongside the
+    /// image's own URL as text — that's still an image copy.
+    func testImageWithLinkTextStoresImage() throws {
+        let context = try makeContext()
+        let store = ClipStore(context: context)
+        let png = try makeSmallPNG()
+        let clipCandidate = ClipCandidate(
+            text: "https://example.com/cat.png", imageData: png, fileURLs: [],
+            sourceBundleID: "com.apple.Safari", sourceAppName: "Safari",
+            isConcealed: false, isTransient: false)
+        store.ingest(clipCandidate)
+        let clip = try XCTUnwrap(context.fetch(FetchDescriptor<ClipItem>()).first)
+        XCTAssertEqual(clip.kind, .image)
+        XCTAssertNotNil(clip.imageData)
+    }
+
+    /// Office-table copies (Excel/Numbers) put a rendered bitmap alongside
+    /// the real, substantive text — the text is the intent, not the image.
+    func testImageWithProseTextStoresText() throws {
+        let context = try makeContext()
+        let store = ClipStore(context: context)
+        let png = try makeSmallPNG()
+        let clipCandidate = ClipCandidate(
+            text: "Q3 revenue table", imageData: png, fileURLs: [],
+            sourceBundleID: "com.apple.Safari", sourceAppName: "Safari",
+            isConcealed: false, isTransient: false)
+        store.ingest(clipCandidate)
+        let clip = try XCTUnwrap(context.fetch(FetchDescriptor<ClipItem>()).first)
+        XCTAssertEqual(clip.kind, .text)
+        XCTAssertEqual(clip.payload, "Q3 revenue table")
+        XCTAssertNil(clip.imageData)
+    }
 }
