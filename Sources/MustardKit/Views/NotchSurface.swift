@@ -5,9 +5,10 @@ import SwiftData
 /// The notch surface (spec §6a): a black, notch-hugging panel anchored to
 /// whichever screen is active (external monitor preferred — see
 /// `NotchScreenPicker`). Idle: thin strip rotating focus → waiting count.
-/// Hover: expands into a triage summary card + today's agenda + quick
-/// capture. Intentionally dark — it extends the physical notch — unlike
-/// the rest of the app.
+/// Hover (or a click to pin) expands it into the tabbed shell — search
+/// header, banner slot, tab pills, the active tab's body, quick capture.
+/// Intentionally dark — it extends the physical notch — unlike the rest of
+/// the app.
 @MainActor
 public final class NotchController {
     private var panel: NSPanel?
@@ -84,12 +85,15 @@ public final class NotchController {
         if let panel, panel.isVisible {
             graceTimer?.invalidate()
             graceTimer = nil
+            // Hide FIRST: unpinning shrinks the frame with an animation, and
+            // animating a panel the user is about to stop seeing just blocks
+            // for the duration. Off-screen, the same setFrame is instant.
+            panel.orderOut(nil)
             // A hidden panel never receives a hover-exit, so record the pointer
             // as outside before unpinning — otherwise a peek would survive the
             // hide and the panel would re-open stuck expanded.
             pinState.hoverChanged(isInside: false, now: .now)
             unpin()
-            panel.orderOut(nil)
             return
         }
         show()
@@ -167,6 +171,22 @@ public final class NotchController {
         pin()
     }
 
+    /// Release the AppKit hooks (global click monitor, screen-parameters
+    /// observer, grace timer). The controller is app-lifetime, so this is for
+    /// teardown/tests: a `deinit` cannot touch this main-actor-isolated state
+    /// without hopping actors, which is worse than one explicit call.
+    public func shutdown() {
+        graceTimer?.invalidate()
+        graceTimer = nil
+        removeClickOutsideMonitor()
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
+        screenObserver = nil
+        onStateChange = nil
+        panel?.orderOut(nil)
+    }
+
     // MARK: - Internals
 
     private func armGraceTimer() {
@@ -222,11 +242,16 @@ public struct NotchView: View {
     @Query private var tasks: [MustardTask]
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query(sort: \CalendarEvent.start) private var events: [CalendarEvent]
+    @Query(sort: \ClipCollection.sortOrder) private var collections: [ClipCollection]
+    @Query private var clips: [ClipItem]
     @State private var hovering = false
     /// Bumped from the controller's `onStateChange` so pin/tab changes (which
     /// live outside SwiftUI) re-evaluate this view.
     @State private var stateVersion = 0
     @State private var captureText = ""
+    @State private var searchQuery = ""
+    @State private var showPinnedOnly = false
+    @State private var activeTab: NotchTab = .today
     @FocusState private var captureFocused: Bool
     /// Handle for pin/tab/hover events; the controller outlives the view.
     let controller: NotchController?
@@ -235,11 +260,15 @@ public struct NotchView: View {
         self.controller = controller
     }
 
-    /// The panel is expanded on a hover peek OR whenever the controller says so
-    /// (pinned, or still inside the collapse grace window).
+    /// The controller's `NotchPinState` is the single source of truth for
+    /// expansion (hover peek, pin, collapse grace). The local `hovering` flag
+    /// is only the fallback for previews/tests with no controller — reading it
+    /// as an OR left the view expanded after a hide-while-hovering, because the
+    /// hidden panel never delivers the hover-exit.
     private var expanded: Bool {
         _ = stateVersion  // read so SwiftUI tracks controller-driven changes
-        return hovering || (controller?.isExpanded ?? false)
+        guard let controller else { return hovering }
+        return controller.isExpanded
     }
 
     private var focusTask: MustardTask? {
@@ -251,12 +280,8 @@ public struct NotchView: View {
         RecommendationQueue.pending(recommendations, now: .now)
     }
 
-    /// Tasks the board is waiting on you to review (output review now lives on the
-    /// board's Needs Review column — ADR-0010).
-    private var needsReviewCount: Int {
-        tasks.filter { $0.stage == .needsReview }.count
-    }
-
+    /// What the notch is waiting on you for: drives the idle ticker and the
+    /// Agent pill's count.
     private var waitingCount: Int {
         // Both agent attention stages count — a Needs You question waits on you just like a
         // Needs Review output (mirrors PersonalBoard.waitingCount / AgentInbox).
@@ -272,42 +297,44 @@ public struct NotchView: View {
         return "\(m.title) · \(m.start.formatted(date: .omitted, time: .shortened))"
     }
 
-    private var todayAgenda: [AgendaItem] {
-        DayPlanner.agenda(tasks: tasks, events: events, day: .now)
-    }
-
-    private var todayProgress: (done: Int, total: Int) {
-        DayPlanner.dayProgress(tasks, day: .now)
-    }
-
-    private var triageApprovals: Int { pending.count }
-    private var triageReviews: Int { needsReviewCount }
-    private var triageTotal: Int { triageApprovals + triageReviews }
-
-    private var triageSubline: String {
-        var parts: [String] = []
-        if triageApprovals > 0 {
-            parts.append("\(triageApprovals) approval\(triageApprovals == 1 ? "" : "s")")
-        }
-        if triageReviews > 0 {
-            parts.append("\(triageReviews) review\(triageReviews == 1 ? "" : "s") waiting")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func toggleDone(_ task: MustardTask) {
-        if task.stage == .done {
-            task.stage = .planned
-            task.completedAt = nil
-        } else {
-            TaskCompletion.complete(task, in: context)
+    /// A live recording keeps the Meetings pill dotted and makes it the tab the
+    /// panel opens on (`NotchTabModel.defaultTab`).
+    private var recordingActive: Bool {
+        switch meetingRecorder?.state {
+        case .recording, .preparing, .paused: return true
+        default: return false
         }
     }
 
-    private func openDetail(_ item: AgendaItem) {
-        if case .task(let task) = item.kind {
-            nav.pendingTask = task
+    private var tabs: [NotchTab] {
+        NotchTabModel.tabs(collectionNames: collections.map(\.name))
+    }
+
+    /// Pill badges. `nil` means "no number" — a zero would be noise.
+    private func count(for tab: NotchTab) -> Int? {
+        switch tab {
+        case .today:
+            let progress = DayPlanner.dayProgress(tasks, day: .now)
+            let open = progress.total - progress.done
+            return open > 0 ? open : nil
+        case .agent:
+            return waitingCount > 0 ? waitingCount : nil
+        case .meetings:
+            return nil
+        case .clips:
+            return clips.filter { !$0.pinnedToShelf && $0.collection == nil }.count
+        case .shelf:
+            return clips.filter(\.pinnedToShelf).count
+        case .collection(let name):
+            return collections.first { $0.name == name }?.items?.count
         }
+    }
+
+    /// The ONE way the active tab changes: the panel resizes per tab
+    /// (`NotchPanelMetrics`), so the controller must hear about every switch.
+    private func switchTo(_ tab: NotchTab) {
+        activeTab = tab
+        controller?.select(tab: tab)
     }
 
     public var body: some View {
@@ -336,8 +363,6 @@ public struct NotchView: View {
 
     private var shape: some View {
         Group {
-            // Task 10 rebuilds this into the tabbed shell; for now `expanded`
-            // just widens the hover trigger to include the pinned state.
             if expanded { expandedContent } else { idleContent }
         }
         .background(
@@ -391,107 +416,133 @@ public struct NotchView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Click the strip to pin the panel open (hover alone only peeks).
+        .contentShape(Rectangle())
+        .onTapGesture { controller?.pin() }
     }
 
+    /// The expanded panel is a shell: header (search + pins + open-app), a
+    /// banner slot, the tab pills, the active tab's body, and the capture bar.
+    /// The tabs own their own content; the shell owns none of it.
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             Color.clear.frame(height: 30)
-
-            Text("Agent")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-
-            if triageTotal > 0 {
-                triageCard
-            }
-
-            agendaSection
-
-            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
-
-            // Manual meeting recorder (Meetings Task 6): consent-gated
-            // Start Meeting, live controls while recording.
-            MeetingRecordingNotchView()
-
+            headerRow
+            // Banner slot: the meeting suggestion is visible from any tab and
+            // routes through the same consent path as the manual button.
+            MeetingStartPromptView()
+            tabPills
+            tabContent
+            Spacer(minLength: 0)
             captureBar
         }
         .padding(.horizontal, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            switchTo(NotchTabModel.defaultTab(recordingActive: recordingActive))
+        }
+        .onChange(of: tabs) { _, current in
+            // A deleted collection must not strand the shell on a dead tab.
+            if !current.contains(activeTab) { switchTo(.clips) }
+        }
+        .onExitCommand { controller?.unpin() }
     }
 
-    private var triageCard: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 13))
-                .foregroundStyle(Color(hex: "#AFA9EC"))
-                .frame(width: 28, height: 28)
-                .background(Color(hex: "#7F77DD").opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(triageTotal) item\(triageTotal == 1 ? "" : "s") to triage")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white)
-                Text(triageSubline)
+    private var headerRow: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.white.opacity(0.4))
+                TextField("Search", text: $searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
             Spacer()
             Button {
-                nav.openAgentConsole = true
+                showPinnedOnly.toggle()
             } label: {
-                HStack(spacing: 3) {
-                    Text("Open")
-                    Image(systemName: "arrow.up.right")
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(Color(hex: "#AFA9EC"))
+                Image(systemName: showPinnedOnly ? "star.fill" : "star")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(showPinnedOnly ? 0.9 : 0.55))
             }
             .buttonStyle(.plain)
+            .help("Pinned only")
+            Button {
+                if controller?.isPinned == true { controller?.unpin() } else { controller?.pin() }
+            } label: {
+                Image(systemName: controller?.isPinned == true ? "pin.fill" : "pin")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(controller?.isPinned == true ? 0.9 : 0.55))
+            }
+            .buttonStyle(.plain)
+            .help("Keep the panel open")
+            Button {
+                openMainApp()
+            } label: {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .buttonStyle(.plain)
+            .help("Open Mustard")
         }
-        .padding(10)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func openMainApp() {
+        nav.openAgentConsole = false
+        nav.pendingTask = nil
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+    }
+
+    private var tabPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(tabs, id: \.self) { tab in
+                    let selected = tab == activeTab
+                    Button {
+                        switchTo(tab)
+                    } label: {
+                        HStack(spacing: 4) {
+                            if tab == .meetings && recordingActive {
+                                Circle().fill(Color(hex: "#FF5F57")).frame(width: 5, height: 5)
+                            }
+                            Text(tab.title)
+                            if let count = count(for: tab) {
+                                Text("\(count)").opacity(0.5)
+                            }
+                        }
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(selected ? .black : .white.opacity(0.7))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 4)
+                        .background(
+                            selected
+                                ? AnyShapeStyle(Color.white)
+                                : AnyShapeStyle(Color.white.opacity(0.08)),
+                            in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                NotchNewCollectionPill()
+            }
+        }
     }
 
     @ViewBuilder
-    private var agendaSection: some View {
-        let items = todayAgenda
-        let progress = todayProgress
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("TODAY · \(Date.now.formatted(.dateTime.weekday(.abbreviated).day()).uppercased())")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(0.08)
-                    .foregroundStyle(.white.opacity(0.4))
-                Spacer()
-                if progress.total > 0 {
-                    Text("\(progress.done) of \(progress.total) done")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-            }
-            if progress.total > 0 {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.12))
-                        Capsule().fill(Color(hex: "#5DCAA5"))
-                            .frame(width: geo.size.width * CGFloat(progress.done) / CGFloat(max(progress.total, 1)))
-                    }
-                }
-                .frame(height: 3)
-            }
-            if items.isEmpty {
-                Text("Nothing scheduled today")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.45))
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 9) {
-                        ForEach(items) { item in
-                            AgendaRow(item: item, onToggleDone: toggleDone, onOpen: { openDetail(item) })
-                        }
-                    }
-                }
-                .frame(maxHeight: 190)
-            }
+    private var tabContent: some View {
+        switch activeTab {
+        case .today: NotchTodayTab()
+        case .agent: NotchAgentTab()
+        case .meetings: NotchMeetingsTab()
+        case .clips: NotchClipsTab(searchQuery: searchQuery, pinnedOnly: showPinnedOnly)
+        case .shelf: NotchShelfTab(searchQuery: searchQuery)
+        case .collection(let name): NotchCollectionTab(name: name, searchQuery: searchQuery)
         }
     }
 
@@ -518,66 +569,9 @@ public struct NotchView: View {
     }
 }
 
-/// One row of the notch's TODAY agenda. Tasks toggle done via their status
-/// circle and open `TaskDetailSheet` on row tap; events have no done state
-/// or detail view — their circle is a static indicator and only "Join" is
-/// interactive.
-private struct AgendaRow: View {
-    let item: AgendaItem
-    var onToggleDone: (MustardTask) -> Void
-    var onOpen: () -> Void
-
-    private var timeLabel: String {
-        guard let time = item.time else { return "Any" }
-        return time.formatted(date: .omitted, time: .shortened)
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(timeLabel)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.4))
-                .frame(width: 34, alignment: .leading)
-
-            statusIcon
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(item.isDone ? .white.opacity(0.4) : .white.opacity(0.9))
-                    .strikethrough(item.isDone)
-                    .lineLimit(1)
-                if let tag = item.tagLabel {
-                    Text(tag)
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color(hex: item.tagColorHex ?? "#B0ACA1"))
-                }
-            }
-            Spacer(minLength: 0)
-            if let joinURL = item.joinURL, let url = URL(string: joinURL) {
-                Link("Join", destination: url)
-                    .font(.system(size: 11)).foregroundStyle(Color(hex: "#6E9FFF"))
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
-    }
-
-    @ViewBuilder private var statusIcon: some View {
-        switch item.kind {
-        case .task(let task):
-            Button {
-                onToggleDone(task)
-            } label: {
-                Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(item.isDone ? .white.opacity(0.3) : .white.opacity(0.45))
-            }
-            .buttonStyle(.plain)
-        case .event:
-            Image(systemName: "circle")
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.3))
-        }
-    }
+/// The "+" pill that creates a custom collection. Stubbed until the
+/// collections task lands — the shell already reserves its slot at the end of
+/// the pill row so the layout doesn't shift when it arrives.
+struct NotchNewCollectionPill: View {
+    var body: some View { EmptyView() }
 }
