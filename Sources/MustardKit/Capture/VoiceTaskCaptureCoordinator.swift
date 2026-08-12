@@ -109,17 +109,20 @@ public final class VoiceTaskCaptureCoordinator {
         }
     }
 
-    /// The hotkey seam: registration result + press/release binding.
+    /// The hotkey seam: registration result + press/release binding + live rebind.
     public struct HotKeySeam {
         public var register: @MainActor () -> HotKeyRegistration
         public var bind: @MainActor (_ onPress: @escaping () -> Void, _ onRelease: @escaping () -> Void) -> Void
+        public var rebind: @MainActor (_ keyCode: UInt32, _ modifiers: UInt32) -> HotKeyRegistration
 
         public init(
             register: @escaping @MainActor () -> HotKeyRegistration,
-            bind: @escaping @MainActor (_ onPress: @escaping () -> Void, _ onRelease: @escaping () -> Void) -> Void
+            bind: @escaping @MainActor (_ onPress: @escaping () -> Void, _ onRelease: @escaping () -> Void) -> Void,
+            rebind: @escaping @MainActor (_ keyCode: UInt32, _ modifiers: UInt32) -> HotKeyRegistration = { _, _ in .registered }
         ) {
             self.register = register
             self.bind = bind
+            self.rebind = rebind
         }
 
         @MainActor
@@ -129,6 +132,9 @@ public final class VoiceTaskCaptureCoordinator {
                 bind: { onPress, onRelease in
                     hotKey.onPress = onPress
                     hotKey.onRelease = onRelease
+                },
+                rebind: { keyCode, modifiers in
+                    hotKey.rebind(keyCode: keyCode, modifiers: modifiers)
                 })
         }
     }
@@ -266,6 +272,14 @@ public final class VoiceTaskCaptureCoordinator {
             guard let self else { return }
             self.authorized = await self.speech.authorize()
         }
+    }
+
+    /// Swap the push-to-talk chord live (Settings → Hotkeys).
+    @discardableResult
+    public func rebindHotKey(keyCode: UInt32, modifiers: UInt32) -> HotKeyRegistration {
+        let registration = hotKey.rebind(keyCode, modifiers)
+        hotKeyRegistration = registration
+        return registration
     }
 
     func beginCapture() {

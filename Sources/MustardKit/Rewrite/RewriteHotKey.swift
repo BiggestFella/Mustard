@@ -30,8 +30,8 @@ public final class RewriteHotKey {
     public private(set) var registration: HotKeyRegistration?
 
     private let id: UInt32
-    private let keyCode: UInt32
-    private let modifiers: UInt32
+    private(set) var keyCode: UInt32
+    private(set) var modifiers: UInt32
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private static let signature: OSType = {
@@ -93,6 +93,12 @@ public final class RewriteHotKey {
             result = .conflict(status)
         }
         registration = result
+        // Rewrite's conflict used to be invisible (only logged) — post to the
+        // shared board so Voice Setup and Settings → Hotkeys can render it.
+        PushToTalkHotKey.post(
+            purpose: "Rewrite",
+            chord: HotKeyChord.description(keyCode: keyCode, modifiers: modifiers),
+            registration: result)
         RewriteLog.logger.notice(
             "hotkey chord=\(HotKeyChord.description(keyCode: self.keyCode, modifiers: self.modifiers), privacy: .public) registration=\(String(describing: result), privacy: .public)")
         return result
@@ -109,6 +115,16 @@ public final class RewriteHotKey {
         hotKeyRef = nil
         handlerRef = nil
         registration = nil
+    }
+
+    /// Swap the chord live (Settings → Hotkeys). Tap semantics — no hold to
+    /// unwind, unlike `PushToTalkHotKey.rebind`.
+    @discardableResult
+    public func rebind(keyCode: UInt32, modifiers: UInt32) -> HotKeyRegistration {
+        unregister()
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        return register()
     }
 }
 #endif

@@ -181,7 +181,7 @@ public struct VoiceSetupView: View {
                         .font(Theme.Fonts.body)
                         .foregroundStyle(Theme.Palette.textPrimary)
                     if case .conflict = entry.registration {
-                        Text("Another app already owns \(entry.chord). Change Mustard's chord (defaults: voiceHotKeyCode / dictationHotKeyCode) and relaunch, or free it in the other app.")
+                        Text("Another app already owns \(entry.chord). Change Mustard's chord in Settings → Hotkeys, or free it in the other app.")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.Palette.textSecondary)
                     }

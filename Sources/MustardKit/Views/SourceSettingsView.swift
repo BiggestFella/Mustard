@@ -4,17 +4,16 @@ import AppKit
 /// Minimal multi-project source settings: the KB folders Mustard sweeps on a
 /// schedule, one project per KB. Each row is an isolated source (its own cwd,
 /// interval, and state). Build + eye-verified (not unit-tested — it's a view).
+/// Google Calendar lives in its own `CalendarSettingsView` (settings spec
+/// 2026-08-12) — this view is projects-only.
 struct SourceSettingsView: View {
     @State private var settings: SourceSettings = SourceSettingsStore.loadOrMigrate()
-    @Environment(GoogleCalendarService.self) private var calendar
-    @State private var gcalClientId = ""
-    @State private var gcalClientSecret = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("PROJECTS")
-                    .font(.system(size: 10, weight: .semibold)).tracking(0.06)
+                    .font(Theme.Fonts.sectionHeader).tracking(0.06)
                     .foregroundStyle(Theme.Palette.textTertiary)
                 Spacer()
                 Button(action: addProject) {
@@ -32,73 +31,6 @@ struct SourceSettingsView: View {
 
             ForEach(Array(settings.sources.enumerated()), id: \.offset) { index, config in
                 projectRow(index: index, config: config)
-            }
-
-            calendarSection
-        }
-        .padding(.top, 16)
-        .padding(.bottom, 4)
-        .onAppear {
-            if let creds = calendar.savedCredentials() {
-                gcalClientId = creds.clientId
-                gcalClientSecret = creds.clientSecret
-            }
-        }
-    }
-
-    // MARK: - Google Calendar
-
-    @ViewBuilder
-    private var calendarSection: some View {
-        Divider().padding(.vertical, 8)
-
-        HStack {
-            Text("GOOGLE CALENDAR")
-                .font(.system(size: 10, weight: .semibold)).tracking(0.06)
-                .foregroundStyle(Theme.Palette.textTertiary)
-            Spacer()
-            if case .connected = calendar.state {
-                Label("Connected", systemImage: "checkmark.circle.fill")
-                    .font(Theme.Fonts.meta)
-                    .foregroundStyle(Theme.Palette.done)
-            }
-        }
-
-        switch calendar.state {
-        case .disconnected, .failed:
-            TextField("OAuth Client ID", text: $gcalClientId)
-                .textFieldStyle(.roundedBorder).font(Theme.Fonts.meta)
-            SecureField("OAuth Client Secret", text: $gcalClientSecret)
-                .textFieldStyle(.roundedBorder).font(Theme.Fonts.meta)
-            if case .failed(let msg) = calendar.state {
-                Text(msg).font(Theme.Fonts.caption).foregroundStyle(Theme.Palette.error)
-            }
-            Button("Connect") {
-                Task { await calendar.connect(
-                    credentials: .init(clientId: gcalClientId, clientSecret: gcalClientSecret)) }
-            }
-            .font(Theme.Fonts.meta)
-            .foregroundStyle(Theme.Palette.accent)
-            .buttonStyle(.plain)
-            .disabled(gcalClientId.isEmpty || gcalClientSecret.isEmpty)
-
-        case .connecting:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Waiting for Google… approve in your browser.")
-                    .font(Theme.Fonts.caption).foregroundStyle(Theme.Palette.textTertiary)
-            }
-
-        case .connected:
-            if let synced = calendar.lastSynced {
-                Text("Last synced \(synced.formatted(date: .omitted, time: .shortened))")
-                    .font(Theme.Fonts.caption).foregroundStyle(Theme.Palette.textTertiary)
-            }
-            HStack(spacing: 14) {
-                Button("Refresh now") { Task { await calendar.fetch() } }
-                    .font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.accent).buttonStyle(.plain)
-                Button("Disconnect", role: .destructive) { calendar.disconnect() }
-                    .font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.error).buttonStyle(.plain)
             }
         }
     }

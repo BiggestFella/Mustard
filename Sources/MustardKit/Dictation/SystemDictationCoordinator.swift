@@ -131,6 +131,14 @@ public final class SystemDictationCoordinator {
         }
     }
 
+    /// Swap the dictation chord live (Settings → Hotkeys).
+    @discardableResult
+    public func rebindHotKey(keyCode: UInt32, modifiers: UInt32) -> HotKeyRegistration {
+        let registration = hotKey.rebind(keyCode, modifiers)
+        hotKeyRegistration = registration
+        return registration
+    }
+
     func beginDictation() {
         guard phase != .listening else { return }   // key auto-repeat / re-entry
         holdEpoch += 1
