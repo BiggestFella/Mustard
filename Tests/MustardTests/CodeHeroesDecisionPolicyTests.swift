@@ -39,6 +39,46 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertFalse(noAction.tags.contains("human-action"))
     }
 
+    func test_taskProjectionDetectionUsesTheExactSourceMarker() {
+        let projection = MustardTask(title: "Repository decision")
+        projection.source = CodeHeroesDecisionPolicy.source
+
+        XCTAssertTrue(CodeHeroesDecisionPolicy.isProjection(projection))
+
+        projection.source = "\(CodeHeroesDecisionPolicy.source):copy"
+        XCTAssertFalse(CodeHeroesDecisionPolicy.isProjection(projection))
+
+        projection.source = "manual"
+        XCTAssertFalse(CodeHeroesDecisionPolicy.isProjection(projection))
+    }
+
+    func test_projectionPresentationProvidesReadOnlyCopyAndSafeLocalSourceAffordances() {
+        let projection = MustardTask(title: "Repository decision")
+        projection.source = CodeHeroesDecisionPolicy.source
+        projection.sourceURL = "/repo/operations/decision-queue.json"
+        projection.links = [
+            TaskLink(label: "Queue duplicate", url: "/repo/operations/decision-queue.json"),
+            TaskLink(label: "Decision", url: "/repo/operations/decisions/open/DEC-1.md"),
+            TaskLink(label: "Web", url: "https://example.com/decision"),
+            TaskLink(label: "Relative", url: "operations/input.md"),
+            TaskLink(label: "File URL", url: "file:///repo/private.md")
+        ]
+
+        XCTAssertEqual(CodeHeroesDecisionPresentation.badgeText,
+                       "Code Heroes · repository decision · read-only")
+        XCTAssertTrue(CodeHeroesDecisionPresentation.readOnlyExplanation.contains("next refresh"))
+        XCTAssertEqual(
+            CodeHeroesDecisionPresentation.sourceFiles(for: projection),
+            [
+                .init(label: "Queue", path: "/repo/operations/decision-queue.json"),
+                .init(label: "Decision", path: "/repo/operations/decisions/open/DEC-1.md")
+            ]
+        )
+
+        projection.source = "manual"
+        XCTAssertEqual(CodeHeroesDecisionPresentation.sourceFiles(for: projection), [])
+    }
+
     private func cluster() -> CodeHeroesDecisionQueue.Cluster {
         .init(clusterID: "DL-01", projectID: "dl", title: "A decision", triageState: "needs-human-decision", mustardStage: "needsInput", priority: "high", decisionRequired: true, humanActionRequired: true, question: "Question", nextAction: "Next", whyGrouped: "Why", sourceDecisionIDs: ["DEC-1"])
     }

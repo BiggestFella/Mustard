@@ -56,6 +56,14 @@ public struct TaskDetailSheet: View {
     }
 
     public var body: some View {
+        if CodeHeroesDecisionPolicy.isProjection(task) {
+            readOnlyProjectionDetail
+        } else {
+            editableDetail
+        }
+    }
+
+    private var editableDetail: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().overlay(Theme.Palette.hairline)
@@ -227,6 +235,103 @@ public struct TaskDetailSheet: View {
         .frame(width: 460)
         .frame(maxHeight: .infinity)
         .background(Theme.Palette.bg)
+    }
+
+    private var readOnlyProjectionDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    stageBadge
+                    Text(task.owner == .agent ? "✦ Agent" : "You")
+                        .font(Theme.Fonts.meta)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Spacer()
+                    SourceLinkButton(task: task)
+                    Button("Done") { close() }.controlSize(.small)
+                }
+                CodeHeroesDecisionBadge(task: task)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    PriorityFlag(priority: task.priority)
+                    Text(task.title)
+                        .font(Theme.Fonts.docH1)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .textSelection(.enabled)
+                }
+                if TaskChipRow.hasChips(task) { TaskChipRow(task: task) }
+            }
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
+
+            Divider().overlay(Theme.Palette.hairline)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label {
+                        Text(CodeHeroesDecisionPresentation.readOnlyExplanation)
+                            .font(Theme.Fonts.meta)
+                    } icon: {
+                        Image(systemName: "lock.fill").font(Theme.Fonts.caption)
+                    }
+                    .foregroundStyle(Theme.Palette.agentText)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.Palette.agentTintLight, in: RoundedRectangle(cornerRadius: 9))
+                    .accessibilityLabel("Read-only repository decision")
+                    .accessibilityHint(CodeHeroesDecisionPresentation.readOnlyExplanation)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeader("Details")
+                        readOnlyProperty("Stage", task.stage.label)
+                        readOnlyProperty("Priority", task.priority.label)
+                        readOnlyProperty("Assignee", task.owner.label)
+                        readOnlyProperty("Action", "Resolve in Code Heroes repository")
+                        if let due = task.dueAt {
+                            readOnlyProperty("Due", due.formatted(date: .abbreviated, time: .omitted))
+                        }
+                        if let scheduled = task.scheduledAt {
+                            readOnlyProperty("Scheduled", scheduled.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        readOnlyProperty("Estimate", "\(task.estimateMinutes)m")
+                        readOnlyProperty("In", task.list?.name ?? "None")
+                        readOnlyProperty("Tags", task.tags.isEmpty ? "None" : task.tags.map { "#\($0)" }.joined(separator: "  "))
+                    }
+
+                    sectionDivider
+                    CodeHeroesDecisionSourceLinks(task: task)
+                    sectionDivider
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionHeader("Body")
+                        MarkdownBlocksView(
+                            content: task.notes,
+                            resolve: { _ in nil },
+                            onWikilinkTap: { _ in },
+                            bodyFont: Theme.Fonts.reading
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 90, alignment: .topLeading)
+                        .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 16)
+            }
+
+            Divider().overlay(Theme.Palette.hairline)
+            HStack {
+                Spacer()
+                Button("Close") { close() }.controlSize(.small)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12)
+        }
+        .frame(width: 460)
+        .frame(maxHeight: .infinity)
+        .background(Theme.Palette.bg)
+    }
+
+    private func readOnlyProperty(_ label: String, _ value: String) -> some View {
+        PropertyRow(label: label) {
+            Text(value)
+                .font(Theme.Fonts.meta)
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .textSelection(.enabled)
+        }
     }
 
     // Designed header (BAK-244): stage badge + owner on top, a large editable title

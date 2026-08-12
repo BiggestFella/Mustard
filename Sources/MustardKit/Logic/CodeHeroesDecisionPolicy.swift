@@ -23,6 +23,7 @@ public enum CodeHeroesDecisionPolicy {
     public static func uid(clusterID: String) -> String { "codeheroes:decision:\(clusterID)" }
     public static func isProjection(source: String) -> Bool { source == self.source }
     public static func isProjection(_ projection: Projection) -> Bool { projection.isReadOnly && isProjection(source: projection.source) }
+    public static func isProjection(_ task: MustardTask) -> Bool { isProjection(source: task.source) }
 
     public static func projection(for cluster: CodeHeroesDecisionQueue.Cluster) throws -> Projection {
         var tags = ["codeheroes", "decision", "project:\(cluster.projectID)", "triage:\(cluster.triageState)"]

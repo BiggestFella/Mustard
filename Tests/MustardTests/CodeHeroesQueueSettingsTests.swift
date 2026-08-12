@@ -108,6 +108,31 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<MustardTask>()).count, 1)
     }
 
+    func test_manualRefreshPresentationRequiresBothPathsAndAnIdleImport() {
+        let readyButDisabled = CodeHeroesQueueSettings(
+            repositoryRoot: " /repo ",
+            queuePath: " /repo/operations/decision-queue.json ",
+            enabled: false
+        )
+
+        XCTAssertTrue(CodeHeroesQueueRefreshPresentation.canRefresh(
+            settings: readyButDisabled,
+            isImporting: false
+        ))
+        XCTAssertFalse(CodeHeroesQueueRefreshPresentation.canRefresh(
+            settings: readyButDisabled,
+            isImporting: true
+        ))
+        XCTAssertFalse(CodeHeroesQueueRefreshPresentation.canRefresh(
+            settings: .init(repositoryRoot: "/repo"),
+            isImporting: false
+        ))
+        XCTAssertFalse(CodeHeroesQueueRefreshPresentation.canRefresh(
+            settings: .init(queuePath: "/repo/queue.json"),
+            isImporting: false
+        ))
+    }
+
     private func makeDefaults() -> UserDefaults {
         let name = "CodeHeroesQueueSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!

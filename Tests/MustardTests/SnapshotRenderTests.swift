@@ -65,4 +65,57 @@ final class SnapshotRenderTests: XCTestCase {
                 "task-detail", CGSize(width: 460, height: 560))
         }
     }
+
+    /// Focused Phase 6A visual harness. Kept separate from `test_renderScreens` so this
+    /// task does not change the broad snapshot setup or depend on the live app scheduler.
+    @MainActor
+    func test_renderCodeHeroesReadOnlyProjection() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MUSTARD_SNAPSHOT"] == "1",
+            "set MUSTARD_SNAPSHOT=1 to render snapshots")
+
+        let container = PreviewData.container
+        let context = container.mainContext
+        let agent = AgentService(context: context)
+        let taskAgent = AgentTaskCoordinator(context: context)
+        let draftPanel = AgentDraftPanelState()
+        guard let ordinaryTask = try context.fetch(FetchDescriptor<MustardTask>()).first else {
+            return XCTFail("Preview data needs an ordinary task")
+        }
+
+        let projection = MustardTask(title: "Choose the Digital Licence enforcement approach", owner: .agent)
+        projection.source = CodeHeroesDecisionPolicy.source
+        projection.sourceURL = "/tmp/code-heroes/operations/decision-queue.json"
+        projection.stage = .needsInput
+        projection.priority = .high
+        projection.tags = ["codeheroes", "decision", "human-action"]
+        projection.notes = "Question: Which repository option should be adopted?\nNext action: Resolve the canonical decision in the Code Heroes repository."
+        projection.links = [TaskLink(label: "Decision", url: "/tmp/code-heroes/operations/decisions/open/DEC-DL-1.md")]
+
+        renderPNG(
+            VStack(spacing: 12) {
+                MustardBoardCard(task: projection, showConfidence: true)
+                MustardBoardCard(task: ordinaryTask, showConfidence: true)
+            }
+            .padding(16)
+            .modelContainer(container)
+            .environment(agent)
+            .environment(taskAgent)
+            .background(Theme.Palette.surface),
+            "code-heroes-card-comparison", CGSize(width: 260, height: 460))
+        renderPNG(
+            TaskDetailSheet(task: projection)
+                .modelContainer(container)
+                .environment(agent)
+                .environment(taskAgent)
+                .environment(draftPanel),
+            "code-heroes-read-only-detail", CGSize(width: 460, height: 680))
+        renderPNG(
+            TaskDetailSheet(task: ordinaryTask)
+                .modelContainer(container)
+                .environment(agent)
+                .environment(taskAgent)
+                .environment(draftPanel),
+            "ordinary-editable-detail", CGSize(width: 460, height: 680))
+    }
 }
