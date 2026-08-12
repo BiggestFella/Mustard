@@ -237,9 +237,9 @@ struct MustardApp: App {
                         didRecoverMeetings = true
                     }
                     if notch == nil {
-                        let controller = NotchController { onHover in
+                        let controller = NotchController { controller in
                             AnyView(
-                                NotchView(onHoverChange: onHover)
+                                NotchView(controller: controller)
                                     .environment(agent)
                                     .environment(taskAgent)
                                     .environment(notchNav)

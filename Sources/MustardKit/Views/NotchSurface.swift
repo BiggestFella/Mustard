@@ -11,15 +11,27 @@ import SwiftData
 @MainActor
 public final class NotchController {
     private var panel: NSPanel?
-    private let makeContent: (_ onHover: @escaping (Bool) -> Void) -> AnyView
+    private let makeContent: (_ controller: NotchController) -> AnyView
 
-    private let expandedSize = NSSize(width: 420, height: 460)
+    /// Tested state machine (`NotchPinState`); the controller only feeds it
+    /// events and applies the resulting geometry.
+    private var pinState = NotchPinState()
+    private var graceTimer: Timer?
+    private var clickOutsideMonitor: Any?
+    private var screenObserver: NSObjectProtocol?
+    /// The active tab drives the expanded frame (`NotchPanelMetrics`).
+    public private(set) var activeTab: NotchTab = .today
 
-    public init(content: @escaping (_ onHover: @escaping (Bool) -> Void) -> AnyView) {
+    /// Set by the shell view so pin/tab changes re-render it.
+    public var onStateChange: (() -> Void)?
+
+    public init(content: @escaping (_ controller: NotchController) -> AnyView) {
         self.makeContent = content
     }
 
     public var isVisible: Bool { panel?.isVisible ?? false }
+    public var isPinned: Bool { pinState.isPinned }
+    public var isExpanded: Bool { pinState.isExpanded }
 
     private var screen: NSScreen? {
         let screens = NSScreen.screens
@@ -55,22 +67,33 @@ public final class NotchController {
         )
     }
 
+    /// Expanded geometry is per-tab (grid tabs are taller than list tabs).
     private func expandedFrame(on screen: NSScreen) -> NSRect {
+        let size = NotchPanelMetrics.expandedSize(for: activeTab)
         let frame = screen.frame
         return NSRect(
-            x: frame.midX - expandedSize.width / 2,
-            y: frame.maxY - expandedSize.height,
-            width: expandedSize.width,
-            height: expandedSize.height
+            x: frame.midX - size.width / 2,
+            y: frame.maxY - size.height,
+            width: size.width,
+            height: size.height
         )
     }
 
+    /// ⌘⇧N: open the panel *pinned*, or hide it (dropping the pin) if visible.
     public func toggle() {
         if let panel, panel.isVisible {
+            graceTimer?.invalidate()
+            graceTimer = nil
+            // A hidden panel never receives a hover-exit, so record the pointer
+            // as outside before unpinning — otherwise a peek would survive the
+            // hide and the panel would re-open stuck expanded.
+            pinState.hoverChanged(isInside: false, now: .now)
+            unpin()
             panel.orderOut(nil)
             return
         }
         show()
+        pin()
     }
 
     public func show() {
@@ -89,22 +112,104 @@ public final class NotchController {
             panel.hasShadow = false
             panel.hidesOnDeactivate = false
             panel.isMovableByWindowBackground = false
-            panel.contentView = NSHostingView(
-                rootView: makeContent { [weak self] hovering in
-                    self?.setExpanded(hovering)
-                }
-            )
+            panel.contentView = NSHostingView(rootView: makeContent(self))
             self.panel = panel
+            // Follow display connect/disconnect: previously the panel only
+            // re-resolved its screen on the next show()/hover, so unplugging an
+            // external monitor left it stranded off-screen.
+            screenObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.applyFrame() }
+            }
         }
-        panel?.setFrame(idleFrame(on: screen), display: true)
+        applyFrame()
         panel?.orderFrontRegardless()
     }
 
-    private func setExpanded(_ expanded: Bool) {
+    // MARK: - Events from the shell view
+
+    public func hoverChanged(_ isInside: Bool) {
+        pinState.hoverChanged(isInside: isInside, now: .now)
+        applyFrame()
+        if !isInside { armGraceTimer() }
+        onStateChange?()
+    }
+
+    public func pin() {
+        pinState.pin()
+        applyFrame()
+        installClickOutsideMonitor()
+        onStateChange?()
+    }
+
+    /// Esc / click-away / hide. Keeps a hover peek only while the pointer is in.
+    public func unpin() {
+        pinState.unpin()
+        applyFrame()
+        removeClickOutsideMonitor()
+        onStateChange?()
+    }
+
+    public func select(tab: NotchTab) {
+        activeTab = tab
+        applyFrame()
+        onStateChange?()
+    }
+
+    /// ⌘⇧N / ⌃⌥V entry: open pinned on a specific tab.
+    public func openPinned(on tab: NotchTab) {
+        // Set the tab before showing so the panel opens straight at that tab's
+        // size rather than resizing a frame later.
+        activeTab = tab
+        show()
+        pin()
+    }
+
+    // MARK: - Internals
+
+    private func armGraceTimer() {
+        graceTimer?.invalidate()
+        graceTimer = Timer.scheduledTimer(
+            withTimeInterval: NotchPinState.collapseGrace + 0.05, repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.pinState.collapseIfDue(now: .now)
+                self.applyFrame()
+                self.onStateChange?()
+            }
+        }
+    }
+
+    private func installClickOutsideMonitor() {
+        guard clickOutsideMonitor == nil else { return }
+        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.pinState.isPinned else { return }
+                // A global monitor only fires for clicks in OTHER apps/windows;
+                // clicks inside our own panel never reach it — which is exactly
+                // "click away to unpin".
+                self.unpin()
+            }
+        }
+    }
+
+    private func removeClickOutsideMonitor() {
+        if let clickOutsideMonitor { NSEvent.removeMonitor(clickOutsideMonitor) }
+        clickOutsideMonitor = nil
+    }
+
+    private func applyFrame() {
         guard let panel, let screen else { return }
-        let target = expanded ? expandedFrame(on: screen) : idleFrame(on: screen)
+        let expanded = pinState.isExpanded
         panel.hasShadow = expanded
-        panel.setFrame(target, display: true, animate: true)
+        panel.setFrame(
+            expanded ? expandedFrame(on: screen) : idleFrame(on: screen),
+            display: true, animate: true)
     }
 }
 
@@ -118,12 +223,23 @@ public struct NotchView: View {
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query(sort: \CalendarEvent.start) private var events: [CalendarEvent]
     @State private var hovering = false
+    /// Bumped from the controller's `onStateChange` so pin/tab changes (which
+    /// live outside SwiftUI) re-evaluate this view.
+    @State private var stateVersion = 0
     @State private var captureText = ""
     @FocusState private var captureFocused: Bool
-    let onHoverChange: (Bool) -> Void
+    /// Handle for pin/tab/hover events; the controller outlives the view.
+    let controller: NotchController?
 
-    public init(onHoverChange: @escaping (Bool) -> Void) {
-        self.onHoverChange = onHoverChange
+    public init(controller: NotchController? = nil) {
+        self.controller = controller
+    }
+
+    /// The panel is expanded on a hover peek OR whenever the controller says so
+    /// (pinned, or still inside the collapse grace window).
+    private var expanded: Bool {
+        _ = stateVersion  // read so SwiftUI tracks controller-driven changes
+        return hovering || (controller?.isExpanded ?? false)
     }
 
     private var focusTask: MustardTask? {
@@ -201,7 +317,12 @@ public struct NotchView: View {
         }
         .onHover { isIn in
             withAnimation(.snappy(duration: 0.16)) { hovering = isIn }
-            onHoverChange(isIn)
+            controller?.hoverChanged(isIn)
+        }
+        .onAppear {
+            controller?.onStateChange = {
+                withAnimation(.snappy(duration: 0.16)) { stateVersion &+= 1 }
+            }
         }
     }
 
@@ -215,12 +336,14 @@ public struct NotchView: View {
 
     private var shape: some View {
         Group {
-            if hovering { expandedContent } else { idleContent }
+            // Task 10 rebuilds this into the tabbed shell; for now `expanded`
+            // just widens the hover trigger to include the pinned state.
+            if expanded { expandedContent } else { idleContent }
         }
         .background(
             UnevenRoundedRectangle(
-                bottomLeadingRadius: hovering ? 18 : 10,
-                bottomTrailingRadius: hovering ? 18 : 10
+                bottomLeadingRadius: expanded ? 18 : 10,
+                bottomTrailingRadius: expanded ? 18 : 10
             )
             .fill(.black)
         )
