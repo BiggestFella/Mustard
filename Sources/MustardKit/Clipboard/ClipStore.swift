@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftData
 
 /// Applies `ClipStoreRules` to candidates and writes results into SwiftData.
@@ -95,6 +96,23 @@ public final class ClipStore {
         for clip in all where doomed.contains(clip.uid) {
             context.delete(clip)
         }
+    }
+}
+
+/// Environment bundle for the clipboard layer (store + monitor + paster),
+/// injected into the notch content the way `AgentService` is. The notch tabs
+/// read it optionally, so a surface that predates the injection still renders.
+@MainActor
+@Observable
+public final class ClipboardServices {
+    public let store: ClipStore
+    public let monitor: ClipboardMonitor
+    public let paster: ClipPaster
+
+    public init(store: ClipStore, monitor: ClipboardMonitor, paster: ClipPaster) {
+        self.store = store
+        self.monitor = monitor
+        self.paster = paster
     }
 }
 
