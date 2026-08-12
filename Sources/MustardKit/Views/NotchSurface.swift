@@ -116,7 +116,16 @@ public final class NotchController {
             panel.hasShadow = false
             panel.hidesOnDeactivate = false
             panel.isMovableByWindowBackground = false
-            panel.contentView = NSHostingView(rootView: makeContent(self))
+            let hosting = NSHostingView(rootView: makeContent(self))
+            // The controller sets this panel's frame explicitly on every state
+            // change, so SwiftUI must NOT also push content-size extrema into
+            // the window: that path (`updateWindowContentSizeExtremaIfNecessary`
+            // → `sizeThatFits`) runs *inside* the window's constraint-update
+            // pass, and a graph change during it re-dirties the hosting view —
+            // AppKit throws from `_postWindowNeedsUpdateConstraints` and macOS
+            // 27 turns that uncaught exception into a crash.
+            hosting.sizingOptions = []
+            panel.contentView = hosting
             self.panel = panel
             // Follow display connect/disconnect: previously the panel only
             // re-resolved its screen on the next show()/hover, so unplugging an
@@ -232,13 +241,25 @@ public final class NotchController {
         clickOutsideMonitor = nil
     }
 
+    /// Resize to the current state's geometry.
+    ///
+    /// Deliberately NOT `setFrame(_:display:animate:)`: that call blocks and
+    /// spins a nested run loop, so a tab switch (which arrives from a SwiftUI
+    /// button action, mid-update) drove AppKit's constraint pass while the view
+    /// graph was still settling — the re-entrancy that crashed the panel. The
+    /// animator proxy runs the same resize on CoreAnimation instead, off the
+    /// current event's turn of the run loop.
     private func applyFrame() {
         guard let panel, let screen else { return }
         let expanded = pinState.isExpanded
         panel.hasShadow = expanded
-        panel.setFrame(
-            expanded ? expandedFrame(on: screen) : idleFrame(on: screen),
-            display: true, animate: true)
+        let target = expanded ? expandedFrame(on: screen) : idleFrame(on: screen)
+        guard panel.frame != target else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            ctx.allowsImplicitAnimation = true
+            panel.animator().setFrame(target, display: true)
+        }
     }
 }
 
