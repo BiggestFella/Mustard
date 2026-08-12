@@ -108,7 +108,9 @@ public final class RewriteController {
             _ = coordinator.phase
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                // `deactivate()` clears the flag, which is what stops this
+                // chain re-arming itself for the life of the process.
+                guard let self, self.isObserving else { return }
                 self.syncPanel()
                 self.observePhase()
             }
