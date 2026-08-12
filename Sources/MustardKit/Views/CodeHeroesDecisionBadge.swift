@@ -32,6 +32,12 @@ public enum CodeHeroesDecisionPresentation {
     public static let readOnlyExplanation =
         "This card mirrors a repository decision. Resolve it in the Code Heroes repository; local deletion or stage changes are presentation-only, and the next refresh may restore source-derived state."
 
+    /// Today/List completion and reopen are local mutations, so repository projections
+    /// never expose them. Ordinary tasks retain their existing toggle behavior.
+    public static func allowsLocalCompletion(for task: MustardTask) -> Bool {
+        !CodeHeroesDecisionPolicy.isProjection(task)
+    }
+
     /// Imported references are absolute local paths validated by the adapter. Keep this UI
     /// boundary narrow: reject relative paths, URLs, and duplicate references.
     public static func sourceFiles(for task: MustardTask) -> [SourceFile] {

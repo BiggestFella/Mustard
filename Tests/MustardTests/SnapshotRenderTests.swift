@@ -104,6 +104,17 @@ final class SnapshotRenderTests: XCTestCase {
             .background(Theme.Palette.surface),
             "code-heroes-card-comparison", CGSize(width: 260, height: 460))
         renderPNG(
+            VStack(spacing: 0) {
+                TimelineRow(task: projection, onToggleDone: {})
+                Divider().overlay(Theme.Palette.hairline)
+                TimelineRow(task: ordinaryTask, onToggleDone: {})
+            }
+            .padding(16)
+            .modelContainer(container)
+            .environment(agent)
+            .background(Theme.Palette.bg),
+            "code-heroes-timeline-comparison", CGSize(width: 520, height: 220))
+        renderPNG(
             TaskDetailSheet(task: projection)
                 .modelContainer(container)
                 .environment(agent)

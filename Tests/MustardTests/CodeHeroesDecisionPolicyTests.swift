@@ -79,6 +79,22 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertEqual(CodeHeroesDecisionPresentation.sourceFiles(for: projection), [])
     }
 
+    func test_projectionPresentationGatesLocalCompletionAndReopen() {
+        let projection = MustardTask(title: "Repository decision")
+        projection.source = CodeHeroesDecisionPolicy.source
+
+        XCTAssertFalse(CodeHeroesDecisionPresentation.allowsLocalCompletion(for: projection))
+
+        projection.stage = .done
+        XCTAssertFalse(CodeHeroesDecisionPresentation.allowsLocalCompletion(for: projection))
+
+        let ordinary = MustardTask(title: "Ordinary task")
+        XCTAssertTrue(CodeHeroesDecisionPresentation.allowsLocalCompletion(for: ordinary))
+
+        ordinary.stage = .done
+        XCTAssertTrue(CodeHeroesDecisionPresentation.allowsLocalCompletion(for: ordinary))
+    }
+
     private func cluster() -> CodeHeroesDecisionQueue.Cluster {
         .init(clusterID: "DL-01", projectID: "dl", title: "A decision", triageState: "needs-human-decision", mustardStage: "needsInput", priority: "high", decisionRequired: true, humanActionRequired: true, question: "Question", nextAction: "Next", whyGrouped: "Why", sourceDecisionIDs: ["DEC-1"])
     }
