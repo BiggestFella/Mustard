@@ -132,9 +132,10 @@ section's foot.
   `store.shortcut(for:)` instead of literals — menus and shortcuts update live.
 - **Global three (live rebind).** `PushToTalkHotKey` and `RewriteHotKey` gain
   `rebind(keyCode:modifiers:)` = unregister + re-register with the new chord.
-  Push-to-talk/dictation rebind is deferred while a hold is active (the hold-epoch
-  guard stays intact — rebind applies when idle). The coordinators (or the store)
-  observe binding changes and drive the rebind.
+  Push-to-talk/dictation rebind first ends any active hold through the normal
+  release path (the capture commits — transcript never lost), then re-registers;
+  `unregister()` alone would clear the hold flag without firing `onRelease`. The
+  store's `applyGlobal` closure routes binding changes into the rebinds.
 - **Registration status.** Rebind results land on the existing
   `PushToTalkHotKey.registrationBoard`; `RewriteHotKey` starts publishing there too
   (closing today's gap where a ⌃⌥R conflict is invisible). The Hotkeys section renders

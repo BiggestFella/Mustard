@@ -72,7 +72,7 @@ public struct AgentConsoleView: View {
 
                 sectionLabel("RECOMMENDATIONS", count: pending.count)
                 if pending.isEmpty {
-                    emptyLine("Nothing waiting on you. Run a sweep from Settings or ⌘K.")
+                    emptyLine("Nothing waiting on you. Run a sweep from Settings or the command bar.")
                 }
                 // Rows are elevated cards (Craft pass Phase 1) — spacing separates
                 // them; a hairline divider against a bordered card reads doubled.
