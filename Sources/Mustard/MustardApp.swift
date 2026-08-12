@@ -311,7 +311,7 @@ struct MustardApp: App {
                         // Completed dictations are also kept in local clip history
                         // (notch shelf spec §1/§3) — hence the store, built above.
                         let coordinator = SystemDictationCoordinator.live(
-                            clipStore: clipboard?.store)
+                            clipStore: services.store)
                         coordinator.activate()
                         dictation = coordinator
                     }

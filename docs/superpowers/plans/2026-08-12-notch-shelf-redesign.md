@@ -2941,3 +2941,12 @@ Where the shipped code deliberately diverges from the plan's code blocks:
   their screen via `NSScreen.main` rather than the shared
   `NotchScreenPicker` (out of scope for this pass); drag-over does not expand
   the collapsed notch strip before a drop lands.
+- **Meetings auto-select triggers on `.recording`/`.preparing`/`.paused`,**
+  not the finalizing states, narrower than the plan's "state ≠ idle."
+- **Filing a clip into a collection is context-menu only** ("Add to
+  collection" in `NotchClipsTab`'s clip menu); drag-to-collection-pill was
+  scoped out.
+- **`ClipPaster.paste` deliberately leaves the clip on the pasteboard**
+  rather than snapshot-restoring on failure — copy is always the first half
+  of paste, so a failed paste still yields a manual ⌘V (rationale in the
+  code comment).

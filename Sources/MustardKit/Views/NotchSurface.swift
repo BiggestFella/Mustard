@@ -248,8 +248,8 @@ public struct NotchView: View {
     @Environment(NotchNavigation.self) private var nav
     /// Optional: absent in previews/tests that don't wire the recorder.
     @Environment(MeetingCaptureCoordinator.self) private var meetingRecorder: MeetingCaptureCoordinator?
-    /// Optional: not yet injected app-wide (Task 13); drag-in is a no-op
-    /// until it is, rather than crashing the notch.
+    /// Optional: absent in previews/tests that don't wire the clipboard
+    /// layer; drag-in is a no-op then, rather than crashing the notch.
     @Environment(ClipboardServices.self) private var services: ClipboardServices?
     @Query private var tasks: [MustardTask]
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
@@ -337,7 +337,9 @@ public struct NotchView: View {
         case .meetings:
             return nil
         case .clips:
-            let loose = clips.filter { !$0.pinnedToShelf && $0.collection == nil }.count
+            // Matches the Clips grid's `history` filter (NotchClipsTab): pinned
+            // items are included here too and isolable via the star filter.
+            let loose = clips.filter { $0.collection == nil }.count
             return loose > 0 ? loose : nil
         case .shelf:
             let kept = clips.filter(\.pinnedToShelf).count
