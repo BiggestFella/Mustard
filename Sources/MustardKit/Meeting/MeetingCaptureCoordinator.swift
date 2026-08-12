@@ -444,19 +444,31 @@ public final class MeetingCaptureCoordinator {
     /// straight from the channel). Returns a map from each meeting-channel
     /// segment's persistent id to its attributed speaker; an id with no
     /// entry is unattributed, never a guess.
+    /// Review FINDING 3 (effectiveness gap): real meeting-channel segments
+    /// are near-word-level (~15 chars), so a handoff phrase routinely spans
+    /// 2-3 raw segments ("pass it" / "back to" / "Alex." never contains the
+    /// full "pass it back to Alex" phrase on its own). Attribution over raw
+    /// per-segment text would silently match nothing on live data, so this
+    /// merges into utterances FIRST — `MeetingUtteranceMerge`'s existing
+    /// same-source, 1.5s-pause rule; every segment's `speaker` is nil at
+    /// this point, so its speaker-boundary break is a no-op here — then
+    /// attributes over the merged utterance TEXT, then stamps every
+    /// CONSTITUENT segment of an attributed utterance, not just its first.
     private static func attributedSpeakers(
         for segments: [VoiceTranscriptSegment], context: ModelContext
     ) -> [String: String] {
         let meetingSegments = segments.filter { $0.source == .meeting }
         guard !meetingSegments.isEmpty else { return [:] }
+        let utterances = MeetingUtteranceMerge.utterances(from: meetingSegments)
         let candidates = MeetingSpeakerCandidateSource.fetch(
             context: context, userTerms: VoiceLexiconUserTerms.load())
         let speakers = MeetingSpeakerAttribution.attribute(
-            texts: meetingSegments.map(\.text), candidates: candidates)
+            texts: utterances.map(\.text), candidates: candidates)
 
         var result: [String: String] = [:]
-        for (segment, speaker) in zip(meetingSegments, speakers) {
-            if let speaker {
+        for (utterance, speaker) in zip(utterances, speakers) {
+            guard let speaker else { continue }
+            for segment in utterance.segments {
                 result[MeetingTranscriptMerge.persistentID(for: segment)] = speaker
             }
         }

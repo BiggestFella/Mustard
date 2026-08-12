@@ -751,9 +751,12 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
 
         let capturing = StubCapturing()
         let you = seg("y1", "quick note", source: .microphone, start: 0, end: 1)
+        // Gaps between segments are >= the 1.5s pause threshold so each
+        // stays its own utterance after merging (BAK-335 FINDING 3) --
+        // matching a realistic handoff pause, not word-level fragments.
         let m1 = seg("m1", "let's start", source: .meeting, start: 0, end: 1)
-        let m2 = seg("m2", "over to Fahad", source: .meeting, start: 1.1, end: 2)
-        let m3 = seg("m3", "shipped the release", source: .meeting, start: 2.1, end: 3)
+        let m2 = seg("m2", "over to Fahad", source: .meeting, start: 2.6, end: 3.6)
+        let m3 = seg("m3", "shipped the release", source: .meeting, start: 5.2, end: 6.2)
         let coordinator = makeCoordinator(
             context: context, capturing: capturing,
             transcription: transcription(youFinals: [you], meetingFinals: [m1, m2, m3]))
@@ -780,8 +783,10 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         try context.save()
 
         let capturing = StubCapturing()
+        // Gap >= the 1.5s pause threshold so the two stay separate
+        // utterances after merging (BAK-335 FINDING 3).
         let m1 = seg("m1", "over to Fahad", source: .meeting, start: 0, end: 1)
-        let m2 = seg("m2", "shipped the release", source: .meeting, start: 1.1, end: 2)
+        let m2 = seg("m2", "shipped the release", source: .meeting, start: 2.6, end: 3.6)
         final class Capture: @unchecked Sendable { var seen: [VoiceTranscriptSegment] = [] }
         let captured = Capture()
         // First pass with NO digest closure — digestStatus lands on
@@ -813,6 +818,53 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         let bySpeakerlessText = Dictionary(uniqueKeysWithValues: captured.seen.map { ($0.text, $0.speaker) })
         XCTAssertNil(bySpeakerlessText["over to Fahad"] ?? nil)
         XCTAssertEqual(bySpeakerlessText["shipped the release"] ?? nil, "Fahad")
+    }
+
+    /// FINDING 3 (review, effectiveness gap): real meeting-channel segments
+    /// are near-word-level (~15 chars), so a handoff phrase routinely spans
+    /// 2-3 raw segments — attributing over RAW per-segment text would never
+    /// match "pass it back to Alex" split as "pass it" / "back to" /
+    /// "Alex.". The coordinator must merge into utterances FIRST (the same
+    /// 1.5s-pause, same-source rule `MeetingUtteranceMerge` already uses)
+    /// and attribute over utterance text, then stamp every CONSTITUENT
+    /// segment of an attributed utterance, not just one.
+    func test_finalize_mergesWordLevelFragmentsBeforeAttribution_stampsEveryConstituent() async throws {
+        let context = try ctx()
+        let pastMeeting = MeetingRecord(title: "Old standup")
+        context.insert(pastMeeting)
+        let pastProposal = MeetingActionProposal(title: "Ping Thales", owner: "Alex")
+        pastProposal.meeting = pastMeeting
+        context.insert(pastProposal)
+        try context.save()
+
+        let capturing = StubCapturing()
+        // The handoff phrase chopped into near-word-level fragments, each
+        // well within the 1.5s pause threshold of its neighbor so they
+        // merge into ONE utterance whose combined text is
+        // "pass it back to Alex." -- matching the "pass it (back )?to X"
+        // pattern only once merged.
+        let f1 = seg("m1", "pass it", source: .meeting, start: 0.0, end: 0.4)
+        let f2 = seg("m2", "back to", source: .meeting, start: 0.5, end: 0.9)
+        let f3 = seg("m3", "Alex.", source: .meeting, start: 1.0, end: 1.3)
+        // A real pause (>= 1.5s) before the response, itself also
+        // fragmented, so this test proves BOTH sides of the merge.
+        let f4 = seg("m4", "I shipped", source: .meeting, start: 3.0, end: 3.4)
+        let f5 = seg("m5", "the release", source: .meeting, start: 3.5, end: 3.9)
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(meetingFinals: [f1, f2, f3, f4, f5]))
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+
+        await coordinator.stop()
+
+        let segments = try context.fetch(FetchDescriptor<MeetingTranscriptSegment>())
+        let byRaw = Dictionary(uniqueKeysWithValues: segments.map { ($0.rawText, $0) })
+        XCTAssertNil(byRaw["pass it"]?.speaker, "the handoff utterance itself stays with the previous (unattributed) speaker")
+        XCTAssertNil(byRaw["back to"]?.speaker)
+        XCTAssertNil(byRaw["Alex."]?.speaker)
+        XCTAssertEqual(byRaw["I shipped"]?.speaker, "Alex", "every constituent of the attributed utterance is stamped")
+        XCTAssertEqual(byRaw["the release"]?.speaker, "Alex", "not just the first constituent")
     }
 
     // MARK: - Recovery on launch
