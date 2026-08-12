@@ -132,19 +132,35 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(report.staleCount, 0)
     }
 
-    func test_invalidIncomingGeneratedAtDoesNotMarkExistingProjectionStale() throws {
+    func test_invalidGeneratedAtRejectsQueueWithoutMutationAndLaterNewerQueueCanStale() throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
         _ = adapter.importQueue(at: fixture.queueURL)
+        let original = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
+        let originalContext = original.sourceContext
+        let originalStage = original.stage
 
         try fixture.writeDecision("DEC-DL-2")
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "not-a-date")
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let invalid = adapter.importQueue(at: fixture.queueURL)
 
-        let existing = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
-        XCTAssertFalse(existing.tags.contains("source-stale"))
-        XCTAssertEqual(report.staleCount, 0)
+        XCTAssertEqual(invalid.findings.count, 1)
+        XCTAssertEqual(invalid.findings.first?.scope, .queue)
+        XCTAssertEqual(invalid.findings.first?.reason, "Invalid generated_at timestamp")
+        XCTAssertEqual(invalid.createdCount, 0)
+        XCTAssertEqual(invalid.updatedCount, 0)
+        XCTAssertEqual(invalid.staleCount, 0)
+        XCTAssertEqual(try tasks(context).count, 1)
+        XCTAssertEqual(original.sourceContext, originalContext)
+        XCTAssertEqual(original.stage, originalStage)
+
+        try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "2026-01-02T00:00:00Z")
+        let newer = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(newer.createdCount, 1)
+        XCTAssertEqual(newer.staleCount, 1)
+        XCTAssertTrue(original.tags.contains("source-stale"))
     }
 
     func test_queueAtDifferentPathDoesNotMarkOtherQueueProjectionStale() throws {

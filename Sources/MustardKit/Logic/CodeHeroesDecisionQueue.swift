@@ -114,6 +114,7 @@ public enum CodeHeroesDecisionQueue {
     public static func validate(_ document: Document) throws {
         guard document.schemaVersion == 1 else { throw ValidationError.queue(.init(scope: .queue, reason: "Unsupported schema version")) }
         guard document.reportType == "dream_decision_triage" else { throw ValidationError.queue(.init(scope: .queue, reason: "Unsupported report type")) }
+        guard generatedAtDate(document.generatedAt) != nil else { throw ValidationError.queue(.init(scope: .queue, reason: "Invalid generated_at timestamp")) }
         guard document.readOnly else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue is not read-only")) }
         guard document.decisionStatusMutations == 0 else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue reports decision mutations")) }
         guard isReadOnlyImportMarker(document.mustardImport) else { throw ValidationError.queue(.init(scope: .queue, reason: "Unsupported Mustard import mode")) }
@@ -124,6 +125,14 @@ public enum CodeHeroesDecisionQueue {
         guard Set(ids).count == ids.count else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue has duplicate cluster IDs")) }
         guard ids.allSatisfy({ $0.range(of: clusterIDPattern, options: .regularExpression) != nil }) else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue has invalid cluster IDs")) }
         guard !containsSecret(in: queueLevelText(document)) else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue-level secret-shaped content")) }
+    }
+
+    /// Parses the queue provenance timestamp used to order local projections.
+    public static func generatedAtDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: value)
     }
 
     public static func clusterValidation(for document: Document) -> ClusterValidationResult {

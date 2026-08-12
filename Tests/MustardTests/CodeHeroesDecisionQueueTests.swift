@@ -32,6 +32,8 @@ final class CodeHeroesDecisionQueueTests: XCTestCase {
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
         queue = try fixture(); queue.sourceReceipt = ""
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
+        queue = try fixture(); queue.generatedAt = "not-an-iso-8601-date"
+        XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
     }
 
     func test_validationRejectsDuplicateClustersAndQueueSecrets() throws {
