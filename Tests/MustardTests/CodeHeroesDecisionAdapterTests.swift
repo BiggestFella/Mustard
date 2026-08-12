@@ -188,6 +188,21 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(try tasks(context).first { $0.uid == existing.uid }).title, "Original")
     }
 
+    func test_saveFailureCleansUpBrandNewProjectionAndItsAreaAndList() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }, saveContext: { throw SaveFailure.forced })
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.createdCount, 0)
+        XCTAssertEqual(report.updatedCount, 0)
+        XCTAssertEqual(report.staleCount, 0)
+        XCTAssertEqual(try tasks(context).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Area>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<TaskList>()).count, 0)
+    }
+
     func test_duplicateExistingProjectionUIDSkipsClusterWithoutChangingEitherTask() throws {
         let fixture = try Fixture()
         let context = try makeContext()
