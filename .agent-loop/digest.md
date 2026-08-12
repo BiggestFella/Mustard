@@ -856,3 +856,29 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #118 opened and merged. No release, no
   remote deletion, no secrets.
 - **Revert:** `git revert 7943345`
+
+## 2026-08-12 — MERGED · Settings home + customizable hotkeys (PR #121)
+- **What landed:** one Settings home (Sources & Agent · Calendar · Voice · Hotkeys) —
+  all config moved off the Agent console, which is now pure triage with a gear link;
+  8 user-customizable hotkeys via a key-recorder field (Esc cancels, ⌫ resets):
+  ⌃⌥Space/⌃⌥D/⌃⌥R rebind Carbon registrations live (no relaunch), ⌘⇧H/⌘⇧N/⌘K/⌘⇧S/⌘⇧F
+  become dynamic `.keyboardShortcut`s. Global three keep their historic UserDefaults
+  keys (voiceHotKeyCode…) so pre-existing overrides survive; duplicate chords rejected
+  naming the owner; OS-level conflicts surface on the registration board (rewrite's
+  previously-invisible ⌃⌥R conflict included). Push-to-talk rebind ends an active hold
+  via the normal release path — transcript never lost.
+- **Risk:** medium — touches the Carbon hotkey layer and MustardApp wiring; no schema,
+  no outward action, no new permission (Info.plist unchanged).
+- **Checks:** `swift test` exit 0 — **1737 tests, 1 skipped, 0 failures** (baseline
+  1634); `swift build` exit 0; `./build-app.sh` exit 0 (Xcode 27 beta DEVELOPER_DIR).
+- **Fresh-context review:** PASS (separate session) — traced rebind/watchdog actor
+  interleavings, legacy-key compat, observation-driven shortcut re-render; one
+  spec-conformance nit (conflict note color) fixed pre-merge; three accepted
+  deviations recorded on the PR.
+- **⚠ Leon eye-check OUTSTANDING:** Settings sections render calm; bare console + gear;
+  one live global rebind (change push-to-talk, hold new chord → pill); one in-app
+  rebind (change ⌘K; menu items ⌘⇧H/⌘⇧N refreshing live is the one SwiftUI-observation
+  risk the spec flagged).
+- **Outward actions:** branch pushed, PR #121 opened and merged. No release, no
+  remote deletion, no secrets.
+- **Revert:** `git revert 74b3c88`
