@@ -305,9 +305,11 @@ struct MustardApp: App {
                     }
                     if dictation == nil {
                         // System-wide dictation: hold ⌃⌥D in any app, speak, release
-                        // → the words land at the cursor (never in secure fields,
-                        // never in Mustard's store).
-                        let coordinator = SystemDictationCoordinator.live()
+                        // → the words land at the cursor (never in secure fields).
+                        // Completed dictations are also kept in local clip history
+                        // (notch shelf spec §1/§3) — hence the store, built above.
+                        let coordinator = SystemDictationCoordinator.live(
+                            clipStore: clipboard?.store)
                         coordinator.activate()
                         dictation = coordinator
                     }

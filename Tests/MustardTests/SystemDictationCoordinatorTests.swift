@@ -5,7 +5,8 @@ import SwiftData
 /// System-wide dictation coordination (Dictation Task 4, BAK-290): snapshot
 /// the focused field BEFORE speech starts, stream provisional text, finalize
 /// on release, revalidate + whitespace-normalize + insert — and never touch
-/// SwiftData. All seams stubbed; time injected.
+/// SwiftData directly (clip history is reached through an injected hook, and
+/// never for secure fields). All seams stubbed; time injected.
 @MainActor
 final class SystemDictationCoordinatorTests: XCTestCase {
 
@@ -52,6 +53,8 @@ final class SystemDictationCoordinatorTests: XCTestCase {
         var insertedText: String?
         var continuation: AsyncThrowingStream<VoiceTranscriptSegment, Error>.Continuation?
         var speechCancelled = false
+        /// Everything the coordinator offered to clip history, in order.
+        var offeredTranscripts: [String] = []
         /// When set, insert() suspends on a continuation handed to this
         /// closure until the test resumes it.
         var insertGateWaiter: ((CheckedContinuation<Void, Never>) -> Void)?
@@ -103,6 +106,7 @@ final class SystemDictationCoordinatorTests: XCTestCase {
                     }
                     return self.insertOutcome
                 },
+                onFinalTranscript: { self.offeredTranscripts.append($0) },
                 pill: .none(),
                 finalizeTimeout: 0.05,
                 now: { clock.next() })
@@ -426,6 +430,92 @@ final class SystemDictationCoordinatorTests: XCTestCase {
 
         XCTAssertNil(harness.insertedText, "secure fields never receive dictation, retries included")
         XCTAssertEqual(coordinator.recoveredTranscript, "hello", "the words survive the refusal")
+    }
+
+    // MARK: - Clip history (notch shelf spec §1 / §3, 2026-08-12)
+
+    func test_finalTranscript_isOfferedToClipHistoryOnInsert() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello world", final: true)]
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+
+        XCTAssertEqual(coordinator.phase, .inserted)
+        XCTAssertEqual(
+            harness.offeredTranscripts, ["hello world"],
+            "the words as spoken reach history exactly once — not the target-specific normalization")
+        XCTAssertEqual(harness.insertedText, " hello world")
+    }
+
+    func test_secureFieldTranscript_isNeverOffered() async {
+        // Secure targets are refused at press, before any audio: nothing is
+        // transcribed, so nothing can be stored. (`DictationWhitespace.insertion`
+        // returning nil is the second, defensive gate the offer sits behind.)
+        let harness = Harness(target: target(secure: true))
+        harness.finals = [seg("a", "hunter2", final: true)]
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+
+        XCTAssertTrue(harness.offeredTranscripts.isEmpty, "password fields never reach clip history")
+        XCTAssertNil(harness.insertedText)
+    }
+
+    func test_retryIntoSecureField_neitherInsertsNorOffers() async {
+        // The whitespace nil-guard on the retry path: the transcript exists and
+        // is preserved, but the field is secure — it must not be stored either.
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello", final: true)]
+        harness.insertOutcome = .recoverable("lost focus")
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+        harness.offeredTranscripts = []   // ignore the first capture's offer
+
+        harness.snapshotResult = .success(target(secure: true))
+        harness.insertOutcome = .insertedDirectly
+        harness.insertedText = nil
+        coordinator.retryIntoCurrentField()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertNil(harness.insertedText)
+        XCTAssertTrue(harness.offeredTranscripts.isEmpty, "a secure retry stores nothing, anywhere")
+    }
+
+    func test_preservedTranscript_isStillOffered() async {
+        // Insertion failed and the words live only in the pill — history is
+        // exactly where they must not be lost from.
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello world", final: true)]
+        harness.insertOutcome = .recoverable("The text field lost focus before the transcript was ready.")
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+
+        guard case .recoverable = coordinator.phase else {
+            return XCTFail("expected recoverable, got \(coordinator.phase)")
+        }
+        XCTAssertEqual(harness.offeredTranscripts, ["hello world"])
+    }
+
+    func test_retryAfterFailure_doesNotOfferTheTranscriptTwice() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello world", final: true)]
+        harness.insertOutcome = .recoverable("The text field lost focus before the transcript was ready.")
+        let coordinator = harness.makeCoordinator(clock: Clock([t0, t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+        XCTAssertEqual(harness.offeredTranscripts.count, 1, "precondition: offered once by the first attempt")
+
+        harness.insertOutcome = .insertedDirectly
+        coordinator.retryIntoCurrentField()
+        await coordinator.finalizeTask?.value
+
+        XCTAssertEqual(coordinator.phase, .inserted)
+        XCTAssertEqual(
+            harness.offeredTranscripts, ["hello world"],
+            "a retry re-inserts the same words — it must not create a second history entry")
     }
 
     // MARK: - Hotkey & data isolation
