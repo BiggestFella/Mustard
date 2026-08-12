@@ -53,6 +53,9 @@ public final class MeetingPlaybackController {
 public struct MeetingReviewView: View {
     @Environment(\.modelContext) private var context
     @Environment(MeetingCaptureCoordinator.self) private var recorder: MeetingCaptureCoordinator?
+    /// Optional: the review surface renders fine outside the app's environment
+    /// (previews). When present it carries the notch's deep-link request.
+    @Environment(NotchNavigation.self) private var nav: NotchNavigation?
     @Query(sort: \MeetingRecord.createdAt, order: .reverse) private var meetings: [MeetingRecord]
     @State private var selectedUID: String?
     @State private var playback = MeetingPlaybackController()
@@ -79,6 +82,14 @@ public struct MeetingReviewView: View {
             }
         }
         .background(Theme.Palette.bg)
+        // Deep link from the notch's Meetings tab: select the recording, then
+        // clear the request so it fires once.
+        .onChange(of: nav?.pendingMeetingUID, initial: true) { _, uid in
+            guard let uid else { return }
+            selectedUID = uid
+            highlightedSegmentUID = nil
+            nav?.pendingMeetingUID = nil
+        }
     }
 
     // MARK: - List
