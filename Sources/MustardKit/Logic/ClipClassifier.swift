@@ -23,7 +23,7 @@ public enum ClipClassifier {
         guard s.hasPrefix("#") else { return false }
         let digits = s.dropFirst()
         guard digits.count == 3 || digits.count == 6 else { return false }
-        return digits.allSatisfy { $0.isHexDigit }
+        return digits.allSatisfy { $0.isASCII && $0.isHexDigit }
     }
 
     private static func isRGBFunction(_ s: String) -> Bool {

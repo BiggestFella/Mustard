@@ -34,4 +34,23 @@ final class ClipClassifierTests: XCTestCase {
         XCTAssertEqual(ClipClassifier.classify(text: ""), .text)
         XCTAssertEqual(ClipClassifier.classify(text: "   \n"), .text)
     }
+
+    func testFullwidthHexDigitsAreText() {
+        // Unicode Hex_Digit compatibility forms (fullwidth) satisfy
+        // Character.isHexDigit but UInt32(_:radix:16) can't parse them.
+        XCTAssertEqual(ClipClassifier.classify(text: "#Ａ１Ｂ２Ｃ３"), .text)
+    }
+
+    func testMalformedRGBFunctionsAreText() {
+        XCTAssertEqual(ClipClassifier.classify(text: "rgb(1,2)"), .text)
+        XCTAssertEqual(ClipClassifier.classify(text: "rgba(1,2,3,4,5)"), .text)
+        XCTAssertEqual(ClipClassifier.classify(text: "rgb(a,b,c)"), .text)
+        XCTAssertEqual(ClipClassifier.classify(text: "rgb(1,2,3"), .text)  // no closing paren
+    }
+
+    func testNonHTTPWellFormedURLsAreText() {
+        XCTAssertEqual(ClipClassifier.classify(text: "ftp://host/file"), .text)
+        XCTAssertEqual(ClipClassifier.classify(text: "mailto:leon@codeheroes.com.au"), .text)
+        XCTAssertEqual(ClipClassifier.classify(text: "file:///tmp/x"), .text)
+    }
 }
