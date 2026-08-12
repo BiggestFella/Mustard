@@ -16,6 +16,8 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertEqual(try CodeHeroesDecisionPolicy.priority(for: "urgent"), .urgent)
         XCTAssertEqual(CodeHeroesDecisionPolicy.uid(clusterID: "DL-01"), "codeheroes:decision:DL-01")
         XCTAssertEqual(CodeHeroesDecisionPolicy.source, "codeheroes:decision-triage")
+        XCTAssertTrue(CodeHeroesDecisionPolicy.isProjection(source: CodeHeroesDecisionPolicy.source))
+        XCTAssertFalse(CodeHeroesDecisionPolicy.isProjection(source: "meeting"))
     }
 
     func test_failsClosedForUnknownMappingAndCreatesBoundedReadOnlyProjection() throws {
@@ -24,10 +26,10 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertThrowsError(try CodeHeroesDecisionPolicy.priority(for: "normal"))
         let projection = try CodeHeroesDecisionPolicy.projection(for: cluster())
         XCTAssertEqual(projection.owner, .agent)
-        XCTAssertNil(projection.actionType)
-        XCTAssertNil(projection.delegationMetadata)
-        XCTAssertNil(projection.connectedWorkerMetadata)
         XCTAssertTrue(projection.isReadOnly)
+        XCTAssertTrue(CodeHeroesDecisionPolicy.isProjection(projection))
+        XCTAssertEqual(projection.uid, "codeheroes:decision:DL-01")
+        XCTAssertEqual(projection.sourceDecisionIDs, ["DEC-1"])
         XCTAssertEqual(projection.tags, ["codeheroes", "decision", "project:dl", "triage:needs-human-decision", "human-action"])
         XCTAssertTrue(projection.notes.contains("Question:"))
         XCTAssertTrue(projection.notes.contains("Source IDs:"))

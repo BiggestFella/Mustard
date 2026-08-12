@@ -9,8 +9,7 @@ public enum CodeHeroesDecisionPolicy {
     public struct Projection: Equatable {
         public let uid: String; public let title: String; public let area: String; public let stage: TaskStage
         public let priority: TaskPriority; public let owner: TaskOwner; public let tags: [String]; public let notes: String
-        public let source: String; public let actionType: RecommendationAction?; public let delegationMetadata: String?
-        public let connectedWorkerMetadata: String?; public let isReadOnly: Bool
+        public let source: String; public let sourceDecisionIDs: [String]; public let isReadOnly: Bool
     }
 
     public static func area(for projectID: String) throws -> String {
@@ -24,9 +23,10 @@ public enum CodeHeroesDecisionPolicy {
     }
     public static func uid(clusterID: String) -> String { "codeheroes:decision:\(clusterID)" }
     public static func isProjection(source: String) -> Bool { source == self.source }
+    public static func isProjection(_ projection: Projection) -> Bool { projection.isReadOnly && isProjection(source: projection.source) }
 
     public static func projection(for cluster: CodeHeroesDecisionQueue.Cluster) throws -> Projection {
-        .init(uid: uid(clusterID: cluster.clusterID), title: cluster.title, area: try area(for: cluster.projectID), stage: try stage(for: cluster.mustardStage), priority: try priority(for: cluster.priority), owner: .agent, tags: ["codeheroes", "decision", "project:\(cluster.projectID)", "triage:\(cluster.triageState)", "human-action"], notes: boundedNotes(for: cluster), source: source, actionType: nil, delegationMetadata: nil, connectedWorkerMetadata: nil, isReadOnly: true)
+        .init(uid: uid(clusterID: cluster.clusterID), title: cluster.title, area: try area(for: cluster.projectID), stage: try stage(for: cluster.mustardStage), priority: try priority(for: cluster.priority), owner: .agent, tags: ["codeheroes", "decision", "project:\(cluster.projectID)", "triage:\(cluster.triageState)", "human-action"], notes: boundedNotes(for: cluster), source: source, sourceDecisionIDs: cluster.sourceDecisionIDs, isReadOnly: true)
     }
 
     public static func boundedNotes(for cluster: CodeHeroesDecisionQueue.Cluster) -> String {

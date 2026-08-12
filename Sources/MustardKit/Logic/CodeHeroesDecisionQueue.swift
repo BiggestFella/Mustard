@@ -112,7 +112,8 @@ public enum CodeHeroesDecisionQueue {
         guard document.readOnly else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue is not read-only")) }
         guard document.decisionStatusMutations == 0 else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue reports decision mutations")) }
         guard isReadOnlyImportMarker(document.mustardImport) else { throw ValidationError.queue(.init(scope: .queue, reason: "Unsupported Mustard import mode")) }
-        guard document.sourceRunID.range(of: #"^RUN-.+"#, options: .regularExpression) != nil else { throw ValidationError.queue(.init(scope: .queue, reason: "Missing RUN source ID")) }
+        guard document.sourceRunID.range(of: #"^RUN-[A-Za-z0-9-]+$"#, options: .regularExpression) != nil else { throw ValidationError.queue(.init(scope: .queue, reason: "Missing RUN source ID")) }
+        guard !document.sourceReceipt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ValidationError.queue(.init(scope: .queue, reason: "Missing source receipt")) }
         guard !document.queue.isEmpty else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue is empty")) }
         let ids = document.queue.map(\.clusterID)
         guard Set(ids).count == ids.count, !ids.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue has duplicate or empty cluster IDs")) }
@@ -127,7 +128,7 @@ public enum CodeHeroesDecisionQueue {
             else if (try? CodeHeroesDecisionPolicy.area(for: cluster.projectID)) == nil { invalid = "Unknown project" }
             else if (try? CodeHeroesDecisionPolicy.stage(for: cluster.mustardStage)) == nil { invalid = "Invalid stage" }
             else if (try? CodeHeroesDecisionPolicy.priority(for: cluster.priority)) == nil { invalid = "Invalid priority" }
-            else if cluster.sourceDecisionIDs.isEmpty { invalid = "Missing decision source" }
+            else if cluster.sourceDecisionIDs.isEmpty || cluster.sourceDecisionIDs.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { invalid = "Missing decision source" }
             else {
                 let references = cluster.sourceDecisionIDs.compactMap { try? SourceReference($0) }
                 if references.count != cluster.sourceDecisionIDs.count { invalid = "Missing or escaped decision source" }
@@ -139,12 +140,12 @@ public enum CodeHeroesDecisionQueue {
         return .init(eligible: eligible, findings: findings)
     }
 
-    private static func isReadOnlyImportMarker(_ marker: String) -> Bool { marker == "future-adapter-only" || marker.hasPrefix("read-only") }
+    private static func isReadOnlyImportMarker(_ marker: String) -> Bool { marker == "future-adapter-only" }
     private static func queueLevelText(_ document: Document) -> String {
         let exclusions = document.historicalExclusions.flatMap { [$0.decisionID, $0.reason, $0.mustardVisibility] }
         return ([document.generatedAt, document.sourceRunID, document.sourceReceipt, document.canonicalInput, document.mustardImport]
             + document.historicalOpenDecisionIDs + exclusions + document.summary.values.map(\.text)).joined(separator: "\n")
     }
-    private static func clusterText(_ cluster: Cluster) -> String { [cluster.title, cluster.question, cluster.nextAction, cluster.whyGrouped].joined(separator: "\n") }
+    private static func clusterText(_ cluster: Cluster) -> String { ([cluster.title, cluster.question, cluster.nextAction, cluster.whyGrouped] + cluster.sourceDecisionIDs).joined(separator: "\n") }
     private static func containsSecret(in value: String) -> Bool { value.range(of: #"(?i)(ghp_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|sk-[a-z0-9]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"#, options: .regularExpression) != nil }
 }
