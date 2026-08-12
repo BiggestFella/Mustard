@@ -130,6 +130,8 @@ struct MustardApp: App {
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
     @State private var rewrite: RewriteController?
+    @State private var clipboard: ClipboardServices?
+    @State private var clipsHotKey: ClipsHotKey?
     @State private var meetingRecorder: MeetingCaptureCoordinator
     @State private var meetingSuggestions: MeetingSuggestionMonitor
     @State private var didRecoverMeetings = false
@@ -236,7 +238,25 @@ struct MustardApp: App {
                         meetingSuggestions.startPolling()
                         didRecoverMeetings = true
                     }
+                    // Built BEFORE the notch: the panel's content closure captures
+                    // the services box, so it has to exist first.
+                    if clipboard == nil {
+                        // Mustard owns clipboard capture (notch shelf spec §1):
+                        // one poller, concealed/transient types skipped, password
+                        // managers excluded, 200-item history in SwiftData.
+                        let store = ClipStore(context: container.mainContext)
+                        let monitor = ClipboardMonitor(pasteboard: LivePasteboard()) { candidate in
+                            store.ingest(candidate)
+                        }
+                        monitor.start()
+                        clipboard = ClipboardServices(
+                            store: store, monitor: monitor, paster: .live(monitor: monitor))
+                    }
                     if notch == nil {
+                        // Strong, app-lifetime capture (same shape as `agent`
+                        // above) — the @State optional itself must not be read
+                        // from inside the escaping content closure.
+                        let clipboard = clipboard
                         let controller = NotchController { controller in
                             AnyView(
                                 NotchView(controller: controller)
@@ -245,11 +265,25 @@ struct MustardApp: App {
                                     .environment(notchNav)
                                     .environment(meetingRecorder)
                                     .environment(meetingSuggestions)
+                                    .environment(clipboard)
                                     .modelContainer(container)
                             )
                         }
                         controller.show()
                         notch = controller
+
+                        if clipsHotKey == nil {
+                            // ⌃⌥V anywhere → the panel opens pinned on Clips.
+                            // Carbon does the background work; the menu item
+                            // below only makes the chord discoverable. A
+                            // conflict is logged by `register()`, never silent.
+                            let hotKey = ClipsHotKey()
+                            hotKey.onPress = {
+                                controller.openPinned(on: NotchTabModel.clipsHotKeyTab)
+                            }
+                            hotKey.register()
+                            clipsHotKey = hotKey
+                        }
                     }
                     if voiceCapture == nil {
                         // Push-to-talk capture: hold ⌃⌥Space anywhere, speak, release
@@ -284,8 +318,13 @@ struct MustardApp: App {
             CommandGroup(after: .toolbar) {
                 Button("Toggle Hover Panel") { hoverPanel?.toggle() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
-                Button("Toggle Notch") { notch?.toggle() }
+                // The strip is always on screen (`show()` at launch), so ⌘⇧N
+                // toggles the PIN, not visibility — hiding it outright would
+                // leave no way back to the ambient notch.
+                Button("Toggle Notch") { notch?.togglePinned() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("Open Clips") { notch?.openPinned(on: NotchTabModel.clipsHotKeyTab) }
+                    .keyboardShortcut("v", modifiers: [.control, .option])
             }
         }
     }

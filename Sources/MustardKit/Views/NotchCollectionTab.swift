@@ -19,6 +19,21 @@ struct NotchCollectionTab: View {
         return NotchSearch.filter(filed, query: searchQuery)
     }
 
+    /// Click = copy, same shape as the Clips tab: an image clip carries bytes
+    /// rather than a payload string, so copying its (empty) payload would be a
+    /// silent no-op. Nothing empty is ever written — that would wipe whatever
+    /// the user already had on the clipboard.
+    private func copy(_ clip: ClipItem) {
+        guard let paster = services?.paster else { return }
+        if clip.kind == .image {
+            guard let data = clip.imageData ?? clip.thumbnailData, !data.isEmpty else { return }
+            paster.copy(imageData: data)
+        } else {
+            guard !clip.payload.isEmpty else { return }
+            paster.copy(text: clip.payload)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if items.isEmpty {
@@ -29,7 +44,7 @@ struct NotchCollectionTab: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
                         ForEach(items, id: \.uid) { clip in
                             ClipCardView(clip: clip)
-                                .onTapGesture { services?.paster.copy(text: clip.payload) }
+                                .onTapGesture { copy(clip) }
                                 .onDrag { NSItemProvider(object: clip.payload as NSString) }
                                 .contextMenu {
                                     Button("Remove from \(name)") {

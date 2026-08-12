@@ -93,19 +93,16 @@ public final class NotchController {
         )
     }
 
-    /// ⌘⇧N: open the panel *pinned*, or hide it (dropping the pin) if visible.
-    public func toggle() {
-        if let panel, panel.isVisible {
-            graceTimer?.invalidate()
-            graceTimer = nil
-            // Hide FIRST: unpinning shrinks the frame with an animation, and
-            // animating a panel the user is about to stop seeing just blocks
-            // for the duration. Off-screen, the same setFrame is instant.
-            panel.orderOut(nil)
-            // A hidden panel never receives a hover-exit, so record the pointer
-            // as outside before unpinning — otherwise a peek would survive the
-            // hide and the panel would re-open stuck expanded.
-            pinState.hoverChanged(isInside: false, now: .now)
+    /// ⌘⇧N: open the panel pinned, or drop the pin (collapsing back to the
+    /// ambient strip) if it is already pinned.
+    ///
+    /// It deliberately does NOT hide the panel: the strip is shown at launch
+    /// and is meant to stay on screen, so the old visibility toggle always took
+    /// its hide branch and there was no way back to the notch from the keyboard.
+    /// No `pendingTab` is set — the shell's own default-tab logic decides where
+    /// a plain open lands (Meetings while recording, Today otherwise).
+    public func togglePinned() {
+        if pinState.isPinned {
             unpin()
             return
         }
@@ -278,6 +275,9 @@ public struct NotchView: View {
     @State private var showPinnedOnly = false
     @State private var activeTab: NotchTab = .today
     @FocusState private var captureFocused: Bool
+    /// ⌃⌥V lands on Clips ready to type. Best-effort: the panel is
+    /// non-activating, so the caret only appears once it becomes key.
+    @FocusState private var searchFocused: Bool
     /// Handle for pin/tab/hover events; the controller outlives the view.
     let controller: NotchController?
 
@@ -363,6 +363,13 @@ public struct NotchView: View {
     private func switchTo(_ tab: NotchTab) {
         activeTab = tab
         controller?.select(tab: tab)
+    }
+
+    /// Where an expansion lands. `nil` = no hotkey request, so the default tab
+    /// applies; a ⌃⌥V request additionally focuses the search field.
+    private func land(on requested: NotchTab?) {
+        switchTo(requested ?? NotchTabModel.defaultTab(recordingActive: recordingActive))
+        if requested == NotchTabModel.clipsHotKeyTab { searchFocused = true }
     }
 
     public var body: some View {
@@ -493,11 +500,18 @@ public struct NotchView: View {
         .padding(.horizontal, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            // A hotkey open (⌘⇧N / ⌃⌥V) names its tab; anything else — a plain
-            // hover-expand — lands on the default tab.
-            switchTo(
-                controller?.consumePendingTab()
-                    ?? NotchTabModel.defaultTab(recordingActive: recordingActive))
+            // A hotkey open (⌃⌥V) names its tab; anything else — a plain
+            // hover-expand or ⌘⇧N — lands on the default tab.
+            land(on: controller?.consumePendingTab())
+        }
+        .onChange(of: stateVersion) { _, _ in
+            // A hotkey press while the panel is ALREADY expanded never re-runs
+            // the `.onAppear` above, so the request would sit unconsumed and the
+            // shell would show the wrong tab at the new tab's size. Pin/hover
+            // changes bump `stateVersion`, and the read is read-and-clear, so
+            // this fires exactly once per request and is a no-op otherwise.
+            guard let requested = controller?.consumePendingTab() else { return }
+            land(on: requested)
         }
         .onChange(of: tabs) { _, current in
             // A deleted collection must not strand the shell on a dead tab;
@@ -517,6 +531,7 @@ public struct NotchView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundStyle(.white)
+                    .focused($searchFocused)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -636,6 +651,7 @@ struct NotchNewCollectionPill: View {
     @Query private var collections: [ClipCollection]
     @State private var naming = false
     @State private var name = ""
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         if naming {
@@ -646,6 +662,11 @@ struct NotchNewCollectionPill: View {
                 .frame(width: 80)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(.white.opacity(0.1), in: Capsule())
+                .focused($nameFocused)
+                // The field only exists once "+" has been tapped, so focus is
+                // taken here rather than at the tap — the same pattern the
+                // sidebar's inline rename field uses.
+                .onAppear { nameFocused = true }
                 .onSubmit {
                     let trimmed = name.trimmingCharacters(in: .whitespaces)
                     if !trimmed.isEmpty, !collections.contains(where: { $0.name == trimmed }) {
