@@ -16,12 +16,13 @@ struct NotchAgentTab: View {
         RecommendationQueue.pending(recommendations, now: .now)
     }
 
-    /// The three gate stages (needsApproval ∪ needsInput ∪ needsReview) —
-    /// matches `AgentInbox.attentionTaskCount` / `TaskStage.isGate` so this
-    /// tab's row set always agrees with the Agent pill's `waitingCount` in
-    /// the shell (`NotchSurface.swift`).
+    /// The three gate stages (needsApproval ∪ needsInput ∪ needsReview),
+    /// oldest-first with a uid tiebreak — the same pure helper the Agent
+    /// console uses (`AgentConsoleView.swift:30`), so row order never jitters
+    /// and always agrees with `AgentInbox.attentionTaskCount` / the shell's
+    /// `waitingCount` pill (`NotchSurface.swift`).
     private var attentionTasks: [MustardTask] {
-        tasks.filter { $0.stage.isGate }
+        AgentInbox.attention(tasks).inFlight
     }
 
     var body: some View {
