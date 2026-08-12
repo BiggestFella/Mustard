@@ -3,6 +3,15 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+/// The notch's window. A borderless panel returns `false` from `canBecomeKey`
+/// by default, which makes every `onKeyPress` in the shell dead code — Return
+/// to paste a clip (and typing in the capture field) needs the panel to be
+/// able to take keystrokes. `.nonactivatingPanel` still keeps Mustard from
+/// coming forward when it does (the same pairing `RewriteCardPanel` uses).
+final class NotchPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 /// The notch surface (spec §6a): a black, notch-hugging panel anchored to
 /// whichever screen is active (external monitor preferred — see
 /// `NotchScreenPicker`). Idle: thin strip rotating focus → waiting count.
@@ -107,7 +116,7 @@ public final class NotchController {
     public func show() {
         guard let screen else { return }
         if panel == nil {
-            let panel = NSPanel(
+            let panel = NotchPanel(
                 contentRect: idleFrame(on: screen),
                 styleMask: [.nonactivatingPanel, .borderless],
                 backing: .buffered,

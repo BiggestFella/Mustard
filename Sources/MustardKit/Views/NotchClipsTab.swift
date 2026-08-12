@@ -30,8 +30,10 @@ struct NotchClipsTab: View {
     @State private var selectedUID: String?
 
     /// Filed clips live in their collection's tab, not in history.
+    private var history: [ClipItem] { clips.filter { $0.collection == nil } }
+
     private var visible: [ClipItem] {
-        var items = clips.filter { $0.collection == nil }
+        var items = history
         if pinnedOnly { items = items.filter(\.pinnedToShelf) }
         if let kindFilter { items = items.filter { $0.kind == kindFilter } }
         return NotchSearch.filter(items, query: searchQuery)
@@ -41,7 +43,10 @@ struct NotchClipsTab: View {
         VStack(alignment: .leading, spacing: 8) {
             filterChips
             if visible.isEmpty {
-                Text(clips.isEmpty ? "Copy anything — it lands here" : "No matches")
+                // "Nothing here yet" is about the history this tab shows —
+                // filed clips live in their collection's tab and must not
+                // make an empty history look populated.
+                Text(history.isEmpty ? "Copy anything — it lands here" : "No matches")
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.45))
             } else {
@@ -69,6 +74,11 @@ struct NotchClipsTab: View {
                 .frame(maxHeight: 330)
             }
         }
+        // Without this the grid can never hold focus, and `onKeyPress` below
+        // is dead code — the panel itself also has to be key-capable
+        // (`NotchPanel` in NotchSurface.swift).
+        .focusable()
+        .focusEffectDisabled()
         .onKeyPress(.return) {
             guard let clip = visible.first(where: { $0.uid == selectedUID }) else {
                 return .ignored
@@ -106,15 +116,24 @@ struct NotchClipsTab: View {
         .buttonStyle(.plain)
     }
 
-    /// Click = select + copy. Text payloads only for v1 — an image clip still
-    /// drags out, and its (empty) payload is harmless on the pasteboard.
+    /// Click = select + copy. Image clips carry their bytes rather than a
+    /// payload string, so they copy as an image; anything with an empty
+    /// payload is left alone rather than wiping the user's clipboard.
     private func select(_ clip: ClipItem) {
         selectedUID = clip.uid
-        services?.paster.copy(text: clip.payload)
+        guard let paster = services?.paster else { return }
+        if clip.kind == .image {
+            guard let data = clip.imageData ?? clip.thumbnailData, !data.isEmpty else { return }
+            paster.copy(imageData: data)
+        } else {
+            paster.copy(text: clip.payload)
+        }
     }
 
+    /// Paste-back is text-only for v1 — Return or a double-click on an image
+    /// clip does nothing (it copies on the first click and drags out).
     private func paste(_ clip: ClipItem) {
-        guard let services else { return }
+        guard let services, !clip.payload.isEmpty else { return }
         Task { _ = await services.paster.paste(text: clip.payload) }
     }
 

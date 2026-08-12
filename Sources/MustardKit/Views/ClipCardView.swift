@@ -70,11 +70,19 @@ struct ClipCardView: View {
         }
     }
 
-    /// `Color(hex:)` scans whatever it's given, so a non-hex color literal
-    /// (`rgb(…)`, which the classifier also calls `.color`) falls back to
-    /// white rather than rendering as black.
+    /// `Color(hex:)` scans a 6-digit string only: shorthand (`#F00`) would
+    /// scan as `0x000F00` and a non-hex color literal (`rgb(…)`, which the
+    /// classifier also calls `.color`) as black. Expand the first; give the
+    /// second a neutral swatch that keeps the white hex overlay readable.
     private var normalizedHex: String {
-        clip.payload.hasPrefix("#") ? clip.payload : "#FFFFFF"
+        let payload = clip.payload
+        guard payload.hasPrefix("#") else { return "#3A3A3C" }
+        let digits = payload.dropFirst()
+        switch digits.count {
+        case 3: return "#" + String(digits.flatMap { [$0, $0] })
+        case 6: return payload
+        default: return "#3A3A3C"
+        }
     }
 
     private var cardBackground: Color {
