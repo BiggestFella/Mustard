@@ -796,3 +796,14 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak334-transcriber-lexicon/`
 - **Revert:** `git revert d7c64d4`
+
+## 2026-08-12 — MERGED · Speaker attribution via handoff convention (BAK-335, PR #119)
+- **Risk:** medium (Logic/+Meeting/+Models additive optional+Views) · **Merged on green** (post-CI, 47s)
+- **Origin:** transcript eval — the meeting channel was one anonymous wall; digest actions had no owners. Approach A+C (handoff phrases + candidate set); acoustic diarization deferred (approach B).
+- **Checks:** swift test 1634 pass/1 skip/0 fail (+57) · swift build clean
+- **Fresh-context review:** first pass BLOCKED (two execution-confirmed findings: bare "over to" false-positive on ordinary speech; ambiguous candidate match silently picked list-first) → fixed red-first along with a third gap (handoff phrases span word-level segments — now merged into utterances pre-detection, constituents stamped) → same reviewer re-ran its exact repros: both nil. **Re-review: mergeable.**
+- **What landed:** pure `MeetingSpeakerAttribution` (5 explicit phrasings; possessive/clause-end guards; ambiguous → nil — never guess, the anti-"Liam" rule); candidates from proposal owners + user lexicon (CalendarEvent has no attendees field); `speaker: String?` additive on segment + voice contract; digest input gains "Name: " prefixes (evidence untouched); review UI speaker labels + per-row correction Menu.
+- **⚠ Leon eye-check PENDING:** record a standup — handoff spans labelled correctly? correction menu comfortable?
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak335-speaker-attribution/`
+- **Revert:** `git revert 640854e`
