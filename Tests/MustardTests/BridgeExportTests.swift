@@ -149,6 +149,29 @@ final class BridgeExportTests: XCTestCase {
         XCTAssertTrue(plan.writes.isEmpty)
     }
 
+    func test_readOnlyCodeHeroesNeedsInputProjectionNeverEntersAgentExportLanes() {
+        let projection = task(.needsInput, uid: "codeheroes:decision:DL-1")
+        projection.source = CodeHeroesDecisionPolicy.source
+        let prep = task(.forAgent, uid: "ordinary-prep", connected: true)
+        let execute = task(.queued, uid: "ordinary-execute", action: .ticket, connected: true)
+        var routedUIDs: [String] = []
+
+        let plan = BridgeExport.plan(
+            tasks: [projection, prep, execute],
+            route: { task in routedUIDs.append(task.uid); return self.target },
+            liveOutboxUIDs: [:],
+            now: now
+        )
+
+        XCTAssertTrue(CodeHeroesDecisionPolicy.isProjection(projection))
+        XCTAssertNil(projection.actionTypeRaw)
+        XCTAssertNil(projection.agentRun)
+        XCTAssertNil(projection.delegation)
+        XCTAssertEqual(Set(routedUIDs), Set(["ordinary-prep", "ordinary-execute"]))
+        XCTAssertEqual(plan.writes.map(\.order.uid), ["ordinary-prep", "ordinary-execute"])
+        XCTAssertEqual(plan.writes.map(\.order.mode), ["prep", "execute"])
+    }
+
     func test_staleOutbox_isCancelled() {
         // live outbox u9, but no forAgent/queued task for it → cancel
         let plan = BridgeExport.plan(tasks: [task(.queued, uid: "u1")],

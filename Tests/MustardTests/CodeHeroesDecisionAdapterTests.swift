@@ -78,6 +78,46 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(original.createdAt, originalCreatedAt)
     }
 
+    func test_repeatedImportKeepsUniqueProjectionUIDsAndStableAttentionSemantics() throws {
+        let needsInput = Fixture.cluster(
+            "DL-INPUT", stage: "needsInput", decisionRequired: true, humanActionRequired: false
+        )
+        let needsReviewEvidence = Fixture.cluster(
+            "DL-EVIDENCE", triageState: "needs-evidence", stage: "needsReview",
+            decisionRequired: false, humanActionRequired: false
+        )
+        let manualHumanAction = Fixture.cluster(
+            "DL-ACTION", triageState: "manual-action", stage: "needsInput",
+            decisionRequired: false, humanActionRequired: true
+        )
+        let fixture = try Fixture(clusters: [needsInput, needsReviewEvidence, manualHumanAction])
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(
+            context: context, repositoryRoot: fixture.root, now: { self.fixedNow }
+        )
+
+        let first = adapter.importQueue(at: fixture.queueURL)
+        let firstTasks = try tasks(context)
+        XCTAssertEqual(first.createdCount, 3)
+        XCTAssertEqual(Set(firstTasks.map(\.uid)).count, 3)
+        XCTAssertEqual(AgentInbox.attentionTaskCount(firstTasks), 3)
+        XCTAssertEqual(AgentInbox.attention(firstTasks).questions.count, 2)
+        XCTAssertEqual(AgentInbox.attention(firstTasks).reviews.count, 1)
+        let evidence = try XCTUnwrap(firstTasks.first { $0.uid == "codeheroes:decision:DL-EVIDENCE" })
+        XCTAssertFalse(evidence.tags.contains("human-action"))
+        let manualAction = try XCTUnwrap(firstTasks.first { $0.uid == "codeheroes:decision:DL-ACTION" })
+        XCTAssertTrue(manualAction.tags.contains("human-action"))
+
+        let second = adapter.importQueue(at: fixture.queueURL)
+        let secondTasks = try tasks(context)
+        XCTAssertEqual(second.createdCount, 0)
+        XCTAssertEqual(second.updatedCount, 0)
+        XCTAssertEqual(second.unchangedCount, 3)
+        XCTAssertEqual(secondTasks.count, 3)
+        XCTAssertEqual(Set(secondTasks.map(\.uid)).count, 3)
+        XCTAssertEqual(AgentInbox.attentionTaskCount(secondTasks), 3)
+    }
+
     func test_newerQueueMarksAbsentProjectionStaleWithoutTouchingOtherSources() throws {
         let fixture = try Fixture()
         let context = try makeContext()
@@ -368,8 +408,21 @@ private final class Fixture {
 
     deinit { try? FileManager.default.removeItem(at: root) }
 
-    static func cluster(_ id: String, project: String = "dl", title: String = "Decision") -> CodeHeroesDecisionQueue.Cluster {
-        .init(clusterID: id, projectID: project, title: title, triageState: "needs-human-decision", mustardStage: "needsInput", priority: "high", decisionRequired: true, humanActionRequired: true, question: "Question", nextAction: "Next", whyGrouped: "Why", sourceDecisionIDs: ["DEC-\(id)"])
+    static func cluster(
+        _ id: String,
+        project: String = "dl",
+        title: String = "Decision",
+        triageState: String = "needs-human-decision",
+        stage: String = "needsInput",
+        decisionRequired: Bool = true,
+        humanActionRequired: Bool = true
+    ) -> CodeHeroesDecisionQueue.Cluster {
+        .init(
+            clusterID: id, projectID: project, title: title, triageState: triageState,
+            mustardStage: stage, priority: "high", decisionRequired: decisionRequired,
+            humanActionRequired: humanActionRequired, question: "Question", nextAction: "Next",
+            whyGrouped: "Why", sourceDecisionIDs: ["DEC-\(id)"]
+        )
     }
 
     func writeQueue(clusters: [CodeHeroesDecisionQueue.Cluster], generatedAt: String = "2026-01-01T00:00:00Z") throws {
