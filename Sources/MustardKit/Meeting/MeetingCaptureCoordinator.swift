@@ -224,6 +224,7 @@ public final class MeetingCaptureCoordinator {
             return interrupt(record, reason: "Transcription failed: \(error.localizedDescription)")
         }
         voiceLog.notice("meeting: transcript segments=\(segments.count, privacy: .public)")
+        let speakerByID = Self.attributedSpeakers(for: segments, context: context)
         for segment in segments {
             let persisted = MeetingTranscriptSegment(
                 rawText: segment.text,
@@ -232,6 +233,7 @@ public final class MeetingCaptureCoordinator {
                 endSeconds: segment.endSeconds,
                 confidence: segment.confidence)
             persisted.uid = MeetingTranscriptMerge.persistentID(for: segment)
+            persisted.speaker = speakerByID[persisted.uid]
             persisted.meeting = record
             context.insert(persisted)
         }
@@ -432,7 +434,33 @@ public final class MeetingCaptureCoordinator {
             endSeconds: persisted.endSeconds,
             isFinal: true,
             confidence: persisted.confidence,
-            source: source)
+            source: source,
+            speaker: persisted.speaker)
+    }
+
+    /// BAK-335: verbal-handoff speaker attribution, run ONLY over the
+    /// meeting channel, in time order — the you channel is Leon by
+    /// construction and is never auto-stamped (the review UI renders "You"
+    /// straight from the channel). Returns a map from each meeting-channel
+    /// segment's persistent id to its attributed speaker; an id with no
+    /// entry is unattributed, never a guess.
+    private static func attributedSpeakers(
+        for segments: [VoiceTranscriptSegment], context: ModelContext
+    ) -> [String: String] {
+        let meetingSegments = segments.filter { $0.source == .meeting }
+        guard !meetingSegments.isEmpty else { return [:] }
+        let candidates = MeetingSpeakerCandidateSource.fetch(
+            context: context, userTerms: VoiceLexiconUserTerms.load())
+        let speakers = MeetingSpeakerAttribution.attribute(
+            texts: meetingSegments.map(\.text), candidates: candidates)
+
+        var result: [String: String] = [:]
+        for (segment, speaker) in zip(meetingSegments, speakers) {
+            if let speaker {
+                result[MeetingTranscriptMerge.persistentID(for: segment)] = speaker
+            }
+        }
+        return result
     }
 
     /// BAK-332: compare what the transcript proves happened against which

@@ -85,11 +85,12 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
     }
 
     private func transcription(
-        youFinals: [VoiceTranscriptSegment] = []
+        youFinals: [VoiceTranscriptSegment] = [],
+        meetingFinals: [VoiceTranscriptSegment] = []
     ) -> MeetingTranscriptionService {
         var handed = [
             StubSession(finals: youFinals),
-            StubSession(finals: []),
+            StubSession(finals: meetingFinals),
         ]
         return MeetingTranscriptionService(
             makeSession: { handed.isEmpty ? StubSession(finals: []) : handed.removeFirst() },
@@ -123,10 +124,14 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         try context.fetch(FetchDescriptor<MeetingRecord>())
     }
 
-    private func seg(_ id: String, _ text: String) -> VoiceTranscriptSegment {
+    private func seg(
+        _ id: String, _ text: String,
+        source: VoiceAudioSource = .microphone,
+        start: Double = 0, end: Double = 1
+    ) -> VoiceTranscriptSegment {
         VoiceTranscriptSegment(
-            id: id, text: text, startSeconds: 0, endSeconds: 1,
-            isFinal: true, confidence: nil, source: .microphone)
+            id: id, text: text, startSeconds: start, endSeconds: end,
+            isFinal: true, confidence: nil, source: source)
     }
 
     // MARK: - Consent & duplicates
@@ -727,6 +732,87 @@ final class MeetingCaptureCoordinatorTests: XCTestCase {
         let record = try XCTUnwrap(try records(in: context).first)
         XCTAssertEqual(record.digestStatus, .ready)
         XCTAssertNil(record.digestOmissionNote)
+    }
+
+    // MARK: - Speaker attribution (BAK-335)
+
+    /// A scripted handoff transcript on the MEETING channel, with a past
+    /// proposal owner ("Fahad") as the only known candidate: the handoff
+    /// line stays with the previous (unattributed) speaker, the span after
+    /// it is attributed, and the "you" channel is never auto-stamped.
+    func test_finalize_stampsSpeakersOnMeetingChannelRows_fromScriptedHandoffs() async throws {
+        let context = try ctx()
+        let pastMeeting = MeetingRecord(title: "Old standup")
+        context.insert(pastMeeting)
+        let pastProposal = MeetingActionProposal(title: "Ping Thales", owner: "Fahad")
+        pastProposal.meeting = pastMeeting
+        context.insert(pastProposal)
+        try context.save()
+
+        let capturing = StubCapturing()
+        let you = seg("y1", "quick note", source: .microphone, start: 0, end: 1)
+        let m1 = seg("m1", "let's start", source: .meeting, start: 0, end: 1)
+        let m2 = seg("m2", "over to Fahad", source: .meeting, start: 1.1, end: 2)
+        let m3 = seg("m3", "shipped the release", source: .meeting, start: 2.1, end: 3)
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(youFinals: [you], meetingFinals: [m1, m2, m3]))
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+
+        await coordinator.stop()
+
+        let segments = try context.fetch(FetchDescriptor<MeetingTranscriptSegment>())
+        let byRaw = Dictionary(uniqueKeysWithValues: segments.map { ($0.rawText, $0) })
+        XCTAssertNil(byRaw["let's start"]?.speaker, "before any handoff — unattributed")
+        XCTAssertNil(byRaw["over to Fahad"]?.speaker, "the handoff line itself stays with the previous speaker")
+        XCTAssertEqual(byRaw["shipped the release"]?.speaker, "Fahad", "the span AFTER the matched handoff")
+        XCTAssertNil(byRaw["quick note"]?.speaker, "the you channel is never auto-stamped")
+    }
+
+    func test_retryDigest_threadsSpeakerThroughTranscriptSegmentReconstruction() async throws {
+        let context = try ctx()
+        let pastMeeting = MeetingRecord(title: "Old standup")
+        context.insert(pastMeeting)
+        let pastProposal = MeetingActionProposal(title: "Ping Thales", owner: "Fahad")
+        pastProposal.meeting = pastMeeting
+        context.insert(pastProposal)
+        try context.save()
+
+        let capturing = StubCapturing()
+        let m1 = seg("m1", "over to Fahad", source: .meeting, start: 0, end: 1)
+        let m2 = seg("m2", "shipped the release", source: .meeting, start: 1.1, end: 2)
+        final class Capture: @unchecked Sendable { var seen: [VoiceTranscriptSegment] = [] }
+        let captured = Capture()
+        // First pass with NO digest closure — digestStatus lands on
+        // .pending, which is what makes retryDigest's guard actually run
+        // (a coordinator that already succeeded at digest during stop()
+        // would leave digestStatus == .ready and retryDigest would no-op).
+        let coordinator = makeCoordinator(
+            context: context, capturing: capturing,
+            transcription: transcription(meetingFinals: [m1, m2]))
+        await coordinator.requestStart(title: "Standup")
+        await coordinator.confirmStart(sources: [.microphone, .systemAudio])
+        await coordinator.stop()
+        // Two MeetingRecords now exist (the past one + this one) — find THIS
+        // meeting by title, not just `.first`, since fetch order isn't
+        // guaranteed to put the newest record first.
+        let record = try XCTUnwrap(try records(in: context).first { $0.title == "Standup" })
+        XCTAssertEqual(record.digestStatus, .pending)
+
+        // A second coordinator over the SAME context/record, now WITH the
+        // capturing digest closure, drives retryDigest.
+        let retryCoordinator = makeCoordinator(
+            context: context, capturing: StubCapturing(),
+            digest: { segments, _ in
+                captured.seen = segments
+                return .success(self.digestResult(evidence: []))
+            })
+        await retryCoordinator.retryDigest(for: record)
+
+        let bySpeakerlessText = Dictionary(uniqueKeysWithValues: captured.seen.map { ($0.text, $0.speaker) })
+        XCTAssertNil(bySpeakerlessText["over to Fahad"] ?? nil)
+        XCTAssertEqual(bySpeakerlessText["shipped the release"] ?? nil, "Fahad")
     }
 
     // MARK: - Recovery on launch
