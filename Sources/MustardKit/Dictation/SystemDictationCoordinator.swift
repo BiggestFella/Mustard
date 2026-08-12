@@ -443,7 +443,7 @@ private final class DictationPillHolder {
             panel.contentView = NSHostingView(rootView: SystemDictationPillView(coordinator: coordinator))
             self.panel = panel
         }
-        if let screen = NSScreen.main, let panel {
+        if let screen = NotchScreenPicker.currentScreen(), let panel {
             let frame = screen.visibleFrame
             panel.setFrameTopLeftPoint(NSPoint(
                 x: frame.midX - panel.frame.width / 2,

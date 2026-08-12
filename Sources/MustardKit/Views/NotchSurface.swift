@@ -48,17 +48,7 @@ public final class NotchController {
     public var isExpanded: Bool { pinState.isExpanded }
 
     private var screen: NSScreen? {
-        let screens = NSScreen.screens
-        let descriptors = screens.enumerated().map { index, screen in
-            NotchScreenDescriptor(
-                id: index,
-                hasNotch: screen.safeAreaInsets.top > 0,
-                isMain: screen == NSScreen.main
-            )
-        }
-        guard let chosen = NotchScreenPicker.choose(from: descriptors),
-              let index = chosen.id as? Int else { return NSScreen.main }
-        return screens[index]
+        NotchScreenPicker.currentScreen()
     }
 
     /// Idle strip geometry: hug the physical notch with a small lip below;
