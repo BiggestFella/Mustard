@@ -5,7 +5,6 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
     func test_mapsEverySupportedProjectStagePriorityAndStableProjectionFields() throws {
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "dl"), "Digital Licence")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "sales-buddi"), "Sales Buddi")
-        XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "sandvik"), "Sandvik")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "code-heroes-internal"), "Code Heroes")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "cross-project"), "Code Heroes")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "sandvik"), "Sandvik")

@@ -3,7 +3,6 @@ import Foundation
 /// Pure mapping and read-only projection policy for Code Heroes decision clusters.
 public enum CodeHeroesDecisionPolicy {
     public static let source = "codeheroes:decision-triage"
-    public static let readOnlyTag = "read-only"
 
     public enum PolicyError: Error, Equatable { case unknownProject(String), invalidStage(String), invalidPriority(String) }
     public struct Projection: Equatable {
