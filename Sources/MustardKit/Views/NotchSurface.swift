@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// The notch surface (spec §6a): a black, notch-hugging panel anchored to
 /// whichever screen is active (external monitor preferred — see
@@ -251,6 +252,9 @@ public struct NotchView: View {
     @Environment(NotchNavigation.self) private var nav
     /// Optional: absent in previews/tests that don't wire the recorder.
     @Environment(MeetingCaptureCoordinator.self) private var meetingRecorder: MeetingCaptureCoordinator?
+    /// Optional: not yet injected app-wide (Task 13); drag-in is a no-op
+    /// until it is, rather than crashing the notch.
+    @Environment(ClipboardServices.self) private var services: ClipboardServices?
     @Query private var tasks: [MustardTask]
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query(sort: \CalendarEvent.start) private var events: [CalendarEvent]
@@ -365,6 +369,32 @@ public struct NotchView: View {
             controller?.onStateChange = {
                 withAnimation(.snappy(duration: 0.16)) { stateVersion &+= 1 }
             }
+        }
+        // Drag-in lands on the Shelf regardless of which face is showing (idle
+        // strip or expanded panel) — both render inside this VStack. Nothing
+        // can store the drop until ClipboardServices is injected, so decline
+        // it rather than silently swallowing the gesture.
+        .onDrop(of: [.fileURL, .image, .utf8PlainText], isTargeted: nil) { providers in
+            guard let services else { return false }
+            for provider in providers {
+                if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                        guard let url else { return }
+                        Task { @MainActor in services.store.addShelfDrop(fileURL: url) }
+                    }
+                } else if provider.canLoadObject(ofClass: NSImage.self) {
+                    _ = provider.loadObject(ofClass: NSImage.self) { image, _ in
+                        guard let data = (image as? NSImage)?.tiffRepresentation else { return }
+                        Task { @MainActor in services.store.addShelfDrop(imageData: data) }
+                    }
+                } else {
+                    _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+                        guard let text = string as? String else { return }
+                        Task { @MainActor in services.store.addShelfDrop(text: text) }
+                    }
+                }
+            }
+            return true
         }
     }
 
