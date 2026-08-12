@@ -25,6 +25,12 @@ public final class RewriteController {
     /// silently leaving ⌃⌥R dead.
     public var registration: HotKeyRegistration? { hotKey.registration }
 
+    /// Swap the rewrite chord live (Settings → Hotkeys).
+    @discardableResult
+    public func rebindHotKey(keyCode: UInt32, modifiers: UInt32) -> HotKeyRegistration {
+        hotKey.rebind(keyCode: keyCode, modifiers: modifiers)
+    }
+
     public init(coordinator: RewriteCoordinator, openVoiceSetup: @escaping () -> Void = {}) {
         self.coordinator = coordinator
         self.openVoiceSetup = openVoiceSetup

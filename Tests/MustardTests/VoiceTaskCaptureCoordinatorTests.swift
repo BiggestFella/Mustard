@@ -498,4 +498,37 @@ final class VoiceTaskCaptureCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.hotKeyRegistration, .conflict(-9878), "registration must never fail silently")
     }
+
+    // MARK: - Live rebind (Settings → Hotkeys)
+
+    @MainActor
+    func test_rebindHotKey_routesThroughSeam_andUpdatesRegistration() throws {
+        let context = try ctx()
+        var rebound: (keyCode: UInt32, modifiers: UInt32)?
+        // The shared factory (`makeCoordinator`) only exposes the initial
+        // `registration` outcome, not a custom seam — construct directly, the
+        // way the class's own initializer is exercised, so the seam's
+        // `rebind` closure can be stubbed.
+        let seam = VoiceTaskCaptureCoordinator.HotKeySeam(
+            register: { .registered },
+            bind: { _, _ in },
+            rebind: { keyCode, modifiers in
+                rebound = (keyCode, modifiers)
+                return .conflict(-9878)
+            })
+        let coordinator = VoiceTaskCaptureCoordinator(
+            context: context,
+            speech: StubSpeech().seam,
+            hotKey: seam,
+            pill: .none(),
+            draft: { _, _, _ in .failure(.model(.unavailable("not wired"))) },
+            allowedAreas: { ["Code Heroes", "Personal"] },
+            presentEditor: { _ in nil })
+
+        let result = coordinator.rebindHotKey(keyCode: 11, modifiers: 0x1800)
+        XCTAssertEqual(rebound?.keyCode, 11)
+        XCTAssertEqual(rebound?.modifiers, 0x1800)
+        XCTAssertEqual(result, .conflict(-9878))
+        XCTAssertEqual(coordinator.hotKeyRegistration, .conflict(-9878))
+    }
 }
