@@ -2,26 +2,30 @@ import SwiftUI
 import SwiftData
 import AppKit
 
-/// The agent console: vault source row + Recommendations queue (master-detail
-/// list │ detail). Output review now lives on the board's Needs Review column
-/// (ADR-0010) — there is no console review queue. Things-3-calm throughout.
+/// The agent console: pure triage over the Recommendations queue and in-flight
+/// gates (master-detail list │ detail). All config (sources, calendar, voice,
+/// trust, hotkeys) moved to `SettingsView` (settings spec 2026-08-12) — the
+/// gear button jumps there. Output review lives on the board's Needs Review
+/// column (ADR-0010) — there is no console review queue. Things-3-calm throughout.
 public struct AgentConsoleView: View {
     @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
-    @AppStorage("vaultPath") private var vaultPath = ""
-    @AppStorage("meetingVaultPath") private var meetingVaultPath = ""
-    @AppStorage("trustLevel") private var trustRaw = TrustLevel.manual.rawValue
     @AppStorage("autoOpenSourceOnSelect") private var autoOpenSource = true
     @Environment(SourcePanelController.self) private var sourcePanel
     @Environment(AgentTaskCoordinator.self) private var taskAgent
     @State private var selected: Recommendation?
     @State private var selectedTask: MustardTask?
 
-    private var trust: TrustLevel { TrustLevel(rawValue: trustRaw) ?? .manual }
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query private var allTasks: [MustardTask]
 
-    public init() {}
+    /// Jumps to the Settings screen (RootView owns the route) — all console
+    /// config moved there (settings spec 2026-08-12).
+    private let onOpenSettings: (() -> Void)?
+
+    public init(onOpenSettings: (() -> Void)? = nil) {
+        self.onOpenSettings = onOpenSettings
+    }
 
     private var pending: [Recommendation] {
         RecommendationQueue.pending(recommendations, now: .now)
@@ -58,15 +62,6 @@ public struct AgentConsoleView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
-                sourceRow
-                meetingSourceRow
-                SourceSettingsView()
-                if let error = agent.lastError {
-                    Text(error)
-                        .font(Theme.Fonts.meta)
-                        .foregroundStyle(Theme.Palette.error)
-                        .padding(.vertical, 8)
-                }
 
                 if taskAgent.authenticationRequired { authBanner }
 
@@ -77,7 +72,7 @@ public struct AgentConsoleView: View {
 
                 sectionLabel("RECOMMENDATIONS", count: pending.count)
                 if pending.isEmpty {
-                    emptyLine("Nothing waiting on you. Run a sweep.")
+                    emptyLine("Nothing waiting on you. Run a sweep from Settings or ⌘K.")
                 }
                 // Rows are elevated cards (Craft pass Phase 1) — spacing separates
                 // them; a hairline divider against a bordered card reads doubled.
@@ -157,104 +152,17 @@ public struct AgentConsoleView: View {
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
             Spacer()
-            Toggle(isOn: $autoOpenSource) {
-                Text("Auto-open source").font(Theme.Fonts.meta)
-            }
-            .toggleStyle(.switch).controlSize(.mini)
-            .help("When on, selecting a recommendation that has a source also opens it in the side panel.")
-        }
-        .padding(.bottom, 12)
-    }
-
-    /// Picker for the meeting-notes vault (Leon's "Codeheroes work/" root). Tasks
-    /// harvest automatically on the 60s loop; the last digest shows here.
-    private var meetingSourceRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "person.2.wave.2")
-                .foregroundStyle(Theme.Palette.textTertiary)
-            Text(meetingVaultPath.isEmpty ? "Choose your meeting-notes vault…" : meetingVaultPath)
-                .font(Theme.Fonts.meta)
-                .foregroundStyle(meetingVaultPath.isEmpty ? Theme.Palette.textTertiary : Theme.Palette.textSecondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Button("Choose…") {
-                let panel = NSOpenPanel()
-                panel.canChooseDirectories = true
-                panel.canChooseFiles = false
-                if panel.runModal() == .OK, let url = panel.url {
-                    meetingVaultPath = url.path
-                }
-            }
-            .controlSize(.small)
-            Spacer()
-            if let summary = agent.lastMeetingSummary {
-                Text(summary)
+            Button {
+                onOpenSettings?()
+            } label: {
+                Image(systemName: "gearshape")
                     .font(Theme.Fonts.meta)
                     .foregroundStyle(Theme.Palette.textTertiary)
             }
+            .buttonStyle(.plain)
+            .help("Sources, trust and hotkeys moved to Settings.")
         }
-        .padding(.bottom, 4)
-    }
-
-    private var sourceRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-          HStack(spacing: 10) {
-            Image(systemName: "books.vertical")
-                .foregroundStyle(Theme.Palette.textTertiary)
-            Text(vaultPath.isEmpty ? "Choose your knowledge base folder…" : vaultPath)
-                .font(Theme.Fonts.meta)
-                .foregroundStyle(vaultPath.isEmpty ? Theme.Palette.textTertiary : Theme.Palette.textSecondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Button("Choose…") {
-                let panel = NSOpenPanel()
-                panel.canChooseDirectories = true
-                panel.canChooseFiles = false
-                if panel.runModal() == .OK, let url = panel.url {
-                    vaultPath = url.path
-                }
-            }
-            .controlSize(.small)
-            Spacer()
-            Button {
-                Task { await agent.sweep(vaultPath: vaultPath) }
-            } label: {
-                if agent.isSweeping {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Sweeping…")
-                    }
-                } else {
-                    Label("✦ Sweep", systemImage: "wand.and.stars")
-                }
-            }
-            .disabled(vaultPath.isEmpty || agent.isSweeping)
-            .tint(Theme.Palette.accent)
-
-            Picker("", selection: Binding(
-                get: { trust },
-                set: { level in
-                    trustRaw = level.rawValue
-                    Task { await agent.applyTrust(level) }
-                }
-            )) {
-                ForEach(TrustLevel.allCases) { Text($0.label).tag($0) }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .tint(Theme.Palette.agent)
-            .fixedSize()
-            .help(trust.blurb)
-          }
-          // Always-visible trust blurb + gated-action footer note (BAK-112).
-          Text(trust.blurb)
-              .font(Theme.Fonts.label)
-              .foregroundStyle(Theme.Palette.textSecondary)
-          Text("🔒 Email, Slack and tickets are always reviewed by you — at every trust level.")
-              .font(Theme.Fonts.caption)
-              .foregroundStyle(Theme.Palette.textTertiary)
-        }
-        .padding(.vertical, 10)
+        .padding(.bottom, 12)
     }
 
     private func sectionLabel(_ title: String, count: Int) -> some View {

@@ -85,7 +85,7 @@ public struct RootView: View {
                     case .week: WeekView()
                     case .notes: NotesView(pendingOpen: $pendingNoteOpen)
                     case .meetings: MeetingReviewView()
-                    case .agent: AgentConsoleView()
+                    case .agent: AgentConsoleView(onOpenSettings: { screen = .settings })
                     case .lists: ListContentView(scope: selectedScope ?? .unfiled)
                     case .settings: SettingsView(onVoiceSetup: { screen = .voiceSetup })
                     case .voiceSetup: VoiceSetupView()
