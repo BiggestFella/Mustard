@@ -129,8 +129,8 @@ public final class PushToTalkHotKey {
     public var onRelease: (() -> Void)?
 
     private let id: UInt32
-    private let keyCode: UInt32
-    private let modifiers: UInt32
+    private(set) var keyCode: UInt32
+    private(set) var modifiers: UInt32
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     /// One hold at a time; guards double-firing between the Carbon release
@@ -296,6 +296,25 @@ public final class PushToTalkHotKey {
         hotKeyRef = nil
         if let handlerRef { RemoveEventHandler(handlerRef) }
         handlerRef = nil
+    }
+
+    /// Swap the chord live (Settings → Hotkeys). Any active hold is ended
+    /// through the normal release path FIRST — `unregister()` alone would
+    /// clear `isHolding` without firing `onRelease`, stranding a capture with
+    /// a live microphone. Then the new chord is claimed and the board updated.
+    @discardableResult
+    public func rebind(keyCode: UInt32, modifiers: UInt32) -> HotKeyRegistration {
+        endHold()
+        unregister()
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        return register()
+    }
+
+    /// Post a registration outcome for a chord owned by another hotkey class
+    /// (rewrite) so every chord's fate is visible on the one board.
+    static func post(purpose: String, chord: String, registration: HotKeyRegistration) {
+        registrationBoard[purpose] = (chord: chord, registration: registration)
     }
 }
 #endif
