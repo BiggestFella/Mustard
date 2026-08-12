@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import AppKit
 @testable import MustardKit
 
 @MainActor
@@ -15,6 +16,34 @@ final class ClipStoreTests: XCTestCase {
         ClipCandidate(
             text: text, imageData: nil, fileURLs: [], sourceBundleID: bundle,
             sourceAppName: "Safari", isConcealed: false, isTransient: false)
+    }
+
+    /// A tiny valid PNG — well under the 5 MB cap.
+    private func makeSmallPNG() throws -> Data {
+        let size = NSSize(width: 10, height: 10)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+        return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+    }
+
+    /// A valid PNG whose pixel data is random noise, so it can't compress
+    /// down — this reliably exceeds the 5 MB cap.
+    private func makeOversizePNG() throws -> Data {
+        let width = 1500
+        let height = 1500
+        let rep = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let bitmapData = try XCTUnwrap(rep.bitmapData)
+        let byteCount = rep.bytesPerRow * height
+        arc4random_buf(bitmapData, byteCount)
+        return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
     }
 
     func testIngestInsertsClassifiedClip() throws {
@@ -84,5 +113,29 @@ final class ClipStoreTests: XCTestCase {
         XCTAssertTrue(clip.pinnedToShelf)
         XCTAssertEqual(clip.kind, .file)
         XCTAssertEqual(clip.payload, "/tmp/report.pdf")
+    }
+
+    func testSmallImageKeepsOriginalAndThumbnail() throws {
+        let context = try makeContext()
+        let store = ClipStore(context: context)
+        let png = try makeSmallPNG()
+        store.addShelfDrop(imageData: png)
+        let clip = try XCTUnwrap(context.fetch(FetchDescriptor<ClipItem>()).first)
+        XCTAssertEqual(clip.kind, .image)
+        XCTAssertNotNil(clip.imageData)
+        XCTAssertNotNil(clip.thumbnailData)
+        XCTAssertTrue(clip.pinnedToShelf)
+    }
+
+    func testOversizeImageKeepsOnlyThumbnail() throws {
+        let context = try makeContext()
+        let store = ClipStore(context: context)
+        let png = try makeOversizePNG()
+        XCTAssertGreaterThan(
+            png.count, 5 * 1024 * 1024, "test PNG must exceed the 5 MB cap to be meaningful")
+        store.addShelfDrop(imageData: png)
+        let clip = try XCTUnwrap(context.fetch(FetchDescriptor<ClipItem>()).first)
+        XCTAssertNil(clip.imageData)
+        XCTAssertNotNil(clip.thumbnailData)
     }
 }
