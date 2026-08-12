@@ -127,6 +127,7 @@ struct MustardApp: App {
     @State private var hoverPanel: HoverPanel?
     @State private var notch: NotchController?
     @State private var notchNav = NotchNavigation()
+    @State private var hotKeys = HotKeyBindingsStore()
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
     @State private var rewrite: RewriteController?
@@ -205,6 +206,7 @@ struct MustardApp: App {
                 .environment(calendar)
                 .environment(notchNav)
                 .environment(meetingRecorder)
+                .environment(hotKeys)
                 .frame(minWidth: 640, minHeight: 520)
                 .task {
                     let container = container
@@ -277,15 +279,39 @@ struct MustardApp: App {
                         coordinator.activate()
                         dictation = coordinator
                     }
+
+                    // Route saved global chords into the owning coordinator's
+                    // live rebind (Settings → Hotkeys). Coordinators are stable
+                    // class instances for the app's lifetime, captured here
+                    // once they all exist.
+                    let capture = voiceCapture
+                    let dictating = dictation
+                    let rewriting = rewrite
+                    hotKeys.applyGlobal = { action, chord in
+                        switch action {
+                        case .pushToTalk:
+                            capture?.rebindHotKey(keyCode: chord.keyCode, modifiers: chord.carbonModifiers)
+                        case .dictation:
+                            dictating?.rebindHotKey(keyCode: chord.keyCode, modifiers: chord.carbonModifiers)
+                        case .rewrite:
+                            if #available(macOS 26.0, *) {
+                                rewriting?.rebindHotKey(keyCode: chord.keyCode, modifiers: chord.carbonModifiers)
+                            } else {
+                                nil
+                            }
+                        default:
+                            nil
+                        }
+                    }
                 }
         }
         .modelContainer(container)
         .commands {
             CommandGroup(after: .toolbar) {
                 Button("Toggle Hover Panel") { hoverPanel?.toggle() }
-                    .keyboardShortcut("h", modifiers: [.command, .shift])
+                    .keyboardShortcut(hotKeys.shortcut(for: .hover))
                 Button("Toggle Notch") { notch?.toggle() }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .keyboardShortcut(hotKeys.shortcut(for: .notch))
             }
         }
     }
