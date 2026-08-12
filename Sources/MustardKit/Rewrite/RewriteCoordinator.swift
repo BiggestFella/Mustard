@@ -68,14 +68,24 @@ public final class RewriteCoordinator {
             phase = .refused(.accessibilityPermissionMissing)
             return
         }
-        if let refusal = RewriteGate.admits(
-            target: target, role: focusedRole(), hasAccessibility: hasAccessibility()) {
+        let role = focusedRole()
+        RewriteLog.snapshot(
+            role: role, subrole: nil, range: target.selectedRange, secure: target.isSecure)
+
+        let refusal = RewriteGate.admits(
+            target: target, role: role, hasAccessibility: hasAccessibility())
+        RewriteLog.gate(refusal)
+        if let refusal {
             phase = .refused(refusal)
             return
         }
 
         phase = .reading
         let resolution = await readSelection(target)
+        RewriteLog.read(
+            rung: resolution.rung,
+            outcome: resolution.read,
+            characters: { if case .text(let text) = resolution.read { return text.count } else { return 0 } }())
         let application = applicationName(target.applicationPID)
         switch RewriteGate.accepts(
             read: resolution.read, application: application, maxWords: maxWords()) {
@@ -97,12 +107,15 @@ public final class RewriteCoordinator {
         guard case .reviewing(var review) = phase else { return }
 
         let outcome = reassertSelection(review.target)
+        RewriteLog.reassert(outcome)
         guard outcome.permitsWrite else {
             phase = .refused(.focusChanged)
             return
         }
 
-        switch await writeBack(review.rewritten, review.target) {
+        let written = await writeBack(review.rewritten, review.target)
+        RewriteLog.wrote(written)
+        switch written {
         case .insertedDirectly, .insertedByPaste:
             phase = .idle
         case .recoverable(let reason):
@@ -124,6 +137,10 @@ public final class RewriteCoordinator {
         phase = .generating(intent)
         do {
             let draft = try await generate(original, intent)
+            RewriteLog.generated(
+                intent: intent,
+                characters: draft.rewritten.count,
+                band: PromptCatalog.currentBand.rawValue)
             phase = .reviewing(RewriteReview(
                 original: original,
                 rewritten: draft.rewritten,
