@@ -345,6 +345,49 @@ final class MeetingDigestServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - Speaker attribution (BAK-335: attributed utterances get a "Name: " prefix)
+
+    func test_attributedUtterance_promptTextIsPrefixedWithTheSpeaker() async throws {
+        let segment = VoiceTranscriptSegment(
+            id: "seg-1", text: "we should ship friday", startSeconds: 0, endSeconds: 1,
+            isFinal: true, confidence: nil, source: .microphone, speaker: "Fahad")
+        let stub = StubGenerating(results: [generated()])
+
+        _ = try await makeService(stub: stub).digest(segments: [segment], now: now).get()
+
+        XCTAssertTrue(
+            stub.recorder.prompts[0].contains("): Fahad: we should ship friday"),
+            "an attributed utterance's rendered text is prefixed with the speaker's canonical name")
+    }
+
+    func test_unattributedUtterance_promptTextCarriesNoSpeakerPrefix() async throws {
+        let segment = seg("seg-1", "we should ship friday") // speaker nil by default
+        let stub = StubGenerating(results: [generated()])
+
+        _ = try await makeService(stub: stub).digest(segments: [segment], now: now).get()
+
+        XCTAssertTrue(
+            stub.recorder.prompts[0].contains("): we should ship friday"),
+            "a nil speaker leaves the rendered text exactly as-is, no prefix inserted")
+    }
+
+    func test_attributedUtterance_evidenceIDIsUnaffectedByThePrefix() async throws {
+        let segment = VoiceTranscriptSegment(
+            id: "seg-1", text: "we should ship friday", startSeconds: 0, endSeconds: 1,
+            isFinal: true, confidence: nil, source: .microphone, speaker: "Fahad")
+        let action = GeneratedMeetingAction(
+            title: "Ship the release", owner: nil, dueISO8601: nil,
+            evidenceSegmentIDs: [pid(segment)])
+        let stub = StubGenerating(results: [generated(actions: [action])])
+
+        let digest = try await makeService(stub: stub)
+            .digest(segments: [segment], now: now).get()
+
+        XCTAssertEqual(
+            digest.actions.first?.evidenceSegmentIDs, [pid(segment)],
+            "the speaker prefix never touches the persistent evidence id")
+    }
+
     // MARK: - Failures (typed, retryable)
 
     func test_modelUnavailable_failsWithoutGenerating() async {
