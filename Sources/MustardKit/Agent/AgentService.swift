@@ -65,7 +65,7 @@ public final class AgentService {
     public func importCodeHeroesDecisionQueue(
         settings: CodeHeroesQueueSettings,
         now: Date = .now
-    ) -> CodeHeroesDecisionAdapter.ImportReport? {
+    ) async -> CodeHeroesDecisionAdapter.ImportReport? {
         let repositoryRoot = settings.repositoryRoot.trimmingCharacters(in: .whitespacesAndNewlines)
         let queuePath = settings.queuePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !repositoryRoot.isEmpty, !queuePath.isEmpty else {
@@ -74,31 +74,15 @@ public final class AgentService {
             return nil
         }
 
-        let rootURL = URL(fileURLWithPath: repositoryRoot)
-        var rootIsDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: rootURL.path, isDirectory: &rootIsDirectory), rootIsDirectory.boolValue else {
-            lastCodeHeroesImportSummary = nil
-            lastCodeHeroesImportError = "Code Heroes import repository root is unavailable."
-            return nil
-        }
-
-        let queueURL = URL(fileURLWithPath: queuePath)
-        var queueIsDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: queueURL.path, isDirectory: &queueIsDirectory), !queueIsDirectory.boolValue else {
-            lastCodeHeroesImportSummary = nil
-            lastCodeHeroesImportError = "Code Heroes import queue file is unavailable."
-            return nil
-        }
-
         isImportingCodeHeroesQueue = true
         lastCodeHeroesImportError = nil
         defer { isImportingCodeHeroesQueue = false }
 
-        let report = CodeHeroesDecisionAdapter(
+        let report = await CodeHeroesDecisionAdapter(
             context: context,
-            repositoryRoot: rootURL,
+            repositoryRoot: URL(fileURLWithPath: repositoryRoot),
             now: { now }
-        ).importQueue(at: queueURL)
+        ).importQueue(at: URL(fileURLWithPath: queuePath))
         lastCodeHeroesImportSummary = report.summary
         lastCodeHeroesImportError = report.findings.first.map { "Code Heroes import: \($0.reason)" }
         return report

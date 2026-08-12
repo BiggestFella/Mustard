@@ -6,12 +6,62 @@ import SwiftData
 final class CodeHeroesDecisionAdapterTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
 
-    func test_importProjectsEligibleClusterWithBoundedMetadataAndLocalLinks() throws {
+    func test_fileTypeAndSizeMetadataDoesNotRunOnMainActor() async throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let fileManager = MetadataThreadRecordingFileManager()
+        let adapter = CodeHeroesDecisionAdapter(
+            context: context,
+            repositoryRoot: fixture.root,
+            fileManager: fileManager,
+            now: { self.fixedNow }
+        )
+
+        let report = await adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.createdCount, 1)
+        XCTAssertGreaterThan(fileManager.metadataCallCount, 0)
+        XCTAssertFalse(fileManager.didReadMetadataOnMainThread)
+    }
+
+    func test_invalidQueueTypeAndOversizeMetadataFailClosedWithoutWrites() async throws {
+        let fixture = try Fixture()
+        let originalQueue = try Data(contentsOf: fixture.queueURL)
+        let cases: [(CodeHeroesDecisionFileAccess.Metadata, String)] = [
+            (.init(kind: .directory, size: 0), "Queue path is not a regular file beneath the configured repository root"),
+            (.init(kind: .regularFile, size: 5 * 1_024 * 1_024 + 1), "Queue file exceeds the safe size limit"),
+        ]
+
+        for (metadata, expectedFinding) in cases {
+            let context = try makeContext()
+            let access = CodeHeroesDecisionFileAccess(
+                normalize: { $0.standardizedFileURL.resolvingSymlinksInPath() },
+                metadata: { url in url.lastPathComponent == "decision-queue.json" ? metadata : nil },
+                contents: { _ in nil }
+            )
+            let adapter = CodeHeroesDecisionAdapter(
+                context: context,
+                repositoryRoot: fixture.root,
+                fileAccess: access,
+                now: { self.fixedNow }
+            )
+
+            let report = await adapter.importQueue(at: fixture.queueURL)
+
+            XCTAssertEqual(report.findings.first?.reason, expectedFinding)
+            XCTAssertEqual(report.repositoryWrites, 0)
+            XCTAssertEqual(report.externalWrites, 0)
+            XCTAssertEqual(try tasks(context).count, 0)
+            XCTAssertEqual(try Data(contentsOf: fixture.queueURL), originalQueue)
+        }
+    }
+
+    func test_importProjectsEligibleClusterWithBoundedMetadataAndLocalLinks() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, fileManager: .default, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 1)
         XCTAssertEqual(report.updatedCount, 0)
@@ -32,13 +82,13 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertNil(task.actionTypeRaw); XCTAssertNil(task.confidence); XCTAssertNil(task.delegation); XCTAssertNil(task.agentRun)
     }
 
-    func test_fatalQueueFailureDoesNotMutateSwiftData() throws {
+    func test_fatalQueueFailureDoesNotMutateSwiftData() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         try Data("{ not json".utf8).write(to: fixture.queueURL)
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 0)
         XCTAssertEqual(report.updatedCount, 0)
@@ -46,12 +96,12 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).count, 0)
     }
 
-    func test_invalidClusterSkipsOnlyThatClusterAndImportsOtherClusters() throws {
+    func test_invalidClusterSkipsOnlyThatClusterAndImportsOtherClusters() async throws {
         let fixture = try Fixture(clusters: [Fixture.cluster("DL-1"), Fixture.cluster("BAD", project: "unknown")])
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 1)
         XCTAssertEqual(report.skippedCount, 1)
@@ -59,26 +109,27 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).count, 1)
     }
 
-    func test_identicalQueueIsIdempotentAndChangedQueueUpdatesAdapterOwnedFields() throws {
+    func test_identicalQueueIsIdempotentAndChangedQueueUpdatesAdapterOwnedFields() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
-        XCTAssertEqual(adapter.importQueue(at: fixture.queueURL).createdCount, 1)
+        let initial = await adapter.importQueue(at: fixture.queueURL)
+        XCTAssertEqual(initial.createdCount, 1)
         let original = try XCTUnwrap(try tasks(context).first)
         let originalCreatedAt = original.createdAt
 
-        let unchanged = adapter.importQueue(at: fixture.queueURL)
+        let unchanged = await adapter.importQueue(at: fixture.queueURL)
         XCTAssertEqual(unchanged.unchangedCount, 1)
         XCTAssertEqual(unchanged.updatedCount, 0)
 
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-1", title: "Changed title")])
-        let changed = adapter.importQueue(at: fixture.queueURL)
+        let changed = await adapter.importQueue(at: fixture.queueURL)
         XCTAssertEqual(changed.updatedCount, 1)
         XCTAssertEqual(original.title, "Changed title")
         XCTAssertEqual(original.createdAt, originalCreatedAt)
     }
 
-    func test_repeatedImportKeepsUniqueProjectionUIDsAndStableAttentionSemantics() throws {
+    func test_repeatedImportKeepsUniqueProjectionUIDsAndStableAttentionSemantics() async throws {
         let needsInput = Fixture.cluster(
             "DL-INPUT", stage: "needsInput", decisionRequired: true, humanActionRequired: false
         )
@@ -96,7 +147,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
             context: context, repositoryRoot: fixture.root, now: { self.fixedNow }
         )
 
-        let first = adapter.importQueue(at: fixture.queueURL)
+        let first = await adapter.importQueue(at: fixture.queueURL)
         let firstTasks = try tasks(context)
         XCTAssertEqual(first.createdCount, 3)
         XCTAssertEqual(Set(firstTasks.map(\.uid)).count, 3)
@@ -114,7 +165,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(manualAction.stage, .needsInput)
         XCTAssertTrue(manualAction.tags.contains("human-action"))
 
-        let second = adapter.importQueue(at: fixture.queueURL)
+        let second = await adapter.importQueue(at: fixture.queueURL)
         let secondTasks = try tasks(context)
         XCTAssertEqual(second.createdCount, 0)
         XCTAssertEqual(second.updatedCount, 0)
@@ -130,17 +181,17 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(secondAttention.reviews.map(\.uid), ["codeheroes:decision:DL-EVIDENCE"])
     }
 
-    func test_newerQueueMarksAbsentProjectionStaleWithoutTouchingOtherSources() throws {
+    func test_newerQueueMarksAbsentProjectionStaleWithoutTouchingOtherSources() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
-        _ = adapter.importQueue(at: fixture.queueURL)
+        _ = await adapter.importQueue(at: fixture.queueURL)
         let manual = MustardTask(title: "Personal")
         context.insert(manual)
         try context.save()
 
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")])
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         let stale = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
         XCTAssertEqual(stale.stage, .needsReview)
@@ -149,15 +200,15 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(manual.title, "Personal")
     }
 
-    func test_olderQueueDoesNotMarkExistingProjectionStale() throws {
+    func test_olderQueueDoesNotMarkExistingProjectionStale() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
-        _ = adapter.importQueue(at: fixture.queueURL)
+        _ = await adapter.importQueue(at: fixture.queueURL)
 
         try fixture.writeDecision("DEC-DL-2")
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "2025-12-31T23:59:59Z")
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         let existing = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
         XCTAssertFalse(existing.tags.contains("source-stale"))
@@ -165,7 +216,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).first { $0.uid == "codeheroes:decision:DL-2" }?.title, "Decision")
     }
 
-    func test_projectionWithoutValidPriorGeneratedAtDoesNotMarkStale() throws {
+    func test_projectionWithoutValidPriorGeneratedAtDoesNotMarkStale() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let legacy = MustardTask(title: "Legacy projection", owner: .agent)
@@ -178,24 +229,24 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
 
         try fixture.writeDecision("DEC-DL-2")
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")])
-        let report = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }).importQueue(at: fixture.queueURL)
+        let report = await CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }).importQueue(at: fixture.queueURL)
 
         XCTAssertFalse(legacy.tags.contains("source-stale"))
         XCTAssertEqual(report.staleCount, 0)
     }
 
-    func test_invalidGeneratedAtRejectsQueueWithoutMutationAndLaterNewerQueueCanStale() throws {
+    func test_invalidGeneratedAtRejectsQueueWithoutMutationAndLaterNewerQueueCanStale() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
-        _ = adapter.importQueue(at: fixture.queueURL)
+        _ = await adapter.importQueue(at: fixture.queueURL)
         let original = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
         let originalContext = original.sourceContext
         let originalStage = original.stage
 
         try fixture.writeDecision("DEC-DL-2")
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "not-a-date")
-        let invalid = adapter.importQueue(at: fixture.queueURL)
+        let invalid = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(invalid.findings.count, 1)
         XCTAssertEqual(invalid.findings.first?.scope, .queue)
@@ -208,20 +259,20 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(original.stage, originalStage)
 
         try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "2026-01-02T00:00:00Z")
-        let newer = adapter.importQueue(at: fixture.queueURL)
+        let newer = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(newer.createdCount, 1)
         XCTAssertEqual(newer.staleCount, 1)
         XCTAssertTrue(original.tags.contains("source-stale"))
     }
 
-    func test_queueAtDifferentPathDoesNotMarkOtherQueueProjectionStale() throws {
+    func test_queueAtDifferentPathDoesNotMarkOtherQueueProjectionStale() async throws {
         let first = try Fixture()
         let second = try Fixture(clusters: [Fixture.cluster("DL-2")])
         let context = try makeContext()
-        _ = CodeHeroesDecisionAdapter(context: context, repositoryRoot: first.root, now: { self.fixedNow }).importQueue(at: first.queueURL)
+        _ = await CodeHeroesDecisionAdapter(context: context, repositoryRoot: first.root, now: { self.fixedNow }).importQueue(at: first.queueURL)
 
-        let report = CodeHeroesDecisionAdapter(context: context, repositoryRoot: second.root, now: { self.fixedNow }).importQueue(at: second.queueURL)
+        let report = await CodeHeroesDecisionAdapter(context: context, repositoryRoot: second.root, now: { self.fixedNow }).importQueue(at: second.queueURL)
 
         let firstTask = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
         XCTAssertEqual(firstTask.sourceURL, first.queueURL.standardizedFileURL.path)
@@ -229,7 +280,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(report.staleCount, 0)
     }
 
-    func test_foreignUIDCollisionIsReportedWithoutChangingForeignTask() throws {
+    func test_foreignUIDCollisionIsReportedWithoutChangingForeignTask() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let foreign = MustardTask(title: "Do not touch")
@@ -238,14 +289,14 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         try context.save()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.collisionCount, 1)
         XCTAssertEqual(foreign.title, "Do not touch")
         XCTAssertEqual(foreign.source, "manual")
     }
 
-    func test_escapedSymlinkDecisionSourceSkipsClusterWithoutMutatingTasks() throws {
+    func test_escapedSymlinkDecisionSourceSkipsClusterWithoutMutatingTasks() async throws {
         let fixture = try Fixture()
         let escaped = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".md")
         try "# DEC-DL-1".write(to: escaped, atomically: true, encoding: .utf8)
@@ -256,7 +307,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 0)
         XCTAssertEqual(report.skippedCount, 1)
@@ -264,7 +315,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).count, 0)
     }
 
-    func test_escapedDecisionSourceDirectorySymlinkSkipsClusterWithoutExternalLink() throws {
+    func test_escapedDecisionSourceDirectorySymlinkSkipsClusterWithoutExternalLink() async throws {
         let fixture = try Fixture()
         let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
@@ -276,7 +327,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 0)
         XCTAssertEqual(report.skippedCount, 1)
@@ -284,19 +335,19 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).count, 0)
     }
 
-    func test_injectedFileManagerReadFailureIsReportedWithoutModelMutation() throws {
+    func test_injectedFileManagerReadFailureIsReportedWithoutModelMutation() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, fileManager: FailingReadFileManager(), now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 0)
         XCTAssertEqual(report.findings.first?.reason, "Unable to read queue file")
         XCTAssertEqual(try tasks(context).count, 0)
     }
 
-    func test_saveFailureRestoresExistingProjectionAndDoesNotLeakChangesIntoLaterSave() throws {
+    func test_saveFailureRestoresExistingProjectionAndDoesNotLeakChangesIntoLaterSave() async throws {
         let fixture = try Fixture(clusters: [Fixture.cluster("DL-1", title: "Updated")])
         let context = try makeContext()
         let existing = MustardTask(title: "Original", owner: .agent)
@@ -308,7 +359,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         try context.save()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }, saveContext: { throw SaveFailure.forced })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 0)
         XCTAssertEqual(report.updatedCount, 0)
@@ -321,12 +372,12 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(try tasks(context).first { $0.uid == existing.uid }).title, "Original")
     }
 
-    func test_saveFailureCleansUpBrandNewProjectionAndItsAreaAndList() throws {
+    func test_saveFailureCleansUpBrandNewProjectionAndItsAreaAndList() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }, saveContext: { throw SaveFailure.forced })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.createdCount, 0)
         XCTAssertEqual(report.updatedCount, 0)
@@ -336,7 +387,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<TaskList>()).count, 0)
     }
 
-    func test_duplicateExistingProjectionUIDSkipsClusterWithoutChangingEitherTask() throws {
+    func test_duplicateExistingProjectionUIDSkipsClusterWithoutChangingEitherTask() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let first = MustardTask(title: "First", owner: .agent)
@@ -350,37 +401,37 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         try context.save()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.collisionCount, 1)
         XCTAssertEqual(first.title, "First")
         XCTAssertEqual(second.title, "Second")
     }
 
-    func test_invalidSourceClusterDoesNotMarkExistingProjectionStale() throws {
+    func test_invalidSourceClusterDoesNotMarkExistingProjectionStale() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
-        _ = adapter.importQueue(at: fixture.queueURL)
+        _ = await adapter.importQueue(at: fixture.queueURL)
         try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("operations/decisions/open/DEC-DL-1.md"))
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         let existing = try XCTUnwrap(try tasks(context).first)
         XCTAssertEqual(report.staleCount, 0)
         XCTAssertFalse(existing.tags.contains("source-stale"))
     }
 
-    func test_sameQueueBytesRefreshesDecisionLinkWhenSourceMovesToResolved() throws {
+    func test_sameQueueBytesRefreshesDecisionLinkWhenSourceMovesToResolved() async throws {
         let fixture = try Fixture()
         let context = try makeContext()
         let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
-        _ = adapter.importQueue(at: fixture.queueURL)
+        _ = await adapter.importQueue(at: fixture.queueURL)
         let task = try XCTUnwrap(try tasks(context).first)
         let oldLink = try XCTUnwrap(task.links.last?.url)
         try fixture.moveDecisionToResolved("DEC-DL-1")
 
-        let report = adapter.importQueue(at: fixture.queueURL)
+        let report = await adapter.importQueue(at: fixture.queueURL)
 
         XCTAssertEqual(report.updatedCount, 1)
         XCTAssertNotEqual(task.links.last?.url, oldLink)
@@ -399,6 +450,19 @@ private enum SaveFailure: Error { case forced }
 
 private final class FailingReadFileManager: FileManager {
     override func contents(atPath path: String) -> Data? { nil }
+}
+
+private final class MetadataThreadRecordingFileManager: FileManager {
+    private let lock = NSLock()
+    private var metadataThreads: [Bool] = []
+
+    var metadataCallCount: Int { lock.withLock { metadataThreads.count } }
+    var didReadMetadataOnMainThread: Bool { lock.withLock { metadataThreads.contains(true) } }
+
+    override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        lock.withLock { metadataThreads.append(Thread.isMainThread) }
+        return try super.attributesOfItem(atPath: path)
+    }
 }
 
 private final class Fixture {

@@ -87,7 +87,7 @@ struct SourceSettingsView: View {
 
         HStack(spacing: 8) {
             Button {
-                agent.importCodeHeroesDecisionQueue(settings: codeHeroesSettings)
+                Task { await agent.importCodeHeroesDecisionQueue(settings: codeHeroesSettings) }
             } label: {
                 if agent.isImportingCodeHeroesQueue {
                     ProgressView().controlSize(.small)

@@ -35,10 +35,10 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         XCTAssertEqual(CodeHeroesQueueSettingsStore.load(from: defaults), .init())
     }
 
-    func test_manualImportRejectsEmptyPathsAndExposesCodeHeroesSpecificError() throws {
+    func test_manualImportRejectsEmptyPathsAndExposesCodeHeroesSpecificError() async throws {
         let service = AgentService(context: try makeContext())
 
-        let report = service.importCodeHeroesDecisionQueue(settings: .init(enabled: true))
+        let report = await service.importCodeHeroesDecisionQueue(settings: .init(enabled: true))
 
         XCTAssertNil(report)
         XCTAssertFalse(service.isImportingCodeHeroesQueue)
@@ -47,24 +47,30 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         XCTAssertNil(service.lastError)
     }
 
-    func test_manualImportRejectsMissingOrNonFileQueueWithoutChangingGeneralError() throws {
+    func test_manualImportReportsMissingQueueWithoutChangingGeneralError() async throws {
         let fixture = try QueueFixture()
         let service = AgentService(context: try makeContext())
         let settings = CodeHeroesQueueSettings(repositoryRoot: fixture.root.path, queuePath: fixture.root.appendingPathComponent("missing.json").path, enabled: true)
 
-        XCTAssertNil(service.importCodeHeroesDecisionQueue(settings: settings))
+        let report = await service.importCodeHeroesDecisionQueue(settings: settings)
+
+        XCTAssertNotNil(report)
         XCTAssertFalse(service.isImportingCodeHeroesQueue)
-        XCTAssertEqual(service.lastCodeHeroesImportError, "Code Heroes import queue file is unavailable.")
+        XCTAssertEqual(
+            service.lastCodeHeroesImportError,
+            "Code Heroes import: Queue path is not a regular file beneath the configured repository root"
+        )
+        XCTAssertEqual(service.lastCodeHeroesImportSummary, report?.summary)
         XCTAssertNil(service.lastError)
     }
 
-    func test_manualImportReturnsMalformedQueueReportWithSafeCodeHeroesError() throws {
+    func test_manualImportReturnsMalformedQueueReportWithSafeCodeHeroesError() async throws {
         let fixture = try QueueFixture()
         try Data("not queue json".utf8).write(to: fixture.queueURL)
         let service = AgentService(context: try makeContext())
         let settings = CodeHeroesQueueSettings(repositoryRoot: fixture.root.path, queuePath: fixture.queueURL.path, enabled: true)
 
-        let report = service.importCodeHeroesDecisionQueue(settings: settings)
+        let report = await service.importCodeHeroesDecisionQueue(settings: settings)
 
         XCTAssertNotNil(report)
         XCTAssertEqual(report?.createdCount, 0)
@@ -74,13 +80,13 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         XCTAssertNil(service.lastError)
     }
 
-    func test_manualImportCreatesProjectionAndReportsCodeHeroesSpecificStatus() throws {
+    func test_manualImportCreatesProjectionAndReportsCodeHeroesSpecificStatus() async throws {
         let fixture = try QueueFixture()
         let context = try makeContext()
         let service = AgentService(context: context)
         let settings = CodeHeroesQueueSettings(repositoryRoot: fixture.root.path, queuePath: fixture.queueURL.path, enabled: true)
 
-        let report = service.importCodeHeroesDecisionQueue(settings: settings, now: Date(timeIntervalSince1970: 1_700_000_000))
+        let report = await service.importCodeHeroesDecisionQueue(settings: settings, now: Date(timeIntervalSince1970: 1_700_000_000))
 
         XCTAssertEqual(report?.createdCount, 1)
         XCTAssertEqual(report?.repositoryWrites, 0)
@@ -92,7 +98,7 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<MustardTask>()).count, 1)
     }
 
-    func test_manualImportRemainsAvailableWhenAutomaticRefreshPreferenceIsDisabled() throws {
+    func test_manualImportRemainsAvailableWhenAutomaticRefreshPreferenceIsDisabled() async throws {
         let fixture = try QueueFixture()
         let context = try makeContext()
         let service = AgentService(context: context, claude: { _, _ in
@@ -101,7 +107,7 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         })
         let settings = CodeHeroesQueueSettings(repositoryRoot: fixture.root.path, queuePath: fixture.queueURL.path, enabled: false)
 
-        let report = service.importCodeHeroesDecisionQueue(settings: settings)
+        let report = await service.importCodeHeroesDecisionQueue(settings: settings)
 
         XCTAssertEqual(report?.createdCount, 1)
         XCTAssertNil(service.lastCodeHeroesImportError)
