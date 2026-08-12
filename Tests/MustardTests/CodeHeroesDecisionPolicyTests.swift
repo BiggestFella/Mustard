@@ -95,6 +95,19 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertTrue(CodeHeroesDecisionPresentation.allowsLocalCompletion(for: ordinary))
     }
 
+    func test_projectionPresentationGatesEveryWeekAndNotchMutationWhilePreservingOrdinaryTasks() {
+        let projection = MustardTask(title: "Repository decision")
+        projection.source = CodeHeroesDecisionPolicy.source
+        let ordinary = MustardTask(title: "Ordinary task")
+
+        for action in CodeHeroesDecisionPresentation.LocalAction.allCases {
+            XCTAssertFalse(CodeHeroesDecisionPresentation.allows(action, for: projection),
+                           "Projection unexpectedly allowed \(action)")
+            XCTAssertTrue(CodeHeroesDecisionPresentation.allows(action, for: ordinary),
+                          "Ordinary task unexpectedly denied \(action)")
+        }
+    }
+
     private func cluster() -> CodeHeroesDecisionQueue.Cluster {
         .init(clusterID: "DL-01", projectID: "dl", title: "A decision", triageState: "needs-human-decision", mustardStage: "needsInput", priority: "high", decisionRequired: true, humanActionRequired: true, question: "Question", nextAction: "Next", whyGrouped: "Why", sourceDecisionIDs: ["DEC-1"])
     }

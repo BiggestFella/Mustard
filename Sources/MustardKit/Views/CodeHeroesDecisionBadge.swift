@@ -17,6 +17,18 @@ public enum CodeHeroesQueueRefreshPresentation {
 /// Pure presentation policy shared by the Code Heroes projection card and detail view.
 /// Repository paths are shown as Finder-reveal affordances, never loaded or copied.
 public enum CodeHeroesDecisionPresentation {
+    /// Local task mutations exposed across compact surfaces such as Week and Notch.
+    /// Repository projections deny every action; ordinary tasks keep existing behavior.
+    public enum LocalAction: CaseIterable {
+        case toggleCompletion
+        case schedule
+        case unschedule
+        case drag
+        case delete
+        case resizeEstimate
+        case delegate
+    }
+
     public struct SourceFile: Equatable, Identifiable {
         public let label: String
         public let path: String
@@ -35,7 +47,11 @@ public enum CodeHeroesDecisionPresentation {
     /// Today/List completion and reopen are local mutations, so repository projections
     /// never expose them. Ordinary tasks retain their existing toggle behavior.
     public static func allowsLocalCompletion(for task: MustardTask) -> Bool {
-        !CodeHeroesDecisionPolicy.isProjection(task)
+        allows(.toggleCompletion, for: task)
+    }
+
+    public static func allows(_: LocalAction, for task: MustardTask) -> Bool {
+        return !CodeHeroesDecisionPolicy.isProjection(task)
     }
 
     /// Imported references are absolute local paths validated by the adapter. Keep this UI
