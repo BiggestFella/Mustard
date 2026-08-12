@@ -163,6 +163,82 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(try tasks(context).count, 0)
     }
 
+    func test_saveFailureRestoresExistingProjectionAndDoesNotLeakChangesIntoLaterSave() throws {
+        let fixture = try Fixture(clusters: [Fixture.cluster("DL-1", title: "Updated")])
+        let context = try makeContext()
+        let existing = MustardTask(title: "Original", owner: .agent)
+        existing.uid = "codeheroes:decision:DL-1"
+        existing.source = CodeHeroesDecisionPolicy.source
+        existing.sourceContext = "digest=old;run=RUN-OLD;cluster=DL-1;source_ids=DEC-DL-1"
+        existing.stage = .needsReview
+        context.insert(existing)
+        try context.save()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }, saveContext: { throw SaveFailure.forced })
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.createdCount, 0)
+        XCTAssertEqual(report.updatedCount, 0)
+        XCTAssertEqual(report.staleCount, 0)
+        XCTAssertEqual(existing.title, "Original")
+        XCTAssertEqual(existing.stage, .needsReview)
+        let unrelated = MustardTask(title: "Unrelated")
+        context.insert(unrelated)
+        try context.save()
+        XCTAssertEqual(try XCTUnwrap(try tasks(context).first { $0.uid == existing.uid }).title, "Original")
+    }
+
+    func test_duplicateExistingProjectionUIDSkipsClusterWithoutChangingEitherTask() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let first = MustardTask(title: "First", owner: .agent)
+        let second = MustardTask(title: "Second", owner: .agent)
+        for task in [first, second] {
+            task.uid = "codeheroes:decision:DL-1"
+            task.source = CodeHeroesDecisionPolicy.source
+            task.sourceContext = "digest=old;run=RUN-OLD;cluster=DL-1;source_ids=DEC-DL-1"
+            context.insert(task)
+        }
+        try context.save()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.collisionCount, 1)
+        XCTAssertEqual(first.title, "First")
+        XCTAssertEqual(second.title, "Second")
+    }
+
+    func test_invalidSourceClusterDoesNotMarkExistingProjectionStale() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+        _ = adapter.importQueue(at: fixture.queueURL)
+        try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("operations/decisions/open/DEC-DL-1.md"))
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        let existing = try XCTUnwrap(try tasks(context).first)
+        XCTAssertEqual(report.staleCount, 0)
+        XCTAssertFalse(existing.tags.contains("source-stale"))
+    }
+
+    func test_sameQueueBytesRefreshesDecisionLinkWhenSourceMovesToResolved() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+        _ = adapter.importQueue(at: fixture.queueURL)
+        let task = try XCTUnwrap(try tasks(context).first)
+        let oldLink = try XCTUnwrap(task.links.last?.url)
+        try fixture.moveDecisionToResolved("DEC-DL-1")
+
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(report.updatedCount, 1)
+        XCTAssertNotEqual(task.links.last?.url, oldLink)
+        XCTAssertTrue(task.links.last?.url.contains("/resolved/DEC-DL-1.md") == true)
+    }
+
     private func makeContext() throws -> ModelContext {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         return ModelContext(try ModelContainer(for: Area.self, TaskList.self, MustardTask.self, Recommendation.self, AgentRun.self, AgentMessage.self, CalendarEvent.self, configurations: configuration))
@@ -170,6 +246,8 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
 
     private func tasks(_ context: ModelContext) throws -> [MustardTask] { try context.fetch(FetchDescriptor<MustardTask>()) }
 }
+
+private enum SaveFailure: Error { case forced }
 
 private final class FailingReadFileManager: FileManager {
     override func contents(atPath path: String) -> Data? { nil }
@@ -201,5 +279,12 @@ private final class Fixture {
     func writeQueue(clusters: [CodeHeroesDecisionQueue.Cluster]) throws {
         let document = CodeHeroesDecisionQueue.Document(schemaVersion: 1, reportType: "dream_decision_triage", generatedAt: "2026-01-01T00:00:00Z", sourceRunID: "RUN-1", sourceReceipt: receipt, canonicalInput: "operations/input.md", readOnly: true, decisionStatusMutations: 0, mustardImport: "future-adapter-only", summary: [:], historicalOpenDecisionIDs: [], historicalExclusions: [], queue: clusters)
         try JSONEncoder().encode(document).write(to: queueURL)
+    }
+
+    func moveDecisionToResolved(_ id: String) throws {
+        let open = root.appendingPathComponent("operations/decisions/open/\(id).md")
+        let resolvedDirectory = root.appendingPathComponent("operations/decisions/resolved")
+        try FileManager.default.createDirectory(at: resolvedDirectory, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: open, to: resolvedDirectory.appendingPathComponent("\(id).md"))
     }
 }
