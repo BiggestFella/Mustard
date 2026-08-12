@@ -203,7 +203,7 @@ final class HotKeyChordTests: XCTestCase {
     }
 
     func test_fullKeyTable_rendersLettersArrowsAndFKeys() {
-        XCTAssertEqual(HotKeyChord.description(keyCode: 4, modifiers: 0x100 | 0x200), "⌘⇧H")
+        XCTAssertEqual(HotKeyChord.description(keyCode: 4, modifiers: 0x100 | 0x200), "⇧⌘H")
         XCTAssertEqual(HotKeyChord.description(keyCode: 126, modifiers: 0x100), "⌘↑")
         XCTAssertEqual(HotKeyChord.description(keyCode: 122, modifiers: 0x1000), "⌃F1")
     }

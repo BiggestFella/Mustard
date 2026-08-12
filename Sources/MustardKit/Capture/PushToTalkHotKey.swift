@@ -87,19 +87,29 @@ public enum HotKeyHold {
     }
 }
 
-/// Pure chord formatting for the setup surface (raw Carbon values so the
-/// formatter stays platform-free): "⌃⌥Space", "⌃⌥D", …
-public enum HotKeyChord {
+/// One hotkey chord as raw Carbon values (platform-free, so the formatter and
+/// the bindings registry stay unit-testable): "⌃⌥Space", "⌃⌥D", …
+public struct HotKeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
+    public var keyCode: UInt32
+    public var carbonModifiers: UInt32
+
+    public init(keyCode: UInt32, carbonModifiers: UInt32) {
+        self.keyCode = keyCode
+        self.carbonModifiers = carbonModifiers
+    }
+
     /// Carbon modifier masks (Events.h): cmdKey/shiftKey/optionKey/controlKey.
     private static let masks: [(UInt32, String)] = [
         (0x1000, "⌃"), (0x800, "⌥"), (0x200, "⇧"), (0x100, "⌘"),
     ]
-    /// The key codes Mustard's chords actually use, plus a readable fallback.
-    private static let keyNames: [UInt32: String] = [49: "Space", 2: "D", 15: "R"]
+
+    public var description: String {
+        Self.description(keyCode: keyCode, modifiers: carbonModifiers)
+    }
 
     public static func description(keyCode: UInt32, modifiers: UInt32) -> String {
         let mods = masks.filter { modifiers & $0.0 != 0 }.map(\.1).joined()
-        return mods + (keyNames[keyCode] ?? "key #\(keyCode)")
+        return mods + (HotKeyKeyMap.displayName(forKeyCode: keyCode) ?? "key #\(keyCode)")
     }
 }
 
