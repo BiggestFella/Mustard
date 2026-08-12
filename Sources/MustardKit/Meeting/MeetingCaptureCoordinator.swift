@@ -115,7 +115,12 @@ public final class MeetingCaptureCoordinator {
             let writer = try makeWriter(record.uid, startedAt)
             self.writer = writer
             writerFailureLogged = []
-            try await transcription.start(sources: sources)
+            // BAK-334: contextual vocabulary (areas, task lists, recent task
+            // titles, past meeting-action owners, plus any custom terms)
+            // computed once per meeting start — never per buffer.
+            let lexicon = VoiceLexiconSource.fetch(
+                context: context, now: startedAt, userTerms: VoiceLexiconUserTerms.load())
+            try await transcription.start(sources: sources, lexicon: lexicon)
 
             let (feed, continuation) = AsyncStream.makeStream(
                 of: (MeetingSegmentSource, MeetingAudioSample).self)

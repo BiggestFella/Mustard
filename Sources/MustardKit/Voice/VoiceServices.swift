@@ -18,4 +18,15 @@ public protocol VoiceTranscribing: Sendable {
     func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) async throws
     func finish() async throws -> [VoiceTranscriptSegment]
     func cancel() async
+    /// Forwards contextual-vocabulary terms (BAK-334) to the underlying
+    /// recognizer, if it supports biasing. Callable before or after `start`.
+    func setContext(_ terms: [String]) async throws
+}
+
+extension VoiceTranscribing {
+    /// No-op default so existing conformers (deterministic test stubs, any
+    /// future session without vocabulary biasing) don't need to implement
+    /// this. `AppleSpeechSession.setContext` overrides it to forward to the
+    /// analyzer driver.
+    public func setContext(_ terms: [String]) async throws {}
 }
