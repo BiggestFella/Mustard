@@ -14,6 +14,10 @@ public struct AXFocusProbe: Equatable, Sendable {
     public var windowTitle: String?
     /// Stable while the element lives (the live probe hashes the AXUIElement).
     public var elementToken: String?
+    /// The element's currently selected text (`kAXSelectedTextAttribute`).
+    /// Frequently readable even when `value` is withheld, which is why rewrite's
+    /// read ladder tries it first. Dictation does not use this.
+    public var selectedText: String?
 
     public init(
         pid: pid_t,
@@ -22,7 +26,8 @@ public struct AXFocusProbe: Equatable, Sendable {
         selectedRange: NSRange?,
         value: String?,
         windowTitle: String?,
-        elementToken: String?
+        elementToken: String?,
+        selectedText: String? = nil
     ) {
         self.pid = pid
         self.role = role
@@ -31,6 +36,7 @@ public struct AXFocusProbe: Equatable, Sendable {
         self.value = value
         self.windowTitle = windowTitle
         self.elementToken = elementToken
+        self.selectedText = selectedText
     }
 }
 
@@ -199,7 +205,9 @@ extension AccessibilityFocusReader {
             windowTitle: windowTitle,
             // Stable while the element lives: AXUIElement is CFHash-able and
             // two references to the same element hash identically.
-            elementToken: String(CFHash(element)))
+            elementToken: String(CFHash(element)),
+            // Read for rewrite's rung 1; dictation ignores it.
+            selectedText: attribute(kAXSelectedTextAttribute, of: element) as? String)
     }
 }
 #endif
