@@ -785,3 +785,14 @@ can leave the mic hot with an orphaned pump until the next capture. Task chip fi
 - **Outward actions:** none
 - **Run:** `.agent-loop/runs/20260812-bak333-finalize-cleanup/`
 - **Revert:** `git revert ed23287`
+
+## 2026-08-12 — MERGED · Transcriber domain lexicon / contextual biasing (BAK-334, PR #117)
+- **Risk:** medium (Voice/+Capture/+Meeting/+Logic/+VoiceSetupView) · **Merged on green** (post-CI, 50s)
+- **Origin:** transcript eval — proper nouns are the failure mode (Thales→"Talus", Fahad→"the 2 for heart", "location permission"→"vacation permission"); Mustard already holds the vocabulary.
+- **Checks:** swift test 1577 pass/1 skip/0 fail (+18) · swift build clean · SDK probe (AnalysisContext.contextualStrings) evidenced in task.md
+- **Fresh-context review:** mergeable, 0 blocking; non-blocking: unbounded MeetingActionProposal fetch per hotkey press; file-transcription fallback path unbiased (disclosed scope cut); setContext failures swallowed silently.
+- **What landed:** the pre-existing `AppleSpeechSession.setContext` plumbing (zero call sites!) is now fed by pure `VoiceLexicon` (user terms first + areas + lists + owners + deterministic title heuristic, cap 100) via `VoiceLexiconSource`; fresh per push-to-talk press, once per meeting start on BOTH channels; "Custom vocabulary" editor in Voice Setup (`voice.lexicon.userTerms`).
+- **⚠ Leon eye-check PENDING:** record a real standup and listen — do Thales / Sandvik / Fahad / DLA transcribe correctly now?
+- **Outward actions:** none
+- **Run:** `.agent-loop/runs/20260812-bak334-transcriber-lexicon/`
+- **Revert:** `git revert d7c64d4`
