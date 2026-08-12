@@ -14,11 +14,12 @@ final class MeetingUtteranceMergeTests: XCTestCase {
         _ id: String, _ text: String,
         start: Double, end: Double,
         source: VoiceAudioSource = .microphone,
-        confidence: Double? = nil
+        confidence: Double? = nil,
+        speaker: String? = nil
     ) -> VoiceTranscriptSegment {
         VoiceTranscriptSegment(
             id: id, text: text, startSeconds: start, endSeconds: end,
-            isFinal: true, confidence: confidence, source: source)
+            isFinal: true, confidence: confidence, source: source, speaker: speaker)
     }
 
     // MARK: - Pause rule
@@ -148,6 +149,73 @@ final class MeetingUtteranceMergeTests: XCTestCase {
         let asSegment = MeetingUtteranceMerge.utterances(from: segments)[0].asSegment
 
         XCTAssertEqual(asSegment.confidence ?? -1, 0.7, accuracy: 0.0001)
+    }
+
+    // MARK: - Speaker boundary (BAK-335)
+
+    func test_speakerChange_breaksTheRun_evenWithinPauseThreshold() {
+        let segments = [
+            seg("a", "hello", start: 0.0, end: 1.0, source: .meeting, speaker: "Fahad"),
+            seg("b", "world", start: 1.1, end: 2.0, source: .meeting, speaker: "Alex"),
+        ]
+
+        let utterances = MeetingUtteranceMerge.utterances(from: segments)
+
+        XCTAssertEqual(
+            utterances.map { $0.segments.map(\.id) }, [["a"], ["b"]],
+            "a speaker change always breaks the run, just like a source change")
+    }
+
+    func test_speakerChange_nilToNamed_breaksTheRun() {
+        let segments = [
+            seg("a", "hello", start: 0.0, end: 1.0, source: .meeting, speaker: nil),
+            seg("b", "world", start: 1.1, end: 2.0, source: .meeting, speaker: "Alex"),
+        ]
+
+        let utterances = MeetingUtteranceMerge.utterances(from: segments)
+
+        XCTAssertEqual(utterances.map { $0.segments.map(\.id) }, [["a"], ["b"]])
+    }
+
+    func test_sameSpeaker_doesNotBreakTheRun() {
+        let segments = [
+            seg("a", "hello", start: 0.0, end: 1.0, source: .meeting, speaker: "Fahad"),
+            seg("b", "world", start: 1.1, end: 2.0, source: .meeting, speaker: "Fahad"),
+        ]
+
+        let utterances = MeetingUtteranceMerge.utterances(from: segments)
+
+        XCTAssertEqual(utterances.count, 1, "same speaker, same source, within pause — one utterance")
+    }
+
+    func test_utterance_speakerIsFirstConstituents() {
+        let segments = [
+            seg("a", "hello", start: 0.0, end: 1.0, source: .meeting, speaker: "Fahad"),
+            seg("b", "world", start: 1.1, end: 2.0, source: .meeting, speaker: "Fahad"),
+        ]
+
+        let utterance = MeetingUtteranceMerge.utterances(from: segments)[0]
+
+        XCTAssertEqual(utterance.speaker, "Fahad")
+    }
+
+    func test_utterance_speakerIsNilWhenUnattributed() {
+        let segments = [seg("a", "hello", start: 0.0, end: 1.0, source: .meeting, speaker: nil)]
+
+        let utterance = MeetingUtteranceMerge.utterances(from: segments)[0]
+
+        XCTAssertNil(utterance.speaker)
+    }
+
+    func test_asSegment_carriesTheUtterancesSpeaker() {
+        let segments = [
+            seg("a", "hello", start: 0.0, end: 1.0, source: .meeting, speaker: "Fahad"),
+            seg("b", "world", start: 1.1, end: 2.0, source: .meeting, speaker: "Fahad"),
+        ]
+
+        let asSegment = MeetingUtteranceMerge.utterances(from: segments)[0].asSegment
+
+        XCTAssertEqual(asSegment.speaker, "Fahad")
     }
 
     // MARK: - Empty input

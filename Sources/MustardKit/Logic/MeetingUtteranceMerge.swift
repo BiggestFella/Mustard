@@ -13,6 +13,9 @@ public struct MeetingUtterance: Equatable, Sendable {
     public var source: VoiceAudioSource { segments[0].source }
     public var startSeconds: Double { segments[0].startSeconds }
     public var endSeconds: Double { segments[segments.count - 1].endSeconds }
+    /// Who said this utterance, when known (BAK-335) — the first
+    /// constituent's; a run never mixes speakers (see `utterances(from:)`).
+    public var speaker: String? { segments[0].speaker }
 
     /// Constituent texts, trimmed and joined with a single space; empty
     /// (post-trim) texts are skipped so they don't leave a stray space.
@@ -46,7 +49,8 @@ public struct MeetingUtterance: Equatable, Sendable {
             endSeconds: endSeconds,
             isFinal: true,
             confidence: meanConfidence,
-            source: source)
+            source: source,
+            speaker: speaker)
     }
 }
 
@@ -70,10 +74,13 @@ public enum MeetingUtteranceMerge {
 
     /// Merges `segments` (assumed time-sorted, as callers already keep them)
     /// into utterances. A run extends only while the next segment shares the
-    /// current run's source, starts less than `pauseThreshold` after the
-    /// run's last segment ends, and the merged text would still fit
-    /// `maxTextLength`. Any other-source segment breaks the run without
-    /// reordering anything — interleaving between sources is preserved.
+    /// current run's source AND speaker (BAK-335: a speaker change always
+    /// breaks the run, exactly like a source change — nil counts as its own
+    /// speaker, so an attributed segment never merges into an unattributed
+    /// one or vice versa), starts less than `pauseThreshold` after the run's
+    /// last segment ends, and the merged text would still fit
+    /// `maxTextLength`. Any breaking segment starts a new run without
+    /// reordering anything — interleaving is preserved.
     public static func utterances(
         from segments: [VoiceTranscriptSegment],
         pauseThreshold: TimeInterval = pauseThreshold,
@@ -87,9 +94,10 @@ public enum MeetingUtteranceMerge {
         for segment in segments.dropFirst() {
             let previous = current[current.count - 1]
             let sameSource = segment.source == previous.source
+            let sameSpeaker = segment.speaker == previous.speaker
             let withinPause = segment.startSeconds - previous.endSeconds < pauseThreshold
 
-            if sameSource, withinPause {
+            if sameSource, sameSpeaker, withinPause {
                 let candidate = current + [segment]
                 if MeetingUtterance(segments: candidate).text.count <= maxTextLength {
                     current = candidate
