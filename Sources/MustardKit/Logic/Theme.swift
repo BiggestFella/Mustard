@@ -206,6 +206,12 @@ public enum Theme {
         public static let caption = Font.system(size: 11)
         public static let label = Font.system(size: 11.5)
 
+        /// Settings-style section headers ("PROJECTS", "HOTKEYS"): 10pt
+        /// semibold, callers add `.tracking(0.06)` (tracking is a view
+        /// modifier, not a Font attribute). Promoted from copy-pasted
+        /// literals in SettingsView/SourceSettingsView/VoiceSetupView.
+        public static let sectionHeader = Font.system(size: 10, weight: .semibold)
+
         // Editorial scale (Craft pass Phase 0, spec 2026-07-06) — long-form
         // note/output content. The chrome tokens above stay for lists and controls.
         public static let docTitle = Font.system(size: 33, weight: .semibold)
