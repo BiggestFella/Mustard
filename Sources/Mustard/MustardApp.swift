@@ -129,6 +129,7 @@ struct MustardApp: App {
     @State private var notchNav = NotchNavigation()
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
+    @State private var rewrite: RewriteController?
     @State private var meetingRecorder: MeetingCaptureCoordinator
     @State private var meetingSuggestions: MeetingSuggestionMonitor
     @State private var didRecoverMeetings = false
@@ -259,6 +260,14 @@ struct MustardApp: App {
                             context: container.mainContext, navigation: notchNav)
                         capture.activate()
                         voiceCapture = capture
+                    }
+                    if rewrite == nil, #available(macOS 26.0, *) {
+                        // On-device rewrite: select text anywhere, tap ⌃⌥R, review
+                        // the rewrite in a non-activating card, Return to replace.
+                        // Nothing in the target app changes before that.
+                        let controller = RewriteController.live()
+                        controller.activate()
+                        rewrite = controller
                     }
                     if dictation == nil {
                         // System-wide dictation: hold ⌃⌥D in any app, speak, release

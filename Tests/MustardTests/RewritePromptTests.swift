@@ -51,6 +51,20 @@ final class RewritePromptTests: XCTestCase {
             "26.4 has no dedicated prompt and must fall back to 26, never up to 27.")
     }
 
+    func test_bandInstructions_loadTheRealResourceForTheCurrentBand() {
+        let text = RewriteWiring.bandInstructions()
+        XCTAssertTrue(text.contains("Preserve meaning exactly"),
+                      "The live path must load the shipped prompt, not the fallback.")
+    }
+
+    func test_bandInstructions_fallBackToAWorkingStringWhenNoResourceExists() {
+        // A bundle with no rewrite-*.txt at all: rewrite must still run with a
+        // minimal instruction rather than crashing or generating unguided.
+        let text = RewriteWiring.bandInstructions(bundle: Bundle(for: RewritePromptTests.self))
+        XCTAssertTrue(text.contains("Preserve meaning exactly"))
+        XCTAssertFalse(text.isEmpty)
+    }
+
     func test_shippedBandResources_areActuallyInTheBundle() {
         // The test above proves the fallback rule with a fake catalog; this one
         // proves the files were registered as resources and can be loaded.

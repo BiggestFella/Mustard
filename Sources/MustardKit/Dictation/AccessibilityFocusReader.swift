@@ -72,10 +72,21 @@ public struct AccessibilityFocusReader: FocusedTextReading {
         "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField",
     ]
 
+    /// Dictation's snapshot: the protocol witness, and the only signature
+    /// dictation ever calls. Its role policy is `textualRoles`, unchanged.
     public func snapshot() throws -> FocusedTextTarget {
+        try snapshot(roles: Self.textualRoles)
+    }
+
+    /// The same snapshot under a caller-supplied role policy. Rewrite passes
+    /// `RewriteRoles.textual`, which admits `AXWebArea` — without this it would
+    /// be refused in Gmail and Slack, the two targets it exists for. An
+    /// overload rather than a defaulted parameter so the protocol witness above
+    /// stays exact and dictation's behaviour is byte-for-byte identical.
+    public func snapshot(roles: Set<String>) throws -> FocusedTextTarget {
         guard isTrusted() else { throw FocusReadError.accessibilityPermissionMissing }
         guard let probe = try probe(),
-              let role = probe.role, Self.textualRoles.contains(role) else {
+              let role = probe.role, roles.contains(role) else {
             throw FocusReadError.noFocusedTextElement
         }
         let neighbors = Self.neighbors(of: probe.selectedRange, in: probe.value)
