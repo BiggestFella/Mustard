@@ -25,6 +25,10 @@ public struct VoiceTranscriptSegment: Equatable, Sendable {
     public let isFinal: Bool
     public let confidence: Double?
     public let source: VoiceAudioSource
+    /// Who said this span, when known (BAK-335: meeting speaker attribution).
+    /// Defaulted so every existing call site is unaffected; never guessed —
+    /// nil means unattributed, not "assume the previous speaker".
+    public let speaker: String?
 
     public init(
         id: String,
@@ -33,7 +37,8 @@ public struct VoiceTranscriptSegment: Equatable, Sendable {
         endSeconds: Double,
         isFinal: Bool,
         confidence: Double?,
-        source: VoiceAudioSource
+        source: VoiceAudioSource,
+        speaker: String? = nil
     ) {
         self.id = id
         self.text = text
@@ -42,6 +47,7 @@ public struct VoiceTranscriptSegment: Equatable, Sendable {
         self.isFinal = isFinal
         self.confidence = confidence
         self.source = source
+        self.speaker = speaker
     }
 }
 

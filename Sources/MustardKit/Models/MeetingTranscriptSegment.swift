@@ -23,6 +23,13 @@ public final class MeetingTranscriptSegment {
     /// Leon's correction, when he makes one; nil otherwise.
     public var correctedText: String?
     public var confidence: Double?
+    /// Who said this span, when the meeting-channel handoff protocol
+    /// attributed it (BAK-335). Always nil for the "you" channel (Leon by
+    /// construction — the UI renders "You" from `source`, never stamped
+    /// here) and nil whenever attribution couldn't match a known candidate;
+    /// unattributed is a first-class state, never a guess. Correctable from
+    /// the review UI. Optional + defaulted nil: a lightweight migration.
+    public var speaker: String?
 
     public init(
         rawText: String = "",

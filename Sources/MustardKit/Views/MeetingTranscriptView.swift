@@ -25,6 +25,14 @@ public struct MeetingTranscriptView: View {
         self.onSeek = onSeek
     }
 
+    /// Speaker candidates for the per-row correction menu (BAK-335) — same
+    /// assembly the coordinator attributes against at finalize, so the menu
+    /// never offers a name attribution couldn't have produced on its own.
+    private var candidates: [String] {
+        MeetingSpeakerCandidateSource.fetch(
+            context: context, userTerms: VoiceLexiconUserTerms.load())
+    }
+
     private var segments: [MeetingTranscriptSegment] {
         let all = (meeting.segments ?? [])
             .sorted { ($0.startSeconds, $0.uid) < ($1.startSeconds, $1.uid) }
@@ -71,10 +79,8 @@ public struct MeetingTranscriptView: View {
                     .foregroundStyle(Theme.Palette.accent)
             }
             .buttonStyle(.plain)
-            Text(segment.source == .you ? "You" : "Mtg")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Theme.Palette.textTertiary)
-                .frame(width: 26, alignment: .leading)
+            speakerLabel(segment)
+                .frame(width: 64, alignment: .leading)
 
             if editingUID == segment.uid {
                 TextField("Correction", text: $correctionText)
@@ -113,6 +119,37 @@ public struct MeetingTranscriptView: View {
         segment.correctedText = (trimmed.isEmpty || trimmed == segment.rawText) ? nil : trimmed
         try? context.save()
         editingUID = nil
+    }
+
+    /// "You" for the you channel (never editable — it's Leon by
+    /// construction); the attributed speaker or "Mtg" for the meeting
+    /// channel, correctable via a small menu (BAK-335). Render-and-dispatch
+    /// only — the menu writes straight to the persisted segment.
+    @ViewBuilder
+    private func speakerLabel(_ segment: MeetingTranscriptSegment) -> some View {
+        if segment.source == .you {
+            Text("You")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textTertiary)
+        } else {
+            Menu {
+                Button("None") { setSpeaker(nil, on: segment) }
+                ForEach(candidates, id: \.self) { candidate in
+                    Button(candidate) { setSpeaker(candidate, on: segment) }
+                }
+            } label: {
+                Text(segment.speaker ?? "Mtg")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textTertiary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+        }
+    }
+
+    private func setSpeaker(_ speaker: String?, on segment: MeetingTranscriptSegment) {
+        segment.speaker = speaker
+        try? context.save()
     }
 }
 #endif

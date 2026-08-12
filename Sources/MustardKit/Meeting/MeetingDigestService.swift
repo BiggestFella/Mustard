@@ -111,8 +111,23 @@ public struct MeetingDigestService {
         // tiny segments are mostly bookkeeping. The persisted transcript
         // (`segments`) is untouched; only the digest's view of it merges.
         let utterances = MeetingUtteranceMerge.utterances(from: segments)
+        // BAK-335: an attributed utterance's rendered text is prefixed with
+        // its speaker's name — the id/timing/channel portion of the
+        // rendered line (and therefore every evidence id) is untouched,
+        // since only `text` changes here. This is the one seam a real name
+        // can reach the model, letting the digest give actions a real
+        // owner with zero prompt-format change.
+        let chunkSegments = utterances.map { utterance -> VoiceTranscriptSegment in
+            let base = utterance.asSegment
+            guard let speaker = base.speaker else { return base }
+            return VoiceTranscriptSegment(
+                id: base.id, text: "\(speaker): \(base.text)",
+                startSeconds: base.startSeconds, endSeconds: base.endSeconds,
+                isFinal: base.isFinal, confidence: base.confidence,
+                source: base.source, speaker: base.speaker)
+        }
         let chunks = MeetingDigestChunker.chunks(
-            segments: utterances.map(\.asSegment), budgetTokens: budget, tokenCount: tokenCount)
+            segments: chunkSegments, budgetTokens: budget, tokenCount: tokenCount)
 
         // Map: one fresh generation per chunk. A failed chunk no longer
         // aborts the whole digest (BAK-330) — its span is recorded as
