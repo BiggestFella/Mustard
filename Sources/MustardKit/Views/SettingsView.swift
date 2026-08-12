@@ -26,6 +26,7 @@ public struct SettingsView: View {
 
                 // Sources (its own "PROJECTS" header + connect affordances).
                 SourceSettingsView()
+                CalendarSettingsView()
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("TRUST")
