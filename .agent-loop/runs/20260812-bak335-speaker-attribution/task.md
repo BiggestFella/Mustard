@@ -181,6 +181,90 @@ common to trust (`test_attribute_prefixMatch_belowThreeChars_doesNotMatch`).
 `BridgeExport`, outbox/results). None of this feature's surface overlaps
 with the local-agent execution loop or the connected-worker bridge.
 
+## Review fix log (fresh-context review, three findings, all fixed on this branch)
+
+The fresh-context review BLOCKED the branch on two confirmed findings; a
+third (effectiveness gap) was raised by the coordinator alongside them. All
+three fixed TDD red-first, same branch, no push.
+
+### FINDING 1 (BLOCKING) — bare "over to" false-positives
+
+Confirmed repro: `attribute(texts: ["let's move over to Sam's slide for
+revenue", "next update"], candidates: ["Sam"])` attributed "Sam" — a bare
+"over to" mid-sentence, not pointing at a real handoff, fired anyway.
+
+**Fix, two tightenings, both in `MeetingSpeakerAttribution.swift`:**
+
+(a) A captured name ending in `'s` (possessive) is now never a handoff
+name. The `namePattern`'s apostrophe support (kept for "O'Brien") was
+swallowing possessives whole; `extractedName` now rejects any assembled
+name whose lowercased form ends with `"'s"`.
+
+(b) The regex's five phrase alternatives are now individually capturing-
+grouped so the code can tell which family fired. ONLY the bare "over to"
+alternative (group 5) gets a new restriction: the match only counts as a
+handoff if everything from the match's end to the text's end is
+punctuation/whitespace (`isClauseEnding`). "Over to Alin." fires (nothing
+trails but a period); "over to Sam's slide for revenue" and "over to the
+office yesterday" do not (substantive content trails). The other four
+families (`pass it (back )?to`, `pass (it|that) over to`, `hand(ing)?
+(it )?over to`, `back to you,?`) are unaffected — verified directly by
+`test_detectHandoffs_passItBackTo_isNotRestrictedByClauseEnd` and
+`test_detectHandoffs_handOverTo_isNotRestrictedByClauseEnd`.
+
+One pre-existing test, `test_detectHandoffs_secondTokenStopsAtPunctuation`,
+used bare "over to" with trailing multi-sentence content specifically to
+test that the SECOND name token stops at punctuation — under the new rule
+this text correctly no longer fires (it's not clause-ending), which would
+have made the test assert the wrong thing for the wrong reason. Rewritten
+to use `"back to you,"` instead, preserving the original intent (that
+`", Can"` after `"Fahad."` does not get swallowed into a second name
+token) without depending on the now-restricted bare pattern.
+
+### FINDING 2 (BLOCKING) — ambiguous candidate match silently picks first
+
+Confirmed repro: `candidates: ["Alina", "Alison"]`, handoff name "Ali" →
+resolved to "Alina" purely because it was first in the list.
+
+**Fix:** `matchedCandidate(for:in:)` in `MeetingSpeakerAttribution.swift`
+now collects EVERY candidate that fuzzy-matches the name; the span is
+attributed only when that match set has exactly one member. Two or more
+matches (or zero) both resolve to `nil` — unattributed, never a guess and
+never an arbitrary tie-break.
+
+### FINDING 3 (coordinator's own finding) — effectiveness gap on live data
+
+Real meeting-channel segments are near-word-level (~15 chars per the
+BAK-329 utterance-merge rationale already in this codebase), so a handoff
+phrase like "pass it back to Alex" routinely spans 2-3 raw segments ("pass
+it" / "back to" / "Alex."). The coordinator was attributing over RAW
+per-segment text, so on real recordings almost no handoff would ever match
+a complete phrase — the feature would silently attribute nothing on the
+exact data it was built for.
+
+**Fix:** `MeetingCaptureCoordinator.attributedSpeakers(for:context:)` now
+builds utterances FIRST via `MeetingUtteranceMerge.utterances(from:)` —
+the same same-source/1.5s-pause rule already used for digest chunking
+(BAK-329); every segment's `speaker` field is nil at this point (nothing
+has stamped it yet), so the utterance merge's speaker-boundary break is a
+no-op here, not a behavior change. `MeetingSpeakerAttribution.attribute`
+then runs over the MERGED utterance text, and the result is stamped onto
+**every constituent segment** of an attributed utterance (via
+`utterance.segments`), not just its first — a real handoff's attributed
+span can cover several persisted rows.
+
+**Test-fixture consequence:** the two pre-existing coordinator speaker
+tests used sub-second gaps between scripted lines. Before this fix, gaps
+were irrelevant (attribution ran per-segment, not per-utterance); after
+it, those lines would merge into ONE utterance, and the merged text would
+then fail FINDING 1(b)'s clause-end check for the bare "over to" pattern
+(trailing content in the same merged blob). Widened both tests' gaps to
+>= 1.5s — a realistic handoff pause, not a synthetic artifact — so each
+scripted line stays its own utterance, matching their original intent. A
+new test (`test_finalize_mergesWordLevelFragmentsBeforeAttribution_
+stampsEveryConstituent`) proves the merge itself with genuinely
+word-level fragments and sub-second gaps.
+
 ## Deviations / uncertainties
 
 - The spec's design note for point 6 said "pick the cleaner" between

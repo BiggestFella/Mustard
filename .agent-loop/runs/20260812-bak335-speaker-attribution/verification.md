@@ -144,3 +144,112 @@ Exit code `0`.
 
 None. Baseline was clean (1577/1577 non-skipped passing, 1 skip) and stays
 clean.
+
+---
+
+## Review fix round — red-first evidence per finding
+
+### FINDING 1 + FINDING 2 (`MeetingSpeakerAttributionTests`)
+
+Added 11 tests (reviewer's exact repros + the requested extra cases +
+non-regression guards for the unaffected phrase families) BEFORE touching
+`MeetingSpeakerAttribution.swift`:
+
+```
+swift test --filter MeetingSpeakerAttributionTests
+```
+```
+	 Executed 40 tests, with 5 failures (0 unexpected) in 0.656 seconds
+```
+Failures (verbatim):
+```
+test_attribute_ambiguousCandidateMatch_staysUnattributed_reviewerRepro : XCTAssertEqual failed: ("[nil, Optional("Alina")]") is not equal to ("[nil, nil]")
+test_attribute_bareOverTo_midSentence_isNotAHandoff_reviewerRepro : XCTAssertEqual failed: ("[nil, Optional("Sam")]") is not equal to ("[nil, nil]")
+test_detectHandoffs_bareOverTo_midSentence_producesNoHandoff_reviewerRepro : XCTAssertTrue failed
+test_detectHandoffs_possessiveName_isNeverAHandoff : XCTAssertTrue failed
+test_detectHandoffs_possessiveName_isNeverAHandoff_evenWithoutTrailingPunctuation : XCTAssertTrue failed
+```
+(One test-authoring bug found in the same pass, not a production bug:
+`test_detectHandoffs_handOverTo_isNotRestrictedByClauseEnd`'s own fixture
+text let the pre-existing 2-token name capture greedily swallow "and" —
+fixed by adding a comma in the fixture, unrelated to the review findings.)
+
+Implemented both fixes (possessive rejection; capturing-grouped phrase
+alternatives + clause-end check restricted to the bare "over to" group;
+ambiguous-match → nil). Re-ran:
+```
+	 Executed 40 tests, with 1 failure (0 unexpected) in 0.382 seconds
+```
+Remaining failure was a genuine, EXPECTED regression in a pre-existing
+test whose fixture relied on the exact behavior just tightened
+(`test_detectHandoffs_secondTokenStopsAtPunctuation` used bare "over to"
+with trailing multi-sentence content). Rewrote that fixture to use "back
+to you," instead (a family with no clause-end restriction), preserving the
+test's real intent (second name token stops at punctuation). Final run:
+```
+Test Suite 'MeetingSpeakerAttributionTests' passed at 2026-08-12 10:37:11.075.
+	 Executed 40 tests, with 0 failures (0 unexpected) in 0.008 (0.010) seconds
+```
+
+Full-suite check after this fix (catches any interaction elsewhere):
+```
+Executed 1633 tests, with 1 test skipped and 0 failures (0 unexpected) in 8.478 (8.608) seconds
+```
+
+### FINDING 3 (`MeetingCaptureCoordinatorTests`)
+
+Added `test_finalize_mergesWordLevelFragmentsBeforeAttribution_
+stampsEveryConstituent` (genuinely word-level fragments: "pass it" / "back
+to" / "Alex." / "I shipped" / "the release") BEFORE touching
+`MeetingCaptureCoordinator.swift`:
+```
+swift test --filter test_finalize_mergesWordLevelFragmentsBeforeAttribution_stampsEveryConstituent
+```
+```
+error: ... XCTAssertEqual failed: ("nil") is not equal to ("Optional("Alex")") - every constituent of the attributed utterance is stamped
+error: ... XCTAssertEqual failed: ("nil") is not equal to ("Optional("Alex")") - not just the first constituent
+	 Executed 1 test, with 2 failures (0 unexpected) in 0.574 seconds
+```
+Implemented the utterance-merge-first fix in `attributedSpeakers(for:
+context:)`. Also widened the two PRE-EXISTING speaker-attribution
+coordinator tests' segment gaps to >= 1.5s (a no-op under the old
+per-segment code, confirmed still green before touching the
+implementation) so they stay one-utterance-per-line under the new
+merge-first path rather than accidentally merging into one blob and
+tripping FINDING 1(b)'s clause-end check. Re-ran:
+```
+Test Suite 'MeetingCaptureCoordinatorTests' passed at 2026-08-12 10:39:48.369.
+	 Executed 24 tests, with 0 failures (0 unexpected) in 0.643 (0.646) seconds
+```
+
+## Final full-suite run (after all three fixes)
+
+```
+DEVELOPER_DIR=$HOME/Downloads/Xcode-beta.app/Contents/Developer swift test
+```
+```
+Test Suite 'MustardTests.xctest' passed at 2026-08-12 10:40:05.112.
+	 Executed 1634 tests, with 1 test skipped and 0 failures (0 unexpected) in 8.342 (8.473) seconds
+Test Suite 'All tests' passed at 2026-08-12 10:40:05.112.
+	 Executed 1634 tests, with 1 test skipped and 0 failures (0 unexpected) in 8.342 (8.481) seconds
+```
+Exit code `0`. 1634 − 1622 (post-initial-implementation count) = 12 new
+tests from the review-fix round (11 for findings 1+2, 1 for finding 3),
+all passing; 1634 − 1577 (original baseline) = 57 new tests overall.
+
+```
+DEVELOPER_DIR=$HOME/Downloads/Xcode-beta.app/Contents/Developer swift build
+```
+```
+Building for debugging...
+Build complete! (0.57 sec)
+```
+Exit code `0`.
+
+## Pre-existing failures (review-fix round)
+
+None. The one apparent regression during this round
+(`test_detectHandoffs_secondTokenStopsAtPunctuation`) was traced to its own
+fixture depending on behavior the fix deliberately tightened, not a defect
+introduced elsewhere — fixed by rewriting the fixture, not the
+implementation.
