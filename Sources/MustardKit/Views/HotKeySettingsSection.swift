@@ -35,7 +35,7 @@ struct HotKeySettingsSection: View {
                 if case .conflict = registration(for: action) {
                     Text("In use by another app — pick a different chord, or free it there.")
                         .font(Theme.Fonts.caption)
-                        .foregroundStyle(Theme.Palette.warning)
+                        .foregroundStyle(Theme.Palette.error)
                 }
             }
             Spacer()
