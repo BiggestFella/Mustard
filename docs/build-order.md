@@ -117,9 +117,20 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       - Acceptance: approve the "Email Bree" voice rec → card moves Queued → (worker) →
         Needs Review with a live Gmail draft link.
 
-- [ ] **F28 On-device rewrite (⌃⌥R)** *(spec + plan approved 2026-08-05; Linear
-      BAK-313..327 filed in **Backlog**, deliberately NOT agent-ready — Leon asked for
-      the ticket and plan only)*. Select text in any app → ⌃⌥R → review an Apple
+- [x] **F28 On-device rewrite (⌃⌥R)** — ✅ **PHASE 1 BUILT 2026-08-12** (BAK-313,
+      Tasks 1–14). All fourteen plan tasks implemented TDD-first: `RewriteIntent`,
+      `RewriteRoles` (own policy, admits `AXWebArea`), `RewriteRefusal`/`RewriteBudget`,
+      the three-rung `SelectionLadder` (unreadable ≠ empty), `RewriteGate` split around
+      the read so ⌘C can never reach a password field, `RewriteDraft`/`RewritePrompt`
+      + band resources, `AccessibilitySelectionReader` (+ live AX/⌘C rungs),
+      `SelectionRestorer`, `RewriteCoordinator` (gate-before-read and
+      reassert-before-write both pinned by tests), `RewriteLog` boundary tracing,
+      `RewriteHotKey`, the card + non-activating panel, and `RewriteController`
+      wiring in `MustardApp`. Suite 1577 → 1645, `./build-app.sh` assembles.
+      ⚠️ **The cross-app matrix is UNRUN** — foreign-app behaviour is unverified on
+      hardware (`docs/rewrite-acceptance-checklist.md`, BAK-327).
+      *Original entry:* spec + plan approved 2026-08-05; Linear BAK-313..327 filed in
+      Backlog, deliberately not agent-ready — Leon asked for the ticket and plan only. Select text in any app → ⌃⌥R → review an Apple
       Foundation Models rewrite in a floating card → Return replaces the selection.
       Completes the hotkey family (⌃⌥Space captures, ⌃⌥D dictates, ⌃⌥R rewrites).
       Phase 1 is four fixed intents; phase 2 adds a voice profile distilled from the
