@@ -882,3 +882,34 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #121 opened and merged. No release, no
   remote deletion, no secrets.
 - **Revert:** `git revert 74b3c88`
+
+## 2026-08-12 — MERGED · Notch shelf redesign, F31 (PR #123)
+- **What landed:** the notch became a tabbed command shelf (Today · Agent · Meetings ·
+  Clips · Shelf · custom collections): hover peeks with a 0.3s grace, click/⌘⇧N pins,
+  ⌃⌥V opens Clips (customizable via the new Hotkeys settings, id 4); Mustard-owned
+  clipboard history (1s changeCount poll, concealed/transient + password managers
+  excluded, 200-item prune exempting pinned/filed, 5MB image cap); Shelf drag-in/out;
+  collections with unfile-on-delete; Meetings tab (recorder re-hosted, consent surface
+  zero-diff, recent recordings deep-link); dictation transcripts now ALSO land in
+  Clips (deliberate spec reversal — secure fields provably never stored); all
+  top-of-screen panels share one NotchScreenPicker policy. Spec + plan under
+  docs/superpowers/{specs,plans}/2026-08-12-notch-shelf-redesign*.
+- **Risk:** medium by the path/label matrix; the whole-branch reviewer flagged the
+  always-on local clipboard recorder as brushing the "data" high class — weighed and
+  accepted as medium: local-only, no outward surface, privacy invariants unit-tested,
+  feature is exactly what Leon's approved spec asked for.
+- **Checks:** `swift test` exit 0 — **1798 tests, 1 skipped, 0 failures** (baseline
+  1702 at branch, 1737 after PR #121; merged main's hotkey work in-branch pre-merge);
+  `swift build` + `./build-app.sh` exit 0; CI pass on the mustard runner.
+- **Fresh-context review:** PASS — per-task two-stage reviews (19 tasks) plus a final
+  whole-branch review; all Important findings fixed in-branch (image-clip clipboard
+  clobber, key-capable panel for Return-paste, own-write sweep, dictation store
+  binding).
+- **⚠ Leon eye-check OUTSTANDING:** the 10-item list on PR #123 — headline items:
+  copy anywhere → appears in Clips (1Password must NOT); ⌃⌥V opens pinned on Clips;
+  drag file onto notch → Shelf; dictate → Dictation clip (password field → nothing);
+  Settings → Hotkeys shows the new "Clipboard history" row and rebinding moves the
+  live chord.
+- **Outward actions:** branch pushed, PR #123 opened and merged, remote branch
+  deleted. No release, no remote data deletion, no secrets.
+- **Revert:** `git revert 2d4ae6b`
