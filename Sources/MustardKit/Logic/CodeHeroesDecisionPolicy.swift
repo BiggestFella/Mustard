@@ -26,7 +26,9 @@ public enum CodeHeroesDecisionPolicy {
     public static func isProjection(_ projection: Projection) -> Bool { projection.isReadOnly && isProjection(source: projection.source) }
 
     public static func projection(for cluster: CodeHeroesDecisionQueue.Cluster) throws -> Projection {
-        .init(uid: uid(clusterID: cluster.clusterID), title: cluster.title, area: try area(for: cluster.projectID), stage: try stage(for: cluster.mustardStage), priority: try priority(for: cluster.priority), owner: .agent, tags: ["codeheroes", "decision", "project:\(cluster.projectID)", "triage:\(cluster.triageState)", "human-action"], notes: boundedNotes(for: cluster), source: source, sourceDecisionIDs: cluster.sourceDecisionIDs, isReadOnly: true)
+        var tags = ["codeheroes", "decision", "project:\(cluster.projectID)", "triage:\(cluster.triageState)"]
+        if cluster.humanActionRequired { tags.append("human-action") }
+        return .init(uid: uid(clusterID: cluster.clusterID), title: cluster.title, area: try area(for: cluster.projectID), stage: try stage(for: cluster.mustardStage), priority: try priority(for: cluster.priority), owner: .agent, tags: tags, notes: boundedNotes(for: cluster), source: source, sourceDecisionIDs: cluster.sourceDecisionIDs, isReadOnly: true)
     }
 
     public static func boundedNotes(for cluster: CodeHeroesDecisionQueue.Cluster) -> String {

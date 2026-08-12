@@ -26,6 +26,8 @@ final class CodeHeroesDecisionQueueTests: XCTestCase {
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
         queue = try fixture(); queue.mustardImport = "read-only-but-writable"
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
+        queue = try fixture(); queue.mustardImport = "future-read-only-v2"
+        XCTAssertNoThrow(try CodeHeroesDecisionQueue.validate(queue))
         queue = try fixture(); queue.sourceRunID = "RUN-"
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
         queue = try fixture(); queue.sourceReceipt = ""
@@ -37,6 +39,8 @@ final class CodeHeroesDecisionQueueTests: XCTestCase {
         queue.queue.append(queue.queue[0])
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
         queue = try fixture(); queue.summary["token"] = .string("ghp_abcdefghijklmnopqrstuvwxyz1234567890")
+        XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
+        queue = try fixture(); queue.summary["token"] = .string("sk-proj-abcdefghijklmnopqrstuvwxyz1234567890")
         XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
     }
 
@@ -68,6 +72,24 @@ final class CodeHeroesDecisionQueueTests: XCTestCase {
         let result = CodeHeroesDecisionQueue.clusterValidation(for: queue)
         XCTAssertEqual(result.eligible.count, 12)
         XCTAssertEqual(result.findings.single?.reason, "Source-level secret-shaped content")
+    }
+
+    func test_clusterValidationScansClusterTextForProjectKeySecrets() throws {
+        var queue = try fixture()
+        queue.queue[0].question = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"
+        let result = CodeHeroesDecisionQueue.clusterValidation(for: queue)
+        XCTAssertEqual(result.eligible.count, 12)
+        XCTAssertEqual(result.findings.single?.reason, "Source-level secret-shaped content")
+    }
+
+    func test_validationRejectsWhitespacePaddedOrUnsafeClusterIDsAndNormalizedDuplicates() throws {
+        var queue = try fixture()
+        queue.queue[0].clusterID = " CH-01 "
+        XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
+        queue = try fixture(); queue.queue[1].clusterID = "CH-01"
+        XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
+        queue = try fixture(); queue.queue[0].clusterID = "CH/01"
+        XCTAssertThrowsError(try CodeHeroesDecisionQueue.validate(queue))
     }
 
     func test_clusterFindingsSkipInvalidClustersWhileKeepingValidClustersEligible() throws {

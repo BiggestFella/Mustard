@@ -4,6 +4,11 @@ import Foundation
 /// It deliberately contains no filesystem or SwiftData dependency: source opening and
 /// reconciliation are adapter responsibilities in a later task.
 public enum CodeHeroesDecisionQueue {
+    /// Versioned contract values which have been reviewed as read-only import modes.
+    public static let approvedReadOnlyImportMarkers: Set<String> = ["future-adapter-only", "future-read-only-v2"]
+    /// Stable projection identity grammar: an alphanumeric first character followed by
+    /// alphanumerics, dots, underscores, or hyphens. Whitespace is never normalized.
+    public static let clusterIDPattern = #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#
     public struct Document: Codable, Equatable {
         public var schemaVersion: Int
         public var reportType: String
@@ -116,7 +121,8 @@ public enum CodeHeroesDecisionQueue {
         guard !document.sourceReceipt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ValidationError.queue(.init(scope: .queue, reason: "Missing source receipt")) }
         guard !document.queue.isEmpty else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue is empty")) }
         let ids = document.queue.map(\.clusterID)
-        guard Set(ids).count == ids.count, !ids.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue has duplicate or empty cluster IDs")) }
+        guard Set(ids).count == ids.count else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue has duplicate cluster IDs")) }
+        guard ids.allSatisfy({ $0.range(of: clusterIDPattern, options: .regularExpression) != nil }) else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue has invalid cluster IDs")) }
         guard !containsSecret(in: queueLevelText(document)) else { throw ValidationError.queue(.init(scope: .queue, reason: "Queue-level secret-shaped content")) }
     }
 
@@ -140,12 +146,12 @@ public enum CodeHeroesDecisionQueue {
         return .init(eligible: eligible, findings: findings)
     }
 
-    private static func isReadOnlyImportMarker(_ marker: String) -> Bool { marker == "future-adapter-only" }
+    private static func isReadOnlyImportMarker(_ marker: String) -> Bool { approvedReadOnlyImportMarkers.contains(marker) }
     private static func queueLevelText(_ document: Document) -> String {
         let exclusions = document.historicalExclusions.flatMap { [$0.decisionID, $0.reason, $0.mustardVisibility] }
         return ([document.generatedAt, document.sourceRunID, document.sourceReceipt, document.canonicalInput, document.mustardImport]
             + document.historicalOpenDecisionIDs + exclusions + document.summary.values.map(\.text)).joined(separator: "\n")
     }
     private static func clusterText(_ cluster: Cluster) -> String { ([cluster.title, cluster.question, cluster.nextAction, cluster.whyGrouped] + cluster.sourceDecisionIDs).joined(separator: "\n") }
-    private static func containsSecret(in value: String) -> Bool { value.range(of: #"(?i)(ghp_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|sk-[a-z0-9]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"#, options: .regularExpression) != nil }
+    private static func containsSecret(in value: String) -> Bool { value.range(of: #"(?i)(ghp_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|sk-proj-[a-z0-9_-]{16,}|sk-[a-z0-9]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"#, options: .regularExpression) != nil }
 }

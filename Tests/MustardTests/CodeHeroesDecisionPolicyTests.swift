@@ -8,6 +8,7 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "sandvik"), "Sandvik")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "code-heroes-internal"), "Code Heroes")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "cross-project"), "Code Heroes")
+        XCTAssertEqual(try CodeHeroesDecisionPolicy.area(for: "sandvik"), "Sandvik")
         XCTAssertEqual(try CodeHeroesDecisionPolicy.stage(for: "needsInput"), .needsInput)
         XCTAssertEqual(try CodeHeroesDecisionPolicy.stage(for: "needsReview"), .needsReview)
         XCTAssertEqual(try CodeHeroesDecisionPolicy.priority(for: "high"), .high)
@@ -33,6 +34,10 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         XCTAssertEqual(projection.tags, ["codeheroes", "decision", "project:dl", "triage:needs-human-decision", "human-action"])
         XCTAssertTrue(projection.notes.contains("Question:"))
         XCTAssertTrue(projection.notes.contains("Source IDs:"))
+
+        let noAction = try CodeHeroesDecisionPolicy.projection(for: .init(clusterID: "S-1", projectID: "sandvik", title: "Sandvik", triageState: "needs-evidence", mustardStage: "needsReview", priority: "low", decisionRequired: false, humanActionRequired: false, question: "Q", nextAction: "N", whyGrouped: "W", sourceDecisionIDs: ["DEC-2"]))
+        XCTAssertEqual(noAction.area, "Sandvik")
+        XCTAssertFalse(noAction.tags.contains("human-action"))
     }
 
     private func cluster() -> CodeHeroesDecisionQueue.Cluster {
