@@ -29,6 +29,12 @@ public final class AgentService {
     public private(set) var currentTitle: String?
     /// Digest of the last meeting-task import (e.g. "imported 3 meeting tasks (2 clients)").
     public private(set) var lastMeetingSummary: String?
+    /// Summary of the most recent manual Code Heroes decision queue import.
+    public private(set) var lastCodeHeroesImportSummary: String?
+    /// Code Heroes queue import feedback, kept separate from the agent loop's error state.
+    public private(set) var lastCodeHeroesImportError: String?
+    /// Synchronous for now; exposed so a future UI can disable its import action.
+    public private(set) var isImportingCodeHeroesQueue = false
     /// Transient guidance for the user (not a failure) — e.g. a blocked hand-off needing
     /// a client area first (BAK-90). Surfaced as a calm banner, cleared on the next success.
     public private(set) var lastHint: String?
@@ -49,6 +55,51 @@ public final class AgentService {
         self.bridge = bridge
         self.executionGate = executionGate ?? AgentExecutionGate()
         self.persist = persist ?? { try context.save() }
+    }
+
+    /// Imports a reviewed Code Heroes queue through the read-only projection adapter.
+    /// This performs no connector, repository, export, or scheduler work.
+    @discardableResult
+    public func importCodeHeroesDecisionQueue(
+        settings: CodeHeroesQueueSettings,
+        now: Date = .now
+    ) -> CodeHeroesDecisionAdapter.ImportReport? {
+        let repositoryRoot = settings.repositoryRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        let queuePath = settings.queuePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !repositoryRoot.isEmpty, !queuePath.isEmpty else {
+            lastCodeHeroesImportSummary = nil
+            lastCodeHeroesImportError = "Code Heroes import requires a repository root and queue file path."
+            return nil
+        }
+
+        let rootURL = URL(fileURLWithPath: repositoryRoot)
+        var rootIsDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: rootURL.path, isDirectory: &rootIsDirectory), rootIsDirectory.boolValue else {
+            lastCodeHeroesImportSummary = nil
+            lastCodeHeroesImportError = "Code Heroes import repository root is unavailable."
+            return nil
+        }
+
+        let queueURL = URL(fileURLWithPath: queuePath)
+        var queueIsDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: queueURL.path, isDirectory: &queueIsDirectory), !queueIsDirectory.boolValue else {
+            lastCodeHeroesImportSummary = nil
+            lastCodeHeroesImportError = "Code Heroes import queue file is unavailable."
+            return nil
+        }
+
+        isImportingCodeHeroesQueue = true
+        lastCodeHeroesImportError = nil
+        defer { isImportingCodeHeroesQueue = false }
+
+        let report = CodeHeroesDecisionAdapter(
+            context: context,
+            repositoryRoot: rootURL,
+            now: { now }
+        ).importQueue(at: queueURL)
+        lastCodeHeroesImportSummary = report.summary
+        lastCodeHeroesImportError = report.findings.first.map { "Code Heroes import: \($0.reason)" }
+        return report
     }
 
     /// Manual vault sweep: ask claude for recommendations, ingest them through the
