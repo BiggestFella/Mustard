@@ -149,24 +149,34 @@ final class BridgeExportTests: XCTestCase {
         XCTAssertTrue(plan.writes.isEmpty)
     }
 
-    func test_readOnlyCodeHeroesNeedsInputProjectionNeverEntersAgentExportLanes() {
-        let projection = task(.needsInput, uid: "codeheroes:decision:DL-1")
-        projection.source = CodeHeroesDecisionPolicy.source
+    func test_readOnlyCodeHeroesAttentionProjectionsNeverEnterAgentExportLanes() {
+        let needsInputProjection = task(.needsInput, uid: "codeheroes:decision:DL-INPUT")
+        needsInputProjection.source = CodeHeroesDecisionPolicy.source
+        let needsReviewProjection = task(.needsReview, uid: "codeheroes:decision:DL-REVIEW")
+        needsReviewProjection.source = CodeHeroesDecisionPolicy.source
         let prep = task(.forAgent, uid: "ordinary-prep", connected: true)
         let execute = task(.queued, uid: "ordinary-execute", action: .ticket, connected: true)
         var routedUIDs: [String] = []
 
         let plan = BridgeExport.plan(
-            tasks: [projection, prep, execute],
+            tasks: [needsInputProjection, needsReviewProjection, prep, execute],
             route: { task in routedUIDs.append(task.uid); return self.target },
             liveOutboxUIDs: [:],
             now: now
         )
 
-        XCTAssertTrue(CodeHeroesDecisionPolicy.isProjection(projection))
-        XCTAssertNil(projection.actionTypeRaw)
-        XCTAssertNil(projection.agentRun)
-        XCTAssertNil(projection.delegation)
+        let projections = [needsInputProjection, needsReviewProjection]
+        let projectionUIDs = Set(projections.map(\.uid))
+        for projection in projections {
+            XCTAssertTrue(CodeHeroesDecisionPolicy.isProjection(projection))
+            XCTAssertEqual(projection.source, CodeHeroesDecisionPolicy.source)
+            XCTAssertNil(projection.actionTypeRaw)
+            XCTAssertNil(projection.agentRun)
+            XCTAssertNil(projection.delegation)
+        }
+
+        XCTAssertTrue(projectionUIDs.isDisjoint(with: routedUIDs))
+        XCTAssertTrue(projectionUIDs.isDisjoint(with: plan.writes.map(\.order.uid)))
         XCTAssertEqual(Set(routedUIDs), Set(["ordinary-prep", "ordinary-execute"]))
         XCTAssertEqual(plan.writes.map(\.order.uid), ["ordinary-prep", "ordinary-execute"])
         XCTAssertEqual(plan.writes.map(\.order.mode), ["prep", "execute"])
