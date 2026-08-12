@@ -63,6 +63,7 @@ public struct RootView: View {
     @State private var sourcePanel = SourcePanelController()
     @State private var selectedTaskFromNotch: MustardTask?
     @Environment(NotchNavigation.self) private var notchNav
+    @Environment(HotKeyBindingsStore.self) private var hotKeys
     @Query private var recommendations: [Recommendation]
     @Query private var tasks: [MustardTask]
 
@@ -125,16 +126,17 @@ public struct RootView: View {
         }
         .background {
             Group {
-                // Hidden trigger: ⌘K opens the command bar while the window is key.
+                // Hidden trigger: opens the command bar while the window is key.
+                // Chords are user-set (Settings → Hotkeys) and update live.
                 Button("") { showCommandBar.toggle() }
-                    .keyboardShortcut("k", modifiers: .command)
-                // Hidden trigger: ⌘⇧S toggles the source inspector.
+                    .keyboardShortcut(hotKeys.shortcut(for: .commandBar))
+                // Hidden trigger: toggles the source inspector.
                 Button("") { sourcePanel.isPresented.toggle() }
-                    .keyboardShortcut("s", modifiers: [.command, .shift])
-                // Hidden trigger: ⌘⇧F opens full-text note search (polish pack B).
-                // Closes the ⌘K bar first — the two palettes must never stack.
+                    .keyboardShortcut(hotKeys.shortcut(for: .sourceInspector))
+                // Hidden trigger: opens full-text note search (polish pack B).
+                // Closes the command bar first — the two palettes must never stack.
                 Button("") { showCommandBar = false; showNoteSearch.toggle() }
-                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .keyboardShortcut(hotKeys.shortcut(for: .noteSearch))
             }
             .opacity(0)
         }
