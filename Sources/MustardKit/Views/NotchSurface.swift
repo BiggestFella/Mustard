@@ -619,9 +619,45 @@ public struct NotchView: View {
     }
 }
 
-/// The "+" pill that creates a custom collection. Stubbed until the
-/// collections task lands — the shell already reserves its slot at the end of
-/// the pill row so the layout doesn't shift when it arrives.
+/// The "+" pill that creates a custom collection: taps into an inline naming
+/// field, and on submit inserts a new `ClipCollection` (rejecting blank or
+/// duplicate names) at the end of the sort order.
 struct NotchNewCollectionPill: View {
-    var body: some View { EmptyView() }
+    @Environment(\.modelContext) private var context
+    @Query private var collections: [ClipCollection]
+    @State private var naming = false
+    @State private var name = ""
+
+    var body: some View {
+        if naming {
+            TextField("Name", text: $name)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.white)
+                .frame(width: 80)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.white.opacity(0.1), in: Capsule())
+                .onSubmit {
+                    let trimmed = name.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty, !collections.contains(where: { $0.name == trimmed }) {
+                        context.insert(ClipCollection(
+                            name: trimmed,
+                            sortOrder: (collections.map(\.sortOrder).max() ?? -1) + 1))
+                        try? context.save()
+                    }
+                    name = ""
+                    naming = false
+                }
+                .onExitCommand { naming = false; name = "" }
+        } else {
+            Button { naming = true } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.white.opacity(0.08), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
 }
