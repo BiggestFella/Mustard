@@ -32,3 +32,26 @@ public enum NotchScreenPicker {
         return screens.first
     }
 }
+
+#if os(macOS)
+import AppKit
+
+extension NotchScreenPicker {
+    /// The one place panels resolve "which display is the notch display".
+    /// Used by the notch panel, the voice pill, the dictation pill, and the
+    /// quick-edit card so they can never land on different screens.
+    @MainActor
+    public static func currentScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        let descriptors = screens.enumerated().map { index, screen in
+            NotchScreenDescriptor(
+                id: index,
+                hasNotch: screen.safeAreaInsets.top > 0,
+                isMain: screen == NSScreen.main)
+        }
+        guard let chosen = choose(from: descriptors),
+              let index = chosen.id as? Int else { return NSScreen.main }
+        return screens[index]
+    }
+}
+#endif

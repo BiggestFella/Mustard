@@ -63,7 +63,9 @@ Mustard/
                                    NoteReindexScheduler, BacklinkSnippets;
                                    morning ritual: RitualPrompt, RitualPlanner;
                                    Craft editor: NoteDecoration, SlashMenu, BlockReorder,
-                                   NoteMetadata, WikilinkURL
+                                   NoteMetadata, WikilinkURL;
+                                   notch shelf (2026-08-12): ClipClassifier, ClipStoreRules,
+                                   NotchPinState, NotchTabModel/NotchPanelMetrics, NotchSearch
       Agent/                     ClaudeRunner (Process shell), VaultSweep (prompt+parser),
                                    AgentService (@Observable orchestrator), FileVaultIO
                                    (MeetingVaultIO + NoteVaultIO), NoteIndexService (notes reindex)
@@ -71,7 +73,9 @@ Mustard/
                                    AccessibilityFocusReader (AX focus snapshots, fail-closed),
                                    TextInserter + PasteboardSnapshot (direct AX insert or
                                    lossless verified ⌘V fallback), SystemDictationCoordinator
-                                   (hold-epoch guarded; transcript never lost)
+                                   (hold-epoch guarded; transcript never lost; final transcripts
+                                   also land in clip history — secure fields excepted — per the
+                                   2026-08-12 notch shelf spec)
       Meeting/                    meeting recorder (voice suite): MeetingAudioStore/-Writer
                                    (validated Recordings/<uid>/ layout, crash-recoverable),
                                    ScreenCaptureMeetingAudio + MeetingAudioCapture (two-source,
@@ -91,14 +95,26 @@ Mustard/
                                    VoiceTaskCaptureCoordinator (hotkey→pill→raw Inbox task→
                                    on-device drafting→revision-gated merge),
                                    VoiceTaskQuickEditController (notch-adjacent card)
+      Clipboard/                  notch shelf clipboard layer (2026-08-12 spec):
+                                   ClipboardMonitor + LivePasteboard (changeCount polling,
+                                   concealed/transient skip, own-write sweep); ClipStore
+                                   (+ ClipboardServices box, ClipThumbnail — 200-item prune,
+                                   5MB image cap); ClipPaster (⌘V via shared PasteKeystroke);
+                                   ClipsHotKey (⌃⌥V, id 4 — shares the "MSTD" Carbon signature
+                                   with capture id 1, dictation id 2, rewrite id 3)
       Calendar/                  GoogleOAuth (PKCE/URL/token), GoogleCalendarParser
       Views/                     SwiftUI screens + surfaces (Root, Today, Board, Week,
-                                   AgentConsole, Notch, Hover, CommandBar, TaskDetail, rows;
+                                   AgentConsole, Hover, CommandBar, TaskDetail, rows;
                                    Notes, NoteEditor [live Craft editor — no Source/Preview
                                    toggle], MarkdownTextView (TextKit-1 surface), SlashMenuView,
                                    BlockGutterOverlay, MarkdownPreview, BacklinksPanel,
                                    MorningRitual, VoiceCapturePillView [push-to-talk pill],
-                                   VoiceTaskQuickEditView [quick-edit card], VoiceSetupView)
+                                   VoiceTaskQuickEditView [quick-edit card], VoiceSetupView);
+                                   notch shelf (2026-08-12): NotchSurface is now the shell
+                                   (controller + header/pills/banner/capture) with one file per
+                                   tab — NotchTodayTab, NotchAgentTab, NotchMeetingsTab,
+                                   NotchClipsTab, NotchShelfTab, NotchCollectionTab — plus the
+                                   shared ClipCardView
       MustardContainer.swift     builds the on-disk ModelContainer
       PreviewData.swift          in-memory sample container for #Preview
   Tests/MustardTests/            XCTest — one file per Logic/Agent/Calendar unit
@@ -146,6 +162,10 @@ open build/Mustard.app
 
 `MustardApp` builds the container, owns the `AgentService`, the floating
 `HoverPanel` (⌘⇧H), the `NotchController` (⌘⇧N), and a 60s scheduled-sweep loop.
+The notch (2026-08-12 shelf redesign) is a tabbed command surface — hover peeks
+it with a collapse grace period, click or ⌘⇧N pins it open, ⌃⌥V opens it
+straight to Clips — with tabs Today · Agent · Meetings · Clips · Shelf · custom
+collections (`NotchPinState`, `NotchTabModel`).
 Data persists to `~/Library/Application Support/Mustard/mustard.store`.
 
 ## The agent / Claude subscription (critical)

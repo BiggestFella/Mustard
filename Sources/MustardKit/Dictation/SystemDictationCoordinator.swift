@@ -20,8 +20,19 @@ public enum SystemDictationPhase: Equatable, Sendable {
 /// snapshot the focused field BEFORE any audio starts, stream provisional
 /// text into the (nonactivating) pill, finalize on release, revalidate the
 /// target, normalize whitespace via `DictationWhitespace`, and insert through
-/// `TextInserter`. Deliberately holds no `ModelContext` — dictation writes
-/// into other apps, never into Mustard's store.
+/// `TextInserter`.
+///
+/// Dictation still holds no `ModelContext` of its own — the words go into
+/// other apps. But since private local clip history exists, a completed
+/// dictation ALSO lands there, by explicit spec decision
+/// (`docs/superpowers/specs/2026-08-12-notch-shelf-redesign-design.md` §1 and
+/// §3 "Dictation persistence"), which reverses this file's original
+/// "never into Mustard's store" rule. History is reached only through the
+/// injected `onFinalTranscript` hook (the coordinator stays store-free and
+/// testable), it is offered once per capture — the first insert attempt, never
+/// a retry — and **secure-field dictations are never stored anywhere**: they
+/// are refused at press, and the offer additionally sits behind the
+/// `DictationWhitespace.insertion` nil-guard.
 @MainActor
 @Observable
 public final class SystemDictationCoordinator {
@@ -68,6 +79,9 @@ public final class SystemDictationCoordinator {
     private let speech: VoiceTaskCaptureCoordinator.Speech
     private let hotKey: VoiceTaskCaptureCoordinator.HotKeySeam
     private let insert: @MainActor (String, FocusedTextTarget) async -> TextInsertionOutcome
+    /// Clip-history seam: offered the finalized words, as spoken, once per
+    /// capture. Injected so the coordinator keeps no store of its own.
+    private let onFinalTranscript: (@MainActor (String) -> Void)?
     private let pill: PillPresentation
     /// Hard ceiling on waiting for the recognizer's final answer.
     private let finalizeTimeout: TimeInterval
@@ -90,6 +104,7 @@ public final class SystemDictationCoordinator {
         speech: VoiceTaskCaptureCoordinator.Speech,
         hotKey: VoiceTaskCaptureCoordinator.HotKeySeam,
         insert: @escaping @MainActor (String, FocusedTextTarget) async -> TextInsertionOutcome,
+        onFinalTranscript: (@MainActor (String) -> Void)? = nil,
         pill: PillPresentation,
         finalizeTimeout: TimeInterval = 4,
         now: @escaping () -> Date = { .now }
@@ -98,6 +113,7 @@ public final class SystemDictationCoordinator {
         self.speech = speech
         self.hotKey = hotKey
         self.insert = insert
+        self.onFinalTranscript = onFinalTranscript
         self.pill = pill
         self.finalizeTimeout = finalizeTimeout
         self.now = now
@@ -236,6 +252,13 @@ public final class SystemDictationCoordinator {
             guard let text = DictationWhitespace.insertion(text: transcript, target: target) else {
                 return self.recover(transcript: transcript, reason: "Dictation never types into password fields.")
             }
+            // Past the secure gate, so these words may be remembered: offer them
+            // to clip history exactly once, here on the first attempt (a retry
+            // must not create a second entry) and BEFORE the insert, so a failed
+            // insertion still leaves the transcript recoverable from history.
+            // Pre-normalization on purpose — history keeps the words as spoken;
+            // the leading/trailing space is target-specific.
+            self.onFinalTranscript?(transcript)
             let outcome = await self.insert(text, target)
             voiceLog.notice("dictation: insert outcome=\(String(describing: outcome), privacy: .public)")
             guard self.holdEpoch == epoch else { return }
@@ -252,7 +275,9 @@ public final class SystemDictationCoordinator {
     /// The recoverable pill's "Try Current Field": re-attempt insertion of the
     /// preserved transcript into whatever is focused NOW — a fresh snapshot,
     /// fresh whitespace, the same fail-closed rules. The transcript survives
-    /// another failure, so retries can keep coming.
+    /// another failure, so retries can keep coming. Deliberately does NOT offer
+    /// the transcript to clip history: the first attempt already did, and these
+    /// are the same words.
     public func retryIntoCurrentField() {
         guard case .recoverable = phase, let transcript = recoveredTranscript else { return }
         holdEpoch += 1
@@ -376,7 +401,12 @@ extension SystemDictationCoordinator {
     /// fresh SpeechAnalyzer session per hold (macOS 27's live driver — on a
     /// macOS 26 install the pill reports dictation unavailable instead of
     /// failing silently), and the ⌃⌥D chord.
-    public static func live() -> SystemDictationCoordinator {
+    ///
+    /// `clipStore` is the clip-history sink: pass the app's store so completed
+    /// dictations are also remembered locally (spec §1/§3). Held weakly — the
+    /// coordinator lives as long as the app, and must not be what keeps a store
+    /// alive. Omitting it (tests, previews) simply stores nothing.
+    public static func live(clipStore: ClipStore? = nil) -> SystemDictationCoordinator {
         let reader = AccessibilityFocusReader.live()
         let inserter = TextInserter.live(reader: reader)
         return SystemDictationCoordinator(
@@ -390,6 +420,9 @@ extension SystemDictationCoordinator {
             },
             hotKey: .live(PushToTalkHotKey.dictation()),
             insert: { text, target in await inserter.insert(text, into: target) },
+            onFinalTranscript: { [weak clipStore] transcript in
+                clipStore?.addDictation(transcript: transcript)
+            },
             pill: .panel())
     }
 }
@@ -418,7 +451,7 @@ private final class DictationPillHolder {
             panel.contentView = NSHostingView(rootView: SystemDictationPillView(coordinator: coordinator))
             self.panel = panel
         }
-        if let screen = NSScreen.main, let panel {
+        if let screen = NotchScreenPicker.currentScreen(), let panel {
             let frame = screen.visibleFrame
             panel.setFrameTopLeftPoint(NSPoint(
                 x: frame.midX - panel.frame.width / 2,

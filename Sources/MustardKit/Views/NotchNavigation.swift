@@ -11,6 +11,9 @@ import Observation
 public final class NotchNavigation {
     public var pendingTask: MustardTask?
     public var openAgentConsole = false
+    /// Set by the notch's Meetings tab; RootView switches to the Meetings
+    /// screen and MeetingReviewView selects this uid.
+    public var pendingMeetingUID: String?
 
     public init() {}
 }

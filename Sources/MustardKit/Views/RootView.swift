@@ -162,6 +162,12 @@ public struct RootView: View {
             screen = .agent
             notchNav.openAgentConsole = false
         }
+        .onChange(of: notchNav.pendingMeetingUID, initial: true) { _, uid in
+            guard uid != nil else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            screen = .meetings
+            // MeetingReviewView reads and clears the uid itself.
+        }
     }
 
     /// Persistent agent co-pilot dock (BAK-106): shown on every screen except the Agent

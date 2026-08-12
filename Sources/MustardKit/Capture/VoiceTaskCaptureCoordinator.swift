@@ -763,7 +763,7 @@ private final class PanelHolder {
             panel.contentView = NSHostingView(rootView: VoiceCapturePillView(controller: coordinator))
             self.panel = panel
         }
-        if let screen = NSScreen.main, let panel {
+        if let screen = NotchScreenPicker.currentScreen(), let panel {
             // Top-centre, tucked under the notch/menu bar where the eye already is.
             let frame = screen.visibleFrame
             panel.setFrameTopLeftPoint(NSPoint(

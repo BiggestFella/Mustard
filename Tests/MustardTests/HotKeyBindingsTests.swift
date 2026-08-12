@@ -2,7 +2,7 @@ import XCTest
 
 @testable import MustardKit
 
-/// The eight-action bindings registry (BoardSettings pattern): defaults,
+/// The nine-action bindings registry (BoardSettings pattern): defaults,
 /// round-trip, legacy-key compatibility, resets, malformed fallback.
 final class HotKeyBindingsTests: XCTestCase {
     private func makeStore() -> UserDefaults {
@@ -14,6 +14,7 @@ final class HotKeyBindingsTests: XCTestCase {
         XCTAssertEqual(bindings.chord(for: .pushToTalk), HotKeyChord(keyCode: 49, carbonModifiers: 0x1800))
         XCTAssertEqual(bindings.chord(for: .dictation), HotKeyChord(keyCode: 2, carbonModifiers: 0x1800))
         XCTAssertEqual(bindings.chord(for: .rewrite), HotKeyChord(keyCode: 15, carbonModifiers: 0x1800))
+        XCTAssertEqual(bindings.chord(for: .clips), HotKeyChord(keyCode: 9, carbonModifiers: 0x1800))
         XCTAssertEqual(bindings.chord(for: .hover), HotKeyChord(keyCode: 4, carbonModifiers: 0x300))
         XCTAssertEqual(bindings.chord(for: .notch), HotKeyChord(keyCode: 45, carbonModifiers: 0x300))
         XCTAssertEqual(bindings.chord(for: .commandBar), HotKeyChord(keyCode: 40, carbonModifiers: 0x100))
@@ -28,6 +29,8 @@ final class HotKeyBindingsTests: XCTestCase {
         XCTAssertEqual(HotKeyAction.pushToTalk.modifiersKey, "voiceHotKeyModifiers")
         XCTAssertEqual(HotKeyAction.dictation.codeKey, "dictationHotKeyCode")
         XCTAssertEqual(HotKeyAction.rewrite.codeKey, "rewriteHotKeyCode")
+        XCTAssertEqual(HotKeyAction.clips.codeKey, "clipsHotKeyCode")
+        XCTAssertEqual(HotKeyAction.clips.modifiersKey, "clipsHotKeyModifiers")
         XCTAssertEqual(HotKeyAction.hover.codeKey, "hotkey.hover.code")
     }
 

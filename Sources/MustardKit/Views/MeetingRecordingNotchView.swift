@@ -22,9 +22,8 @@ public struct MeetingRecordingNotchView: View {
     private func content(_ recorder: MeetingCaptureCoordinator) -> some View {
         switch recorder.state {
         case .idle:
-            // Suggestion first (Task 9) — it routes through the same consent
-            // path; the manual button stays right below it.
-            MeetingStartPromptView()
+            // The start suggestion now lives in the notch shell's banner slot
+            // (visible from any tab); this view is the manual control only.
             Button {
                 Task { await recorder.requestStart(title: "Meeting") }
             } label: {

@@ -1,11 +1,11 @@
 import Foundation
 
-/// One customizable shortcut. The three global (Carbon) actions keep the
-/// UserDefaults keys they have always had — `PushToTalkHotKey`/`RewriteHotKey`
-/// read them at init — so pre-existing manual overrides survive this feature
-/// with no migration. In-app actions get namespaced keys.
+/// One customizable shortcut. The global (Carbon) actions keep the
+/// UserDefaults keys they have always had — `PushToTalkHotKey`/`RewriteHotKey`/
+/// `ClipsHotKey` read them at init — so pre-existing manual overrides survive
+/// this feature with no migration. In-app actions get namespaced keys.
 public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
-    case pushToTalk, dictation, rewrite
+    case pushToTalk, dictation, rewrite, clips
     case hover, notch, commandBar, sourceInspector, noteSearch
 
     public var id: String { rawValue }
@@ -19,7 +19,7 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
 
     public var scope: Scope {
         switch self {
-        case .pushToTalk, .dictation, .rewrite: .global
+        case .pushToTalk, .dictation, .rewrite, .clips: .global
         case .hover, .notch, .commandBar, .sourceInspector, .noteSearch: .inApp
         }
     }
@@ -29,6 +29,7 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .pushToTalk: "Push-to-talk capture"
         case .dictation: "System dictation"
         case .rewrite: "Rewrite selection"
+        case .clips: "Clipboard history"
         case .hover: "Hover panel"
         case .notch: "Notch"
         case .commandBar: "Command bar"
@@ -42,6 +43,7 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .pushToTalk: HotKeyChord(keyCode: 49, carbonModifiers: 0x1800)  // ⌃⌥Space
         case .dictation: HotKeyChord(keyCode: 2, carbonModifiers: 0x1800)  // ⌃⌥D
         case .rewrite: HotKeyChord(keyCode: 15, carbonModifiers: 0x1800)  // ⌃⌥R
+        case .clips: HotKeyChord(keyCode: 9, carbonModifiers: 0x1800)  // ⌃⌥V
         case .hover: HotKeyChord(keyCode: 4, carbonModifiers: 0x300)  // ⌘⇧H
         case .notch: HotKeyChord(keyCode: 45, carbonModifiers: 0x300)  // ⌘⇧N
         case .commandBar: HotKeyChord(keyCode: 40, carbonModifiers: 0x100)  // ⌘K
@@ -55,6 +57,7 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .pushToTalk: "voiceHotKeyCode"
         case .dictation: "dictationHotKeyCode"
         case .rewrite: "rewriteHotKeyCode"
+        case .clips: "clipsHotKeyCode"
         default: "hotkey.\(rawValue).code"
         }
     }
@@ -64,6 +67,7 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .pushToTalk: "voiceHotKeyModifiers"
         case .dictation: "dictationHotKeyModifiers"
         case .rewrite: "rewriteHotKeyModifiers"
+        case .clips: "clipsHotKeyModifiers"
         default: "hotkey.\(rawValue).modifiers"
         }
     }
@@ -74,6 +78,7 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .pushToTalk: "Task capture"
         case .dictation: "Dictation"
         case .rewrite: "Rewrite"
+        case .clips: "Clips"
         default: nil
         }
     }

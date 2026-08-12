@@ -97,6 +97,27 @@ public struct TextInserter {
 #if os(macOS)
 import AppKit
 import ApplicationServices
+import CoreGraphics
+
+/// Synthesizes ⌘V to a pid (virtual key 9 = "v", command flag on both the
+/// down and the up event). Shared by dictation's paste fallback and the
+/// notch's clip paste-back — requires the same Accessibility grant dictation
+/// already needs; posting proves nothing about the target servicing it, so
+/// callers treat `true` as "posted", not "delivered".
+enum PasteKeystroke {
+    static func send(to pid: pid_t) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+            return false
+        }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.postToPid(pid)
+        keyUp.postToPid(pid)
+        return true
+    }
+}
 
 extension TextInserter {
     /// The production inserter: AX selected-text replacement first, then the
@@ -129,18 +150,7 @@ extension TextInserter {
             writeTranscript: { PasteboardSnapshot.write($0, to: .general) },
             currentChangeCount: { NSPasteboard.general.changeCount },
             restorePasteboard: { $0.restore(to: .general) },
-            sendPaste: { pid in
-                guard let source = CGEventSource(stateID: .hidSystemState),
-                      let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
-                      let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
-                    return false
-                }
-                keyDown.flags = .maskCommand
-                keyUp.flags = .maskCommand
-                keyDown.postToPid(pid)
-                keyUp.postToPid(pid)
-                return true
-            },
+            sendPaste: { pid in PasteKeystroke.send(to: pid) },
             settle: {
                 // Give the target app time to service ⌘V before restoration.
                 try? await Task.sleep(for: .milliseconds(350))

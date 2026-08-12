@@ -197,7 +197,7 @@ public final class VoiceTaskQuickEditController {
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.contentView = NSHostingView(rootView: VoiceTaskQuickEditView(state: state))
-        if let screen = chooseScreen() {
+        if let screen = NotchScreenPicker.currentScreen() {
             // Below the notch/menu bar of the chosen display, centred.
             let frame = screen.visibleFrame
             panel.setFrameTopLeftPoint(NSPoint(
@@ -225,24 +225,6 @@ public final class VoiceTaskQuickEditController {
         }
         panel?.orderOut(nil)
         panel = nil
-    }
-
-    /// The same display policy as the notch (`NotchScreenPicker`): follow the
-    /// external monitor in use, else the built-in notch screen.
-    private func chooseScreen() -> NSScreen? {
-        let screens = NSScreen.screens
-        guard !screens.isEmpty else { return nil }
-        let descriptors = screens.enumerated().map { index, screen in
-            NotchScreenDescriptor(
-                id: AnyHashable(index),
-                hasNotch: screen.safeAreaInsets.top > 0,
-                isMain: screen == NSScreen.main)
-        }
-        guard let chosen = NotchScreenPicker.choose(from: descriptors),
-              let index = chosen.id.base as? Int, screens.indices.contains(index) else {
-            return NSScreen.main
-        }
-        return screens[index]
     }
 }
 

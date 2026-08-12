@@ -131,6 +131,8 @@ struct MustardApp: App {
     @State private var voiceCapture: VoiceTaskCaptureCoordinator?
     @State private var dictation: SystemDictationCoordinator?
     @State private var rewrite: RewriteController?
+    @State private var clipboard: ClipboardServices?
+    @State private var clipsHotKey: ClipsHotKey?
     @State private var meetingRecorder: MeetingCaptureCoordinator
     @State private var meetingSuggestions: MeetingSuggestionMonitor
     @State private var didRecoverMeetings = false
@@ -238,20 +240,60 @@ struct MustardApp: App {
                         meetingSuggestions.startPolling()
                         didRecoverMeetings = true
                     }
+                    // Built BEFORE the notch: the panel's content closure captures
+                    // the services box, so it has to exist first. `services` is a
+                    // plain non-optional local — the escaping closure must never
+                    // read the @State property back out.
+                    let services: ClipboardServices
+                    if let existing = clipboard {
+                        services = existing
+                    } else {
+                        // Mustard owns clipboard capture (notch shelf spec §1):
+                        // one poller, concealed/transient types skipped, password
+                        // managers excluded, 200-item history in SwiftData.
+                        let store = ClipStore(context: container.mainContext)
+                        let monitor = ClipboardMonitor(pasteboard: LivePasteboard()) { candidate in
+                            store.ingest(candidate)
+                        }
+                        monitor.start()
+                        services = ClipboardServices(
+                            store: store, monitor: monitor, paster: .live(monitor: monitor))
+                        clipboard = services
+                    }
+                    // Same reason as `services`: the live-rebind closure below
+                    // must capture the instance, never re-read the @State box.
+                    var clipsKey = clipsHotKey
                     if notch == nil {
-                        let controller = NotchController { onHover in
+                        let controller = NotchController { controller in
                             AnyView(
-                                NotchView(onHoverChange: onHover)
+                                NotchView(controller: controller)
                                     .environment(agent)
                                     .environment(taskAgent)
                                     .environment(notchNav)
                                     .environment(meetingRecorder)
                                     .environment(meetingSuggestions)
+                                    .environment(services)
                                     .modelContainer(container)
                             )
                         }
                         controller.show()
                         notch = controller
+
+                        if clipsKey == nil {
+                            // ⌃⌥V (or whatever Settings → Hotkeys has bound)
+                            // anywhere → the panel opens pinned on Clips.
+                            // Carbon does the background work; the menu item
+                            // below only makes the chord discoverable. A
+                            // conflict is logged by `register()` and posted to
+                            // the shared board, never silent.
+                            let hotKey = ClipsHotKey()
+                            hotKey.onPress = {
+                                controller.openPinned(on: NotchTabModel.clipsHotKeyTab)
+                            }
+                            hotKey.register()
+                            clipsKey = hotKey
+                            clipsHotKey = hotKey
+                        }
                     }
                     if voiceCapture == nil {
                         // Push-to-talk capture: hold ⌃⌥Space anywhere, speak, release
@@ -273,9 +315,11 @@ struct MustardApp: App {
                     }
                     if dictation == nil {
                         // System-wide dictation: hold ⌃⌥D in any app, speak, release
-                        // → the words land at the cursor (never in secure fields,
-                        // never in Mustard's store).
-                        let coordinator = SystemDictationCoordinator.live()
+                        // → the words land at the cursor (never in secure fields).
+                        // Completed dictations are also kept in local clip history
+                        // (notch shelf spec §1/§3) — hence the store, built above.
+                        let coordinator = SystemDictationCoordinator.live(
+                            clipStore: services.store)
                         coordinator.activate()
                         dictation = coordinator
                     }
@@ -287,6 +331,7 @@ struct MustardApp: App {
                     let capture = voiceCapture
                     let dictating = dictation
                     let rewriting = rewrite
+                    let clips = clipsKey
                     hotKeys.applyGlobal = { action, chord in
                         switch action {
                         case .pushToTalk:
@@ -299,6 +344,8 @@ struct MustardApp: App {
                             } else {
                                 nil
                             }
+                        case .clips:
+                            clips?.rebind(keyCode: chord.keyCode, modifiers: chord.carbonModifiers)
                         default:
                             nil
                         }
@@ -310,8 +357,15 @@ struct MustardApp: App {
             CommandGroup(after: .toolbar) {
                 Button("Toggle Hover Panel") { hoverPanel?.toggle() }
                     .keyboardShortcut(hotKeys.shortcut(for: .hover))
-                Button("Toggle Notch") { notch?.toggle() }
+                // The strip is always on screen (`show()` at launch), so the
+                // notch chord toggles the PIN, not visibility — hiding it
+                // outright would leave no way back to the ambient notch.
+                Button("Toggle Notch") { notch?.togglePinned() }
                     .keyboardShortcut(hotKeys.shortcut(for: .notch))
+                // Clips is a GLOBAL (Carbon) chord — this menu item only makes
+                // it discoverable, so it mirrors whatever the user has bound.
+                Button("Open Clips") { notch?.openPinned(on: NotchTabModel.clipsHotKeyTab) }
+                    .keyboardShortcut(hotKeys.shortcut(for: .clips))
             }
         }
     }

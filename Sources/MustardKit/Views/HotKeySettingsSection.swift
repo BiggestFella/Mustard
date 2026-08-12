@@ -20,7 +20,7 @@ struct HotKeySettingsSection: View {
                 .foregroundStyle(Theme.Palette.accent)
                 .buttonStyle(.plain)
 
-            Text("The first three work anywhere on the Mac; the rest while Mustard is frontmost.")
+            Text("The first four work anywhere on the Mac; the rest while Mustard is frontmost.")
                 .font(Theme.Fonts.caption)
                 .foregroundStyle(Theme.Palette.textTertiary)
         }
