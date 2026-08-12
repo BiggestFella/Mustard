@@ -214,3 +214,89 @@ be followed by exactly one name token with no further trailing content) and
 make `matchedCandidate` return `nil` on a multi-candidate tie instead of
 `.first`, then re-run the full suite plus new adversarial tests for both
 scenarios above.
+
+## Re-review after fixes (commits bc28d05, a757a5e, 97c3bfc)
+
+Scope of the delta, confirmed via `git diff f466fe0..97c3bfc --stat`: exactly
+`Sources/MustardKit/Logic/MeetingSpeakerAttribution.swift`,
+`Sources/MustardKit/Meeting/MeetingCaptureCoordinator.swift`, the two
+corresponding test files, and run artifacts (`task.md`/`verification.md`/
+`trace.jsonl`, append-only). Nothing outside the two Logic functions + the
+coordinator's attribution path + tests + artifacts changed — no scope creep.
+
+### Finding 1 (bare "over to" misattribution) — FIXED, verified
+
+`MeetingSpeakerAttribution.swift` now tags the bare `over to` alternative
+with its own capture group (`bareOverToGroup`) and, only for that
+alternative, requires `isClauseEnding` — everything after the match to the
+end of the text must be whitespace/punctuation only. A captured name ending
+in a possessive `'s` is rejected outright (`extractedName`, new guard).
+Re-ran the exact repro from the original review, live against the fixed
+code, via a throwaway test file (added, run, then deleted — confirmed
+`git status --short` clean immediately after):
+
+```
+attribute(texts: ["let's move over to Sam's slide for revenue", "next update"],
+          candidates: ["Sam"])
+// → [nil, nil]   (was [nil, "Sam"] before the fix)
+```
+
+### Finding 2 (ambiguous candidate silently picked) — FIXED, verified
+
+`matchedCandidate` now filters to every fuzzy-matching candidate and returns
+a name only when exactly one matches; 2+ matches degrade to `nil` instead of
+`.first`. Re-ran the exact repro live, same throwaway-file method:
+
+```
+attribute(texts: ["over to Ali", "next"], candidates: ["Alina", "Alison"])
+// → [nil, nil]   (was [nil, "Alina"] before the fix)
+```
+
+### No over-tightening
+
+`"Over to Alin."` still fires and still attributes — confirmed by the
+committed tests at `MeetingSpeakerAttributionTests.swift:242-243` (bare
+`detectHandoffs`) and `:247-249` (full `attribute`, `candidates: ["Alin"]` →
+`[nil, "Alin"]`), both green. A companion committed test
+(`MeetingSpeakerAttributionTests.swift:283-297`, "the reviewer's exact
+reproduction") locks in both the ambiguous-tie-to-nil behavior AND the
+non-ambiguous case (`candidates: ["Alina", "Bob"]` → `[nil, "Alina"]`,
+exactly one match) still resolving normally — confirms the fix rejects only
+genuine ties, not every multi-candidate list.
+
+### Third fix, beyond what was asked: utterance-level attribution
+
+`MeetingCaptureCoordinator.attributedSpeakers` now merges meeting-channel
+segments into utterances (`MeetingUtteranceMerge`, same same-source/pause
+rule already used for digest chunking) *before* running handoff detection,
+then stamps every constituent segment of an attributed utterance rather than
+just the segment `attribute` operated on. This addresses a real gap I hadn't
+flagged: real transcriber output is near-word-level (~15 chars/segment), so
+a five-plus-word handoff phrase routinely spans 2-3 raw segments and would
+never appear intact in any single segment's `text` — attribution over raw
+segments would have silently matched nothing on live audio. The fix is
+scoped correctly (only the coordinator's assembly of `texts:`/the stamping
+loop changed;  `MeetingSpeakerAttribution` itself is untouched by this part)
+and is covered by two new/extended coordinator tests exercising the
+multi-segment-phrase case, both green.
+
+### Verification re-run
+
+```
+DEVELOPER_DIR=$HOME/Downloads/Xcode-beta.app/Contents/Developer swift test --filter MeetingSpeakerAttributionTests
+  → Executed 40 tests, 0 failures. Exit 0.
+DEVELOPER_DIR=$HOME/Downloads/Xcode-beta.app/Contents/Developer swift test --filter MeetingCaptureCoordinatorTests
+  → Executed 24 tests, 0 failures. Exit 0.
+DEVELOPER_DIR=$HOME/Downloads/Xcode-beta.app/Contents/Developer swift test   (full suite)
+  → Executed 1634 tests, 1 test skipped, 0 failures. Exit 0. Matches claimed 1634/1/0
+    (1622 + 12 new tests across the two files).
+DEVELOPER_DIR=$HOME/Downloads/Xcode-beta.app/Contents/Developer swift build
+  → Build complete. Exit 0.
+```
+
+Both original blocking reproductions now yield the required `nil`
+attribution against the real (not stubbed) implementation, the anti-
+over-tightening check (`"Over to Alin."`) still fires, the delta touched
+nothing outside the intended surface, and every requested check is green.
+
+## VERDICT: mergeable
