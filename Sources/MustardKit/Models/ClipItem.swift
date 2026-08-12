@@ -32,3 +32,7 @@ public final class ClipItem {
         set { kindRaw = newValue.rawValue }
     }
 }
+
+extension ClipItem: ClipPrunable {
+    public var isFiled: Bool { collection != nil }
+}
