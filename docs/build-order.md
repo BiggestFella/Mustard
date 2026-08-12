@@ -158,6 +158,39 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       is canonical for each phase. **Spec/design first, no code yet.** Handover /
       starting context: `docs/specs/2026-07-23-console-board-attention-consolidation-design.md`.
 
+- [x] **F31 Notch shelf redesign** — ✅ **SHIPPED 2026-08-12**. The notch grows from
+      a single hover panel into a tabbed, pinnable command shelf (Today · Agent ·
+      Meetings · Clips · Shelf · custom collections) carrying a new Mustard-owned
+      clipboard layer, cherry-picked Supaste-shaped from the Helm/DockDoor/LaunchMe
+      feature review (window management/launching/Spaces stay in Helm). Shipped:
+      `Clipboard/` capture layer (`ClipboardMonitor`/`LivePasteboard` changeCount
+      polling with concealed/transient/excluded-bundle skip, `ClipStore` applying
+      pure `ClipClassifier`/`ClipStoreRules` — 200-item rolling prune, 5 MB image
+      cap, `ClipPaster` reusing the dictation ⌘V machinery), `ClipItem`/
+      `ClipCollection` SwiftData models, `NotchPinState` (hover-peeks-with-grace-
+      period, click/⌘⇧N pins, Esc/click-away unpins), `NotchTabModel`/
+      `NotchPanelMetrics`, fuzzy `NotchSearch`; `NotchSurface` decomposed into a
+      shell (header, tab pills with counts, suggestion-banner slot, drop-target
+      capture) plus one file per tab (`NotchTodayTab`, `NotchAgentTab`,
+      `NotchMeetingsTab`, `NotchClipsTab`, `NotchShelfTab`, `NotchCollectionTab`)
+      sharing `ClipCardView`/`ClipDragProvider`; the Meetings tab absorbs the
+      recorder (moved out of Today) plus upcoming/recent recordings with a deep
+      link back to a recording; the ⌃⌥V hotkey (id 4) opens pinned on Clips;
+      completed ⌃⌥D dictations now land in Clips with a Dictation badge (secure
+      fields still excepted) — a deliberate reversal of the earlier
+      never-into-Mustard's-store decision now that a private local home exists;
+      all top-of-screen panels (notch, voice pill) resolve their display through
+      one `NotchScreenPicker.currentScreen()`. Spec:
+      `docs/superpowers/specs/2026-08-12-notch-shelf-redesign-design.md`; plan:
+      `docs/superpowers/plans/2026-08-12-notch-shelf-redesign.md` (19 tasks, all
+      TDD, all complete). Known non-goals left open: the cross-app hardware
+      matrix is Leon-only (no Screen Recording/TCC in the agent shell); search
+      focus on ⌃⌥V open is best-effort (the panel is non-activating);
+      `RewriteController`/`HoverPanel` still resolve via `NSScreen.main` rather
+      than the shared picker (out of scope here); drag-over does not expand the
+      notch. Retiring Helm's own clipboard panel is a follow-up in the Helm repo,
+      not this change.
+
 ## Done (2026-07-12) ✅
 
 - [x] **F23 Craft editor — full markdown hiding + menu system** — five-phase follow-on

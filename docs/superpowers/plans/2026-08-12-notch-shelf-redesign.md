@@ -23,7 +23,7 @@
 - Create: `Sources/MustardKit/Logic/ClipClassifier.swift`
 - Test: `Tests/MustardTests/ClipClassifierTests.swift`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 import XCTest
@@ -65,12 +65,12 @@ final class ClipClassifierTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter ClipClassifierTests`
 Expected: compile FAILURE — `ClipClassifier` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 import Foundation
@@ -120,12 +120,12 @@ public enum ClipClassifier {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter ClipClassifierTests`
 Expected: PASS (6 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Logic/ClipClassifier.swift Tests/MustardTests/ClipClassifierTests.swift
@@ -143,7 +143,7 @@ git commit -m "feat(clips): ClipKind + pure text classifier"
 
 Models are CloudKit-shaped like every other `@Model` (all fields optional or defaulted). No unit test of the models themselves — they're exercised through Task 4's store tests; this task just has to build.
 
-- [ ] **Step 1: Create ClipItem**
+- [x] **Step 1: Create ClipItem**
 
 ```swift
 import Foundation
@@ -182,7 +182,7 @@ public final class ClipItem {
 }
 ```
 
-- [ ] **Step 2: Create ClipCollection**
+- [x] **Step 2: Create ClipCollection**
 
 ```swift
 import Foundation
@@ -206,7 +206,7 @@ public final class ClipCollection {
 }
 ```
 
-- [ ] **Step 3: Register in the container**
+- [x] **Step 3: Register in the container**
 
 In `MustardContainer.make()`, extend the model list:
 
@@ -220,12 +220,12 @@ In `MustardContainer.make()`, extend the model list:
             )
 ```
 
-- [ ] **Step 4: Build and run the full suite**
+- [x] **Step 4: Build and run the full suite**
 
 Run: `swift build && swift test`
 Expected: build succeeds, all existing tests pass (additive schema change), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Models/ClipItem.swift Sources/MustardKit/Models/ClipCollection.swift Sources/MustardKit/MustardContainer.swift
@@ -240,7 +240,7 @@ git commit -m "feat(clips): ClipItem/ClipCollection models, container registrati
 - Create: `Sources/MustardKit/Logic/ClipStoreRules.swift`
 - Test: `Tests/MustardTests/ClipStoreRulesTests.swift`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 import XCTest
@@ -330,12 +330,12 @@ final class ClipStoreRulesTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter ClipStoreRulesTests`
 Expected: compile FAILURE — `ClipCandidate`/`ClipStoreRules` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 import Foundation
@@ -412,12 +412,12 @@ public enum ClipStoreRules {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter ClipStoreRulesTests`
 Expected: PASS (9 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Logic/ClipStoreRules.swift Tests/MustardTests/ClipStoreRulesTests.swift
@@ -432,7 +432,7 @@ git commit -m "feat(clips): pure capture/dedupe/prune rules"
 - Create: `Sources/MustardKit/Clipboard/ClipStore.swift`
 - Test: `Tests/MustardTests/ClipStoreTests.swift`
 
-- [ ] **Step 1: Write the failing test** (in-memory container, same pattern as existing store tests)
+- [x] **Step 1: Write the failing test** (in-memory container, same pattern as existing store tests)
 
 ```swift
 import XCTest
@@ -525,12 +525,12 @@ final class ClipStoreTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter ClipStoreTests`
 Expected: compile FAILURE — `ClipStore` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `ClipItem` needs `isFiled` for the prune protocol — add to `ClipItem.swift`:
 
@@ -663,12 +663,12 @@ enum ClipThumbnail {
 #endif
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter ClipStoreTests`
 Expected: PASS (7 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Clipboard/ClipStore.swift Sources/MustardKit/Models/ClipItem.swift Tests/MustardTests/ClipStoreTests.swift
@@ -683,7 +683,7 @@ git commit -m "feat(clips): ClipStore — rules applied to SwiftData, image caps
 - Create: `Sources/MustardKit/Clipboard/ClipboardMonitor.swift`
 - Test: `Tests/MustardTests/ClipboardMonitorTests.swift`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 import XCTest
@@ -748,12 +748,12 @@ final class ClipboardMonitorTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter ClipboardMonitorTests`
 Expected: compile FAILURE — `PasteboardReading`/`ClipboardMonitor` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 import Foundation
@@ -852,12 +852,12 @@ public final class LivePasteboard: PasteboardReading {
 #endif
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter ClipboardMonitorTests`
 Expected: PASS (3 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Clipboard/ClipboardMonitor.swift Tests/MustardTests/ClipboardMonitorTests.swift
@@ -872,7 +872,7 @@ git commit -m "feat(clips): changeCount-polling clipboard monitor, own-write ski
 - Create: `Sources/MustardKit/Logic/NotchPinState.swift`
 - Test: `Tests/MustardTests/NotchPinStateTests.swift`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 import XCTest
@@ -948,12 +948,12 @@ final class NotchPinStateTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter NotchPinStateTests`
 Expected: compile FAILURE — `NotchPinState` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 import Foundation
@@ -1013,12 +1013,12 @@ public struct NotchPinState: Equatable {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter NotchPinStateTests`
 Expected: PASS (7 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Logic/NotchPinState.swift Tests/MustardTests/NotchPinStateTests.swift
@@ -1033,7 +1033,7 @@ git commit -m "feat(notch): pure hover/pin state machine with collapse grace"
 - Create: `Sources/MustardKit/Logic/NotchTabModel.swift`
 - Test: `Tests/MustardTests/NotchTabModelTests.swift`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 import XCTest
@@ -1075,12 +1075,12 @@ final class NotchTabModelTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter NotchTabModelTests`
 Expected: compile FAILURE — `NotchTab` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 import Foundation
@@ -1141,12 +1141,12 @@ public enum NotchPanelMetrics {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter NotchTabModelTests`
 Expected: PASS (5 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Logic/NotchTabModel.swift Tests/MustardTests/NotchTabModelTests.swift
@@ -1161,7 +1161,7 @@ git commit -m "feat(notch): tab model, default-tab rules, panel metrics"
 - Create: `Sources/MustardKit/Logic/NotchSearch.swift`
 - Test: `Tests/MustardTests/NotchSearchTests.swift`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 import XCTest
@@ -1209,12 +1209,12 @@ final class NotchSearchTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `swift test --filter NotchSearchTests`
 Expected: compile FAILURE — `NotchSearchable` not defined.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 import Foundation
@@ -1257,12 +1257,12 @@ public enum NotchSearch {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter NotchSearchTests`
 Expected: PASS (5 tests), exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Logic/NotchSearch.swift Tests/MustardTests/NotchSearchTests.swift
@@ -1278,7 +1278,7 @@ git commit -m "feat(notch): fuzzy search over the clipboard layer"
 
 View-layer wiring around the tested `NotchPinState`; verified by build + eye. The controller changes:
 
-- [ ] **Step 1: Rework NotchController**
+- [x] **Step 1: Rework NotchController**
 
 Replace the `NotchController` class body (keep the file header comment) with:
 
@@ -1501,12 +1501,12 @@ and `.onHover { isIn in withAnimation(...) { hovering = isIn }; controller?.hove
 
 Also update `Sources/MustardKit/PreviewData.swift` / any `#Preview` using `NotchView(onHoverChange:)` to `NotchView()`.
 
-- [ ] **Step 2: Build + full suite**
+- [x] **Step 2: Build + full suite**
 
 Run: `swift build && swift test`
 Expected: build succeeds, suite green, exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add Sources/MustardKit/Views/NotchSurface.swift Sources/Mustard/MustardApp.swift Sources/MustardKit/PreviewData.swift
@@ -1524,7 +1524,7 @@ git commit -m "feat(notch): click-to-pin, collapse grace, per-tab size, screen o
 
 All view work: `swift build` + eye. Structure:
 
-- [ ] **Step 1: Extract Today tab**
+- [x] **Step 1: Extract Today tab**
 
 `NotchTodayTab.swift` — move `agendaSection`, `AgendaRow` helpers usage, ritual gating, progress capsule from the old `expandedContent` (drop the triage card — it moves to the Agent tab in Task 11; drop `MeetingRecordingNotchView` — it moves to Meetings in Task 12):
 
@@ -1571,7 +1571,7 @@ struct NotchTodayTab: View {
 
 (Move `AgendaRow` into this file too — it has no other consumers.)
 
-- [ ] **Step 2: Rebuild NotchView as the shell**
+- [x] **Step 2: Rebuild NotchView as the shell**
 
 In `NotchSurface.swift`, `expandedContent` becomes:
 
@@ -1713,16 +1713,16 @@ Until Tasks 11–15 land, stub the missing tab views in their eventual files as 
 
 Keep: idle strip (`idleContent`) byte-identical; capture bar unchanged; `.onHover` now calls `controller?.hoverChanged(_)`. Also add `.onTapGesture` on `idleContent`: `controller?.pin()` (click-to-pin from the strip). Add an Esc handler on the shell: `.onExitCommand { controller?.unpin() }`.
 
-- [ ] **Step 3: Trim MeetingRecordingNotchView**
+- [x] **Step 3: Trim MeetingRecordingNotchView**
 
 Delete the `MeetingStartPromptView()` line from the `.idle` case (the shell banner owns it now). Everything else stays.
 
-- [ ] **Step 4: Build + full suite + eye-check note**
+- [x] **Step 4: Build + full suite + eye-check note**
 
 Run: `swift build && swift test`
 Expected: build succeeds, suite green, exit 0. (Tab bodies are stubs except Today.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/MustardKit/Views/
@@ -1738,7 +1738,7 @@ git commit -m "feat(notch): tabbed shell — header, pills, banner slot, Today t
 
 Read-only cards; every action routes to the console (`nav.openAgentConsole = true`) — the 2026-07-02 "no inline Approve/Deny in the notch" decision stands.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 ```swift
 #if os(macOS)
@@ -1814,7 +1814,7 @@ struct NotchAgentTab: View {
 
 Check the real name of the needs-you stage in `TaskStage.swift` before building — if it is not `.needsYou`, use the actual case (grep `needsReview` there for the exact spelling of both attention stages, and reuse `AgentInbox.attentionTaskCount`'s definition for consistency).
 
-- [ ] **Step 2: Build + suite; commit**
+- [x] **Step 2: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -1833,7 +1833,7 @@ git commit -m "feat(notch): Agent tab — read-only waiting list routing to cons
 - Modify: `Sources/MustardKit/Views/RootView.swift:150-162` (consume it)
 - Modify: `Sources/MustardKit/Views/MeetingReviewView.swift:57-68` (accept initial selection)
 
-- [ ] **Step 1: Extend NotchNavigation**
+- [x] **Step 1: Extend NotchNavigation**
 
 ```swift
     /// Set by the notch's Meetings tab; RootView switches to the Meetings
@@ -1841,7 +1841,7 @@ git commit -m "feat(notch): Agent tab — read-only waiting list routing to cons
     public var pendingMeetingUID: String?
 ```
 
-- [ ] **Step 2: Consume in RootView**
+- [x] **Step 2: Consume in RootView**
 
 Next to the existing `.onChange(of: notchNav.pendingTask, ...)` handlers add:
 
@@ -1856,7 +1856,7 @@ Next to the existing `.onChange(of: notchNav.pendingTask, ...)` handlers add:
 
 (Match the actual screen-selection state name used in `RootView` — the `case .meetings: MeetingReviewView()` switch at line 87 shows the pattern.)
 
-- [ ] **Step 3: MeetingReviewView initial selection**
+- [x] **Step 3: MeetingReviewView initial selection**
 
 In `MeetingReviewView`, add `@Environment(NotchNavigation.self) private var nav: NotchNavigation?` and:
 
@@ -1868,7 +1868,7 @@ In `MeetingReviewView`, add `@Environment(NotchNavigation.self) private var nav:
         }
 ```
 
-- [ ] **Step 4: Implement the tab**
+- [x] **Step 4: Implement the tab**
 
 ```swift
 #if os(macOS)
@@ -1985,7 +1985,7 @@ struct NotchMeetingsTab: View {
 
 (Check `CalendarEvent`'s join-URL property name against the model — `AgendaRow` uses `item.joinURL` from `AgendaItem`; the event model may spell it differently.)
 
-- [ ] **Step 5: Build + suite; commit**
+- [x] **Step 5: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -2005,7 +2005,7 @@ git commit -m "feat(notch): Meetings tab — recorder, upcoming, recent recordin
 - Modify: `Sources/MustardKit/Dictation/TextInserter.swift:132-141` (extract the ⌘V CGEvent block)
 - Test: `Tests/MustardTests/ClipPasterTests.swift`
 
-- [ ] **Step 1: Extract PasteKeystroke from TextInserter.live**
+- [x] **Step 1: Extract PasteKeystroke from TextInserter.live**
 
 The CGEvent ⌘V block inside `TextInserter.live`'s `sendPaste` closure moves to a shared helper (same file or `ClipPaster.swift`):
 
@@ -2033,7 +2033,7 @@ enum PasteKeystroke {
 
 `TextInserter.live`'s `sendPaste:` closure becomes `{ pid in PasteKeystroke.send(to: pid) }` — **compare the extracted body against the original at `TextInserter.swift:132-141` first and keep the original's exact event flags/post order** (the snippet above is from the grep; the file is the truth).
 
-- [ ] **Step 2: Failing test for ClipPaster (closure-injected, like TextInserter)**
+- [x] **Step 2: Failing test for ClipPaster (closure-injected, like TextInserter)**
 
 ```swift
 import XCTest
@@ -2082,7 +2082,7 @@ final class ClipPasterTests: XCTestCase {
 
 Run: `swift test --filter ClipPasterTests` → compile FAILURE.
 
-- [ ] **Step 3: Implement ClipPaster**
+- [x] **Step 3: Implement ClipPaster**
 
 ```swift
 import Foundation
@@ -2147,7 +2147,7 @@ extension ClipPaster {
 
 Run: `swift test --filter ClipPasterTests` → PASS (3 tests), exit 0.
 
-- [ ] **Step 4: ClipCardView + NotchClipsTab**
+- [x] **Step 4: ClipCardView + NotchClipsTab**
 
 `ClipCardView.swift`:
 
@@ -2384,7 +2384,7 @@ public final class ClipboardServices {
 
 Image paste-back only copies the payload string for v1 (image → pasteboard paste is a later nicety; click-to-copy for images writes the image via a small branch in `select`: acceptable v1 = text-kinds paste, image/file drag-out).
 
-- [ ] **Step 5: Build + suite; commit**
+- [x] **Step 5: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -2401,7 +2401,7 @@ git commit -m "feat(notch): Clips tab — cards, filters, copy/paste-back, drag-
 - Modify: `Sources/MustardKit/Views/NotchShelfTab.swift` (replace stub)
 - Modify: `Sources/MustardKit/Views/NotchSurface.swift` (drop handlers on idle strip + shell)
 
-- [ ] **Step 1: Shelf tab**
+- [x] **Step 1: Shelf tab**
 
 ```swift
 #if os(macOS)
@@ -2458,7 +2458,7 @@ struct NotchShelfTab: View {
 #endif
 ```
 
-- [ ] **Step 2: Drop target on the whole notch surface**
+- [x] **Step 2: Drop target on the whole notch surface**
 
 On `NotchView`'s outermost `VStack` (both idle and expanded render inside it) add:
 
@@ -2489,7 +2489,7 @@ On `NotchView`'s outermost `VStack` (both idle and expanded render inside it) ad
 
 (`import UniformTypeIdentifiers` at the top; add `@Environment(ClipboardServices.self) private var services: ClipboardServices?` to `NotchView`.)
 
-- [ ] **Step 3: Build + suite; commit**
+- [x] **Step 3: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -2506,7 +2506,7 @@ git commit -m "feat(notch): Shelf tab + drag-in drop target on the notch"
 - Modify: `Sources/MustardKit/Views/NotchCollectionTab.swift` (replace stub)
 - Modify: `Sources/MustardKit/Views/NotchSurface.swift` (real `NotchNewCollectionPill`)
 
-- [ ] **Step 1: Collection tab**
+- [x] **Step 1: Collection tab**
 
 ```swift
 #if os(macOS)
@@ -2581,7 +2581,7 @@ Deleting the collection while its tab is active must not strand the UI: in the s
         }
 ```
 
-- [ ] **Step 2: The "+" pill**
+- [x] **Step 2: The "+" pill**
 
 Replace the `NotchNewCollectionPill` stub in `NotchSurface.swift`:
 
@@ -2627,7 +2627,7 @@ private struct NotchNewCollectionPill: View {
 }
 ```
 
-- [ ] **Step 3: Build + suite; commit**
+- [x] **Step 3: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -2644,11 +2644,11 @@ git commit -m "feat(notch): custom collections — + pill, filing, unfile-on-del
 - Create: `Sources/MustardKit/Clipboard/ClipsHotKey.swift`
 - Modify: `Sources/Mustard/MustardApp.swift:239-280` (services + hotkey), `:283-290` (menu)
 
-- [ ] **Step 1: ClipsHotKey**
+- [x] **Step 1: ClipsHotKey**
 
 Clone `RewriteHotKey` (`Sources/MustardKit/Rewrite/RewriteHotKey.swift`) verbatim with: class name `ClipsHotKey`, `id: UInt32 = 4`, default `keyCode` `kVK_ANSI_V`, UserDefaults keys `clipsHotKeyCode`/`clipsHotKeyModifiers`, log lines via the same pattern (use `voiceLog`-style logger or a new `ClipboardLog.logger` mirroring `RewriteLog`). Keep all three load-bearing properties from the doc comment: fall-through for foreign chords via `HotKeyDispatch.decide`, pressed-only semantics, `.conflict` surfaced. The shared "MSTD" signature disambiguates by id (capture 1, dictation 2, rewrite 3, **clips 4**).
 
-- [ ] **Step 2: Wire everything in MustardApp**
+- [x] **Step 2: Wire everything in MustardApp**
 
 Add state alongside the existing controllers:
 
@@ -2708,7 +2708,7 @@ Add the menu item so the chord is discoverable:
 
 Search-focus on hotkey open: in the shell, add `@FocusState private var searchFocused: Bool` bound to the search `TextField`, and focus it in `.onChange(of: controller?.isPinned)` when the active tab is `.clips`. Best-effort: the panel is non-activating, so keyboard focus lands only when the panel becomes key (same caveat as the capture bar today).
 
-- [ ] **Step 3: Build + suite; commit**
+- [x] **Step 3: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -2726,7 +2726,7 @@ git commit -m "feat(clips): ⌃⌥V hotkey (id 4), clipboard services wired into
 - Modify: `Sources/Mustard/MustardApp.swift:272-279` (pass the hook)
 - Test: extend `Tests/MustardTests/SystemDictationCoordinatorTests.swift` (file exists; follow its stub pattern)
 
-- [ ] **Step 1: Write the failing test** (add to the existing suite, reusing its fixtures/stubs — read the file first and mirror how it constructs the coordinator; the assertions to add:)
+- [x] **Step 1: Write the failing test** (add to the existing suite, reusing its fixtures/stubs — read the file first and mirror how it constructs the coordinator; the assertions to add:)
 
 ```swift
     func testFinalTranscriptIsOfferedToHistoryOnInsert() async {
@@ -2755,7 +2755,7 @@ git commit -m "feat(clips): ⌃⌥V hotkey (id 4), clipboard services wired into
 
 Run: `swift test --filter SystemDictationCoordinatorTests` → FAIL (no `onFinalTranscript`).
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 - Add to the coordinator: `private let onFinalTranscript: ((String) -> Void)?`, new init parameter defaulting to `nil`, stored alongside `insert`.
 - Call it at the two insert sites (`SystemDictationCoordinator.swift:231` region and the retry at `:265` region — only on the FIRST attempt path, not the retry, to avoid double-offering; place the call **after** the `DictationWhitespace.insertion(...)` guard so secure fields never reach it, passing the pre-normalization `transcript` (the words as spoken; whitespace normalization is target-specific):
@@ -2773,7 +2773,7 @@ Run: `swift test --filter SystemDictationCoordinatorTests` → FAIL (no `onFinal
 - In `SystemDictationCoordinator.live()`, add a `clipStore: ClipStore?` parameter; pass `onFinalTranscript: { [weak clipStore] t in Task { @MainActor in clipStore?.addDictation(transcript: t) } }` (adjust to the actual isolation of `.live()`).
 - In `MustardApp`, pass the store: `SystemDictationCoordinator.live(clipStore: clipboard?.store)` — move dictation setup after clipboard setup in the block.
 
-- [ ] **Step 3: Run suite; commit**
+- [x] **Step 3: Run suite; commit**
 
 Run: `swift test --filter SystemDictationCoordinatorTests` then `swift build && swift test` → green, exit 0.
 
@@ -2791,7 +2791,7 @@ git commit -m "feat(dictation): final transcripts land in clip history (spec rev
 - Modify: `Sources/MustardKit/Capture/VoiceTaskCaptureCoordinator.swift:752` (PanelHolder placement)
 - Modify: `Sources/MustardKit/Dictation/SystemDictationCoordinator.swift:413` region (same pattern)
 
-- [ ] **Step 1: Shared live chooser**
+- [x] **Step 1: Shared live chooser**
 
 Add to `NotchScreenPicker.swift` (AppKit extension under `#if os(macOS)` — the pure `choose(from:)` stays untouched and tested):
 
@@ -2820,14 +2820,14 @@ extension NotchScreenPicker {
 #endif
 ```
 
-- [ ] **Step 2: Adopt everywhere**
+- [x] **Step 2: Adopt everywhere**
 
 - `NotchController.screen` → `NotchScreenPicker.currentScreen()` (delete the inline copy).
 - `PanelHolder.show` (`VoiceTaskCaptureCoordinator.swift:752`): `if let screen = NSScreen.main` → `if let screen = NotchScreenPicker.currentScreen()`.
 - The `NSScreen.main` pill placement in `SystemDictationCoordinator.swift` (~line 413): same replacement.
 - `VoiceTaskQuickEditController` already computes the picker inline (~`:232-246`) — switch it to the shared helper too and delete its copy.
 
-- [ ] **Step 3: Build + suite; commit**
+- [x] **Step 3: Build + suite; commit**
 
 Run: `swift build && swift test` → green, exit 0.
 
@@ -2845,13 +2845,13 @@ git commit -m "fix(voice): all top-of-screen panels resolve their display via No
 - Modify: `docs/build-order.md` (entry for this feature, marked shipped)
 - Modify: `docs/superpowers/plans/2026-08-12-notch-shelf-redesign.md` (tick all checkboxes; sync any drift between plan blocks and shipped code)
 
-- [ ] **Step 1: Update CLAUDE.md**
+- [x] **Step 1: Update CLAUDE.md**
 
 - Folder layout: add `Clipboard/  ClipboardMonitor (changeCount polling, concealed/transient skip), ClipStore (+ClipboardServices), ClipPaster, ClipsHotKey (⌃⌥V, id 4)`; extend the Logic list with `ClipClassifier, ClipStoreRules, NotchPinState, NotchTabModel/NotchPanelMetrics, NotchSearch`; note NotchSurface's decomposition into tab files.
 - The dictation bullet: "(transcripts also land in clip history — secure fields excepted — per the 2026-08-12 notch shelf spec)".
 - Notch description: hover peek + click-to-pin + tabbed shell (Today · Agent · Meetings · Clips · Shelf · collections).
 
-- [ ] **Step 2: Full verification**
+- [x] **Step 2: Full verification**
 
 ```bash
 swift build && swift test && ./build-app.sh
@@ -2859,7 +2859,7 @@ swift build && swift test && ./build-app.sh
 
 Expected: build succeeds, full suite green (~1,680+: 1,634 baseline + ~40 new), app bundle assembles. Verify by exit codes.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md docs/
@@ -2881,3 +2881,63 @@ The in-session shell has no TCC, so none of this can be verified headlessly:
 7. Meetings tab — recorder works as before (consent card, red dot), recent recordings open the Meetings screen.
 8. "+" pill — create a collection, file a clip into it from the context menu, delete the collection (clip returns to history).
 9. Unplug/replug the external display — notch and voice pill land on the same screen.
+
+## As-built deviations
+
+Where the shipped code deliberately diverges from the plan's code blocks:
+
+- **`ClipStoreRules.pruneUIDs` is generic** (`<T: ClipPrunable>`) rather than
+  `[any ClipPrunable]`, so the test-only `Row` conformer costs no existential
+  overhead.
+- **`ClipClassifier`'s hex check adds an ASCII guard** (`$0.isASCII &&
+  $0.isHexDigit`) — Swift's `isHexDigit` accepts fullwidth Unicode digits,
+  which the plan's version would have wrongly classified as `.color`; extra
+  negative tests cover fullwidth digits and malformed `rgb()`/non-HTTP URLs.
+- **`ClipboardMonitor` sweeps stale own-write marks**, not just the exact
+  `changeCount` match: any mark ≤ the current count is dropped too, so a
+  skipped intermediate change can't leave a stale entry sitting in the set
+  forever. **`ClipStore`/`LivePasteboard` split image-vs-text precedence
+  differently than drafted:** the pasteboard reader now always surfaces image
+  bytes when there's no file URL, even alongside text (a browser's "Copy
+  Image" pairs image data with the image's URL as text); `ClipStore.ingest`
+  is what decides — image wins only when the accompanying text is empty or
+  itself link-shaped, otherwise text wins. Extra `ClipStoreTests` cover the 5
+  MB image cap (small image keeps original + thumbnail, oversize keeps only
+  the thumbnail) and both sides of the image/text precedence call.
+- **The Agent tab reads three gate stages, not the plan's assumed two.**
+  `TaskStage` already had a real `.needsInput` case; the tab uses
+  `AgentInbox.attention(tasks).inFlight` (needsApproval ∪ needsInput ∪
+  needsReview, oldest-first) rather than re-deriving a waiting list, so it
+  stays in lockstep with the console.
+- **`pendingTab` (the one-shot hotkey-requested tab) is consumed from two
+  call sites** — the shell's `onAppear` and its `stateVersion` `onChange` —
+  because a hotkey fired while the panel was already visible only bumps
+  `stateVersion`, it doesn't re-trigger `onAppear`.
+- **`NotchController.toggle()` was replaced by `togglePinned()`.** The old
+  `toggle()` hid the panel on a second press; that's wrong for a pinned
+  command shelf, where ⌘⇧N should pin/unpin without ever hiding a panel that
+  should stay visible while merely unpinned (e.g. hovered).
+- **A `NotchPanel` `NSPanel` subclass overrides `canBecomeKey`,** which the
+  plan's `NotchController` rewrite didn't call out. Needed so Return-to-paste
+  and the search field/typable clip cells can accept keyboard input from a
+  borderless, non-activating panel.
+- **`ClipPaster` grew beyond the plan's sketch:** a `copy(imageData:)`
+  overload for image clips, a guard against pasting into Mustard's own
+  process (`pid != ProcessInfo.processInfo.processIdentifier`), and a
+  synchronous own-write mark (`monitor?.expectOwnWrite(changeCount:)`) fired
+  before the write completes, so the monitor's next poll can never race it.
+- **One shared `ClipDragProvider`** backs drag-out from all three grids
+  (Clips, Shelf, collections) plus `ClipCardView`, rather than each tab
+  rolling its own `NSItemProvider` construction.
+- **`RootView`'s screen-state property is named `screen`,** not the
+  `MustardScreen`-suffixed name implied by earlier drafts.
+- **The dictation → Clips hook is one `@MainActor` closure** —
+  `SystemDictationCoordinator`'s `onFinalTranscript`, wired once to
+  `clipStore?.addDictation(transcript:)` after the existing secure-field
+  guard — not a new coordinator-level dependency.
+- **Known non-goals left open, unchanged from the plan:** search-focus on
+  ⌃⌥V is best-effort only, since the panel is non-activating and macOS won't
+  hand it key focus reliably; `RewriteController`/`HoverPanel` still resolve
+  their screen via `NSScreen.main` rather than the shared
+  `NotchScreenPicker` (out of scope for this pass); drag-over does not expand
+  the collapsed notch strip before a drop lands.
