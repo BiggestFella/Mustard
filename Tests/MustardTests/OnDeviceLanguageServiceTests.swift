@@ -271,24 +271,11 @@ final class OnDeviceLanguageServiceTests: XCTestCase {
         }
     }
 
-    func test_generate_mapsModernContextSizeExceeded_toContextOverflow() async throws {
-        guard #available(macOS 27.0, *) else { throw XCTSkip("Requires macOS 27") }
-        let box = StubSessionBox()
-        box.respondError = LanguageModelError.contextSizeExceeded(
-            .init(contextSize: 4096, tokenCount: 9000, debugDescription: "too big"))
-        let service = OnDeviceLanguageService(
-            probe: { _ in Self.probe(state: .available) },
-            band: .macOS27, osBuild: "27A5194q",
-            makeSession: { box.makeSession($0) })
-
-        do {
-            _ = try await service.generate(
-                GeneratedContent.self, instructions: "i", prompt: "p")
-            XCTFail("Overflow must throw")
-        } catch let failure as LocalModelFailure {
-            XCTAssertEqual(failure, .contextOverflow)
-        }
-    }
+    // A sibling case here used to pin the same mapping through macOS 27's
+    // `LanguageModelError.contextSizeExceeded`. Apple removed that type in the
+    // macOS 28 SDK (see `OnDeviceLanguageService.mappedFailure`), so it can no
+    // longer be constructed to assert against — do not re-add it. The overflow
+    // mapping itself stays covered by the `GenerationError` case above.
 
     func test_generate_mapsUnsupportedLanguage_toUnsupportedLocale() async throws {
         guard #available(macOS 26.0, *) else { throw XCTSkip("Requires macOS 26") }

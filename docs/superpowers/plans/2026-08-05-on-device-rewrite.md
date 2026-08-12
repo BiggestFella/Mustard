@@ -37,11 +37,17 @@ git checkout claude/mustard-voice-suite-linear-0xv7rj
 git checkout -b feat/rewrite-hotkey
 ```
 
-- [ ] **Export the toolchain in every shell.** macOS-27 SDK APIs
-  (`LanguageModelError`) need the beta. Never run `xcode-select -s`.
+- [ ] ~~**Export the toolchain in every shell.** macOS-27 SDK APIs
+  (`LanguageModelError`) need the beta. Never run `xcode-select -s`.~~
+  **SUPERSEDED (2026-08-12) — do not do this.** Apple removed
+  `LanguageModelError` (and `Speech.AnalyzerInputConverter`) in the macOS 28 SDK;
+  the Voice code was migrated off both and now builds under the plain selected
+  toolchain. Exporting `DEVELOPER_DIR` at a beta Xcode is no longer needed and
+  hides real breakage. See "Build & run" in `CLAUDE.md`.
 
 ```bash
-export DEVELOPER_DIR="/Users/leoncreed-baker/Downloads/Xcode-beta.app/Contents/Developer"
+# Historical only — kept so the instruction above is legible, not to be run.
+# export DEVELOPER_DIR="/Users/leoncreed-baker/Downloads/Xcode-beta.app/Contents/Developer"
 ```
 
 - [ ] **Verify by exit code, never by grepping test output.** Two broken pushes
