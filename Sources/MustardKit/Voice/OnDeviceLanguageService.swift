@@ -196,19 +196,23 @@ public actor OnDeviceLanguageService: OnDeviceGenerating {
 
     /// Maps Foundation Models errors to Mustard failures; nil means the
     /// error is unknown and must surface verbatim for the retry policy.
+    ///
+    /// This used to carry a second `macOS 27` branch over `LanguageModelError`
+    /// (`.contextSizeExceeded` / `.unsupportedLanguageOrLocale`). Apple removed
+    /// that type in the macOS 28 SDK and consolidated back onto
+    /// `LanguageModelSession.GenerationError`, which is what remains here — and
+    /// which already mapped both of those cases, so nothing this function could
+    /// classify became unclassifiable. The type cannot be named at all against a
+    /// current SDK, so there is no conditional way to keep the branch; if a
+    /// macOS 27 runtime still throws the old type it now falls through to nil
+    /// and surfaces verbatim, which is the documented behaviour for an error
+    /// this function does not recognise.
     static func mappedFailure(_ error: Error) -> LocalModelFailure? {
         if let generation = error as? LanguageModelSession.GenerationError {
             switch generation {
             case .exceededContextWindowSize: return .contextOverflow
             case .unsupportedLanguageOrLocale: return .unsupportedLocale
             case .assetsUnavailable: return .modelNotReady
-            default: return nil
-            }
-        }
-        if #available(macOS 27.0, *), let modern = error as? LanguageModelError {
-            switch modern {
-            case .contextSizeExceeded: return .contextOverflow
-            case .unsupportedLanguageOrLocale: return .unsupportedLocale
             default: return nil
             }
         }

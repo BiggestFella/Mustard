@@ -138,10 +138,30 @@ explicit dark hex, not `Theme`.
 ## Build & run
 
 ```bash
-swift test            # full suite (~1,400 at the voice-suite meetings milestone)
+swift test            # full suite (1,751 at the SDK-symbol-removal fix)
 swift build           # compile check
 ./build-app.sh        # → build/Mustard.app (ad-hoc signed, double-clickable)
 open build/Mustard.app
+```
+
+**Use the plain, selected toolchain — do NOT export `DEVELOPER_DIR`.** Older plan
+docs tell you to point it at `~/Downloads/Xcode-beta.app` because two macOS 27-only
+symbols (`Speech.AnalyzerInputConverter`, `FoundationModels.LanguageModelError`)
+were unavailable elsewhere. **That is no longer true and following it is now the
+wrong move.** Apple deleted both symbols in the macOS 28 SDK; the Voice code was
+migrated off them (`AnalyzerInputResampler`, and `mappedFailure`'s single
+`GenerationError` branch) and now builds under *either* SDK. Between the Xcode
+upgrade and that migration, `swift build` failed on `main` for every branch, and
+three separate dev-loop runs each rediscovered it and wrote it off as
+"pre-existing, unrelated" — if `swift build` ever fails on a pristine `main`
+again, fix it as the first order of business instead of routing around it.
+
+There is one opt-in test, skipped by default, that exercises the real
+`SpeechAnalyzer` end-to-end (assets + `say`-rendered audio, no microphone). It is
+the only automated check that would have caught the removal above:
+
+```bash
+MUSTARD_LIVE_ANALYZER=1 swift test --filter LiveAnalyzerSmokeTests
 ```
 
 `MustardApp` builds the container, owns the `AgentService`, the floating

@@ -284,14 +284,20 @@ extension VoiceAssetReadiness {
 /// The production `SpeechAnalyzerDriving`: one `SpeechAnalyzer` with a
 /// `SpeechTranscriber` (volatile results + alternatives, time/confidence
 /// attributes) and a `SpeechDetector`, fed `AnalyzerInput` through a single
-/// `AsyncStream` after `AnalyzerInputConverter` resamples the caller's PCM
-/// buffers to the analyzer's preferred format. macOS 27 only — the input
-/// converter does not exist on 26.
+/// `AsyncStream` after `AnalyzerInputResampler` resamples the caller's PCM
+/// buffers to the analyzer's preferred format.
+///
+/// The `macOS 27` gate is now conservative rather than forced: it was here
+/// because `Speech.AnalyzerInputConverter` was a 27-only symbol, and that type
+/// no longer exists in any current SDK (see `AnalyzerInputResampler`). Nothing
+/// in this driver needs more than macOS 26 any more, but dropping the gate would
+/// switch voice capture on for macOS 26 users, which is a product change and not
+/// this fix's business.
 @available(macOS 27.0, *)
 public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
     private let locale: Locale
     private var analyzer: SpeechAnalyzer?
-    private var converter: AnalyzerInputConverter?
+    private var resampler: AnalyzerInputResampler?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     /// Context set before `start` is applied as soon as the analyzer exists.
     private var pendingContextTerms: [String]?
@@ -318,7 +324,7 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
             compatibleWith: [transcriber, detector]) else {
             throw VoiceSessionError.audioFormatUnavailable
         }
-        let converter = AnalyzerInputConverter(analyzerFormat: format)
+        let resampler = try AnalyzerInputResampler(analyzerFormat: format)
         let analyzer = SpeechAnalyzer(modules: [transcriber, detector])
 
         let (inputSequence, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
@@ -329,7 +335,7 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
         }
 
         self.analyzer = analyzer
-        self.converter = converter
+        self.resampler = resampler
         self.inputContinuation = inputContinuation
 
         let (stream, continuation) = AsyncThrowingStream<SpeechAnalysisResult, Error>.makeStream()
@@ -356,18 +362,22 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
         try await Self.applyContext(terms, to: analyzer)
     }
 
+    /// `time` is intentionally not forwarded: the resampler stamps every buffer
+    /// onto its own capture-relative timeline, because the caller's tap/host
+    /// timebase has an unrelated origin and segment ids are derived from the
+    /// start time. See `AnalyzerInputResampler.nextStartFrame`.
     public func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) async throws {
-        guard let converter, let inputContinuation else { throw VoiceSessionError.notStarted }
-        for input in try converter.convert(buffer, at: time) {
+        guard let resampler, let inputContinuation else { throw VoiceSessionError.notStarted }
+        for input in try resampler.convert(buffer) {
             inputContinuation.yield(input)
         }
     }
 
     public func finishInput() async throws {
-        guard let analyzer, let converter, let inputContinuation else {
+        guard let analyzer, let resampler, let inputContinuation else {
             throw VoiceSessionError.notStarted
         }
-        for input in try converter.flush() {
+        for input in try resampler.flush() {
             inputContinuation.yield(input)
         }
         inputContinuation.finish()
@@ -378,7 +388,7 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
         inputContinuation?.finish()
         await analyzer?.cancelAndFinishNow()
         analyzer = nil
-        converter = nil
+        resampler = nil
         inputContinuation = nil
     }
 
