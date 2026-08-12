@@ -18,7 +18,7 @@ public final class RewriteController {
 
     private let hotKey = RewriteHotKey()
     private var panel: RewriteCardPanel?
-    private var observation: Task<Void, Never>?
+    private var isObserving = false
     private let openVoiceSetup: () -> Void
 
     /// The chord registration, so a conflict can be surfaced rather than
@@ -82,8 +82,7 @@ public final class RewriteController {
     }
 
     public func deactivate() {
-        observation?.cancel()
-        observation = nil
+        isObserving = false
         hotKey.unregister()
         hidePanel()
     }
@@ -92,15 +91,32 @@ public final class RewriteController {
 
     /// The card is a pure function of `phase`, so the panel simply follows it:
     /// anything but `.idle` is on screen.
+    ///
+    /// Driven by `withObservationTracking` rather than a poll — a timer would
+    /// wake the CPU forever for a surface that is idle almost all the time.
+    /// `onChange` fires *before* the new value is stored, so the re-read and
+    /// the re-subscription both happen on the next main-actor hop.
     private func startObserving() {
-        observation?.cancel()
-        observation = Task { [weak self] in
-            while !Task.isCancelled {
+        guard !isObserving else { return }
+        isObserving = true
+        syncPanel()
+        observePhase()
+    }
+
+    private func observePhase() {
+        withObservationTracking {
+            _ = coordinator.phase
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
-                if case .idle = self.coordinator.phase { self.hidePanel() } else { self.showPanel() }
-                try? await Task.sleep(for: .milliseconds(80))
+                self.syncPanel()
+                self.observePhase()
             }
         }
+    }
+
+    private func syncPanel() {
+        if case .idle = coordinator.phase { hidePanel() } else { showPanel() }
     }
 
     private func showPanel() {
