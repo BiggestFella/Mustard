@@ -1,8 +1,8 @@
 import Foundation
 
-/// Local configuration for the optional, manually refreshed Code Heroes queue.
-/// It intentionally has no scheduling fields: enabling the source never starts a
-/// refresh by itself.
+/// Local configuration for the optional Code Heroes queue.
+/// `enabled` is reserved for a later automatic-refresh opt-in. Phase 6A imports
+/// remain manual regardless of its value, and this type has no scheduling fields.
 public struct CodeHeroesQueueSettings: Codable, Equatable {
     public var repositoryRoot: String
     public var queuePath: String

@@ -58,7 +58,9 @@ public final class AgentService {
     }
 
     /// Imports a reviewed Code Heroes queue through the read-only projection adapter.
-    /// This performs no connector, repository, export, or scheduler work.
+    /// This is intentionally available even when `settings.enabled` is false:
+    /// that preference is reserved for a later automatic-refresh opt-in. This
+    /// method performs no connector, repository, export, or scheduler work.
     @discardableResult
     public func importCodeHeroesDecisionQueue(
         settings: CodeHeroesQueueSettings,

@@ -68,6 +68,8 @@ public final class CodeHeroesDecisionAdapter {
         catch let CodeHeroesDecisionQueue.ValidationError.queue(finding) { return report(digest, document.sourceRunID, [finding]) }
         catch { return report(digest, document.sourceRunID, [queueFinding("Queue validation failed")]) }
 
+        let incomingGeneratedAt = Self.iso8601Date(document.generatedAt)
+
         guard let receiptURL = resolvedRelative(document.sourceReceipt), isRegularFile(receiptURL) else {
             return report(digest, document.sourceRunID, [queueFinding("Source receipt is not a regular file beneath the configured repository root")])
         }
@@ -108,7 +110,7 @@ public final class CodeHeroesDecisionAdapter {
                 findings.append(.init(scope: .cluster, clusterID: cluster.clusterID, reason: "Projection UID collides with a non-Code-Heroes task")); collisions += 1; continue
             }
             let links = stableLinks(queueURL: normalizedQueue, receiptURL: receiptURL, decisionURLs: sourceURLs[cluster.clusterID] ?? [])
-            let metadata = sourceContext(digest: digest, runID: document.sourceRunID, clusterID: cluster.clusterID, sourceIDs: projection.sourceDecisionIDs)
+            let metadata = sourceContext(digest: digest, runID: document.sourceRunID, generatedAt: document.generatedAt, clusterID: cluster.clusterID, sourceIDs: projection.sourceDecisionIDs)
             let projectionList = list(for: projection.area, insertedAreas: &insertedAreas, insertedLists: &insertedLists)
             if let task = existingTasks.first {
                 if matches(projection: projection, task: task, list: projectionList, sourceURL: normalizedQueue.path, sourceContext: metadata, links: links) { unchanged += 1; continue }
@@ -124,7 +126,13 @@ public final class CodeHeroesDecisionAdapter {
         }
 
         for task in allTasks where task.source == CodeHeroesDecisionPolicy.source {
-            guard let clusterID = contextValue("cluster", in: task.sourceContext), !incomingIDs.contains(clusterID), !task.tags.contains("source-stale") else { continue }
+            guard task.sourceURL == normalizedQueue.path,
+                  let clusterID = contextValue("cluster", in: task.sourceContext),
+                  !incomingIDs.contains(clusterID),
+                  !task.tags.contains("source-stale"),
+                  let incomingGeneratedAt,
+                  let priorGeneratedAt = contextValue("generated_at", in: task.sourceContext).flatMap(Self.iso8601Date),
+                  incomingGeneratedAt >= priorGeneratedAt else { continue }
             task.tags = Array(Set(task.tags + ["source-stale"])).sorted()
             task.stage = .needsReview
             task.notes = String((task.notes + "\nSource health: absent from latest read-only queue; review before acting.").prefix(1_200))
@@ -184,8 +192,14 @@ public final class CodeHeroesDecisionAdapter {
             && task.sourceContext == sourceContext && task.links == links && task.actionTypeRaw == nil
             && task.confidence == nil && task.delegation == nil && task.agentRun == nil
     }
-    private func sourceContext(digest: String, runID: String, clusterID: String, sourceIDs: [String]) -> String { String("digest=\(digest);run=\(runID);cluster=\(clusterID);source_ids=\(sourceIDs.sorted().joined(separator: ","))".prefix(900)) }
+    private func sourceContext(digest: String, runID: String, generatedAt: String, clusterID: String, sourceIDs: [String]) -> String { String("digest=\(digest);run=\(runID);generated_at=\(generatedAt);cluster=\(clusterID);source_ids=\(sourceIDs.sorted().joined(separator: ","))".prefix(900)) }
     private func contextValue(_ key: String, in context: String) -> String? { context.split(separator: ";").first { $0.hasPrefix("\(key)=") }.map { String($0.dropFirst(key.count + 1)) } }
+    private static func iso8601Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: value)
+    }
     private func resolvedRelative(_ value: String) -> URL? {
         guard !value.isEmpty, !value.hasPrefix("/") else { return nil }
         let resolved = Self.normalized(repositoryRoot.appendingPathComponent(value))

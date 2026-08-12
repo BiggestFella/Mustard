@@ -28,6 +28,7 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(task.links.map(\.label), ["Queue", "Run", "Decision"])
         XCTAssertTrue(task.links.allSatisfy { $0.url.hasPrefix(fixture.root.standardizedFileURL.path) })
         XCTAssertTrue(task.sourceContext.contains("digest="))
+        XCTAssertTrue(task.sourceContext.contains("generated_at=2026-01-01T00:00:00Z"))
         XCTAssertNil(task.actionTypeRaw); XCTAssertNil(task.confidence); XCTAssertNil(task.delegation); XCTAssertNil(task.agentRun)
     }
 
@@ -94,6 +95,70 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertTrue(stale.tags.contains("source-stale"))
         XCTAssertEqual(report.staleCount, 1)
         XCTAssertEqual(manual.title, "Personal")
+    }
+
+    func test_olderQueueDoesNotMarkExistingProjectionStale() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+        _ = adapter.importQueue(at: fixture.queueURL)
+
+        try fixture.writeDecision("DEC-DL-2")
+        try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "2025-12-31T23:59:59Z")
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        let existing = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
+        XCTAssertFalse(existing.tags.contains("source-stale"))
+        XCTAssertEqual(report.staleCount, 0)
+        XCTAssertEqual(try tasks(context).first { $0.uid == "codeheroes:decision:DL-2" }?.title, "Decision")
+    }
+
+    func test_projectionWithoutValidPriorGeneratedAtDoesNotMarkStale() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let legacy = MustardTask(title: "Legacy projection", owner: .agent)
+        legacy.uid = "codeheroes:decision:DL-1"
+        legacy.source = CodeHeroesDecisionPolicy.source
+        legacy.sourceURL = fixture.queueURL.standardizedFileURL.path
+        legacy.sourceContext = "digest=old;run=RUN-OLD;cluster=DL-1;source_ids=DEC-DL-1"
+        context.insert(legacy)
+        try context.save()
+
+        try fixture.writeDecision("DEC-DL-2")
+        try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")])
+        let report = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow }).importQueue(at: fixture.queueURL)
+
+        XCTAssertFalse(legacy.tags.contains("source-stale"))
+        XCTAssertEqual(report.staleCount, 0)
+    }
+
+    func test_invalidIncomingGeneratedAtDoesNotMarkExistingProjectionStale() throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+        _ = adapter.importQueue(at: fixture.queueURL)
+
+        try fixture.writeDecision("DEC-DL-2")
+        try fixture.writeQueue(clusters: [Fixture.cluster("DL-2")], generatedAt: "not-a-date")
+        let report = adapter.importQueue(at: fixture.queueURL)
+
+        let existing = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
+        XCTAssertFalse(existing.tags.contains("source-stale"))
+        XCTAssertEqual(report.staleCount, 0)
+    }
+
+    func test_queueAtDifferentPathDoesNotMarkOtherQueueProjectionStale() throws {
+        let first = try Fixture()
+        let second = try Fixture(clusters: [Fixture.cluster("DL-2")])
+        let context = try makeContext()
+        _ = CodeHeroesDecisionAdapter(context: context, repositoryRoot: first.root, now: { self.fixedNow }).importQueue(at: first.queueURL)
+
+        let report = CodeHeroesDecisionAdapter(context: context, repositoryRoot: second.root, now: { self.fixedNow }).importQueue(at: second.queueURL)
+
+        let firstTask = try XCTUnwrap(try tasks(context).first { $0.uid == "codeheroes:decision:DL-1" })
+        XCTAssertEqual(firstTask.sourceURL, first.queueURL.standardizedFileURL.path)
+        XCTAssertFalse(firstTask.tags.contains("source-stale"))
+        XCTAssertEqual(report.staleCount, 0)
     }
 
     func test_foreignUIDCollisionIsReportedWithoutChangingForeignTask() throws {
@@ -291,8 +356,8 @@ private final class Fixture {
         .init(clusterID: id, projectID: project, title: title, triageState: "needs-human-decision", mustardStage: "needsInput", priority: "high", decisionRequired: true, humanActionRequired: true, question: "Question", nextAction: "Next", whyGrouped: "Why", sourceDecisionIDs: ["DEC-\(id)"])
     }
 
-    func writeQueue(clusters: [CodeHeroesDecisionQueue.Cluster]) throws {
-        let document = CodeHeroesDecisionQueue.Document(schemaVersion: 1, reportType: "dream_decision_triage", generatedAt: "2026-01-01T00:00:00Z", sourceRunID: "RUN-1", sourceReceipt: receipt, canonicalInput: "operations/input.md", readOnly: true, decisionStatusMutations: 0, mustardImport: "future-adapter-only", summary: [:], historicalOpenDecisionIDs: [], historicalExclusions: [], queue: clusters)
+    func writeQueue(clusters: [CodeHeroesDecisionQueue.Cluster], generatedAt: String = "2026-01-01T00:00:00Z") throws {
+        let document = CodeHeroesDecisionQueue.Document(schemaVersion: 1, reportType: "dream_decision_triage", generatedAt: generatedAt, sourceRunID: "RUN-1", sourceReceipt: receipt, canonicalInput: "operations/input.md", readOnly: true, decisionStatusMutations: 0, mustardImport: "future-adapter-only", summary: [:], historicalOpenDecisionIDs: [], historicalExclusions: [], queue: clusters)
         try JSONEncoder().encode(document).write(to: queueURL)
     }
 
@@ -301,5 +366,9 @@ private final class Fixture {
         let resolvedDirectory = root.appendingPathComponent("operations/decisions/resolved")
         try FileManager.default.createDirectory(at: resolvedDirectory, withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: open, to: resolvedDirectory.appendingPathComponent("\(id).md"))
+    }
+
+    func writeDecision(_ id: String) throws {
+        try "# \(id)".write(to: root.appendingPathComponent("operations/decisions/open/\(id).md"), atomically: true, encoding: .utf8)
     }
 }

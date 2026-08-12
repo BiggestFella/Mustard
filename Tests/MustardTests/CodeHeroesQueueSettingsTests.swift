@@ -92,6 +92,22 @@ final class CodeHeroesQueueSettingsTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<MustardTask>()).count, 1)
     }
 
+    func test_manualImportRemainsAvailableWhenAutomaticRefreshPreferenceIsDisabled() throws {
+        let fixture = try QueueFixture()
+        let context = try makeContext()
+        let service = AgentService(context: context, claude: { _, _ in
+            XCTFail("Manual Code Heroes import must not invoke the agent or a scheduler")
+            return ClaudeResult(ok: false, text: "unexpected")
+        })
+        let settings = CodeHeroesQueueSettings(repositoryRoot: fixture.root.path, queuePath: fixture.queueURL.path, enabled: false)
+
+        let report = service.importCodeHeroesDecisionQueue(settings: settings)
+
+        XCTAssertEqual(report?.createdCount, 1)
+        XCTAssertNil(service.lastCodeHeroesImportError)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<MustardTask>()).count, 1)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let name = "CodeHeroesQueueSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
