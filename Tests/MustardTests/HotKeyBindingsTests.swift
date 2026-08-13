@@ -89,6 +89,47 @@ final class HotKeyBindingsTests: XCTestCase {
             HotKeyValidation.validate(HotKeyChord(keyCode: 4, carbonModifiers: 0x1000), scope: .global))
     }
 
+    func test_triageDefaults_areTheBareTriageKeys() {
+        let bindings = HotKeyBindings(store: makeStore())
+        XCTAssertEqual(bindings.chord(for: .triageApprove), HotKeyChord(keyCode: 0, carbonModifiers: 0))
+        XCTAssertEqual(bindings.chord(for: .triageIgnore), HotKeyChord(keyCode: 7, carbonModifiers: 0))
+        XCTAssertEqual(bindings.chord(for: .triageSnooze), HotKeyChord(keyCode: 1, carbonModifiers: 0))
+        XCTAssertEqual(bindings.chord(for: .triageNext), HotKeyChord(keyCode: 38, carbonModifiers: 0))
+        XCTAssertEqual(bindings.chord(for: .triagePrevious), HotKeyChord(keyCode: 40, carbonModifiers: 0))
+        XCTAssertEqual(HotKeyAction.triageApprove.scope, .triage)
+        XCTAssertEqual(HotKeyAction.triageApprove.codeKey, "hotkey.triageApprove.code")
+    }
+
+    func test_validation_triageAllowsABareKey() {
+        // The console monitor stands down while any text field has focus, so a
+        // single letter is safe there — and it's the point of the feature.
+        XCTAssertNil(HotKeyValidation.validate(HotKeyChord(keyCode: 0, carbonModifiers: 0), scope: .triage))
+        XCTAssertNil(
+            HotKeyValidation.validate(HotKeyChord(keyCode: 0, carbonModifiers: 0x100), scope: .triage))
+    }
+
+    func test_validation_triageRejectsBareSpaceReturnTab() {
+        for keyCode in [UInt32(49), 36, 48] {
+            XCTAssertEqual(
+                HotKeyValidation.validate(HotKeyChord(keyCode: keyCode, carbonModifiers: 0), scope: .triage),
+                .keyReservedWithoutModifier)
+            // With a modifier they're fine — they no longer collide with the
+            // focused control.
+            XCTAssertNil(
+                HotKeyValidation.validate(
+                    HotKeyChord(keyCode: keyCode, carbonModifiers: 0x100), scope: .triage))
+        }
+    }
+
+    func test_conflicts_seeTriageChordsToo() {
+        var chords = Dictionary(uniqueKeysWithValues: HotKeyAction.allCases.map { ($0, $0.defaultChord) })
+        chords[.triageNext] = HotKeyChord(keyCode: 0, carbonModifiers: 0)  // A, same as approve
+        XCTAssertEqual(
+            HotKeyConflicts.conflictingAction(
+                with: HotKeyChord(keyCode: 0, carbonModifiers: 0), for: .triageNext, chords: chords),
+            .triageApprove)
+    }
+
     func test_validation_inAppRequiresMappableKey_globalDoesNot() {
         let f1Chord = HotKeyChord(keyCode: 122, carbonModifiers: 0x100)
         XCTAssertEqual(HotKeyValidation.validate(f1Chord, scope: .inApp), .keyNotSupportedInApp)

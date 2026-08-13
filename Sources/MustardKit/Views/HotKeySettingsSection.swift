@@ -1,9 +1,26 @@
 import SwiftUI
 
-/// Settings → HOTKEYS: one recorder row per action, live registration status
-/// for the global three, and a reset-all footer.
+/// Settings → HOTKEYS: one recorder row per action, grouped by where the chord
+/// works, live registration status for the global four, the triage snooze
+/// preset, and a reset-all footer.
 struct HotKeySettingsSection: View {
     @Environment(HotKeyBindingsStore.self) private var hotKeys
+    @AppStorage(TriageSnoozePreset.storageKey) private var snoozePreset = TriageSnoozePreset.default.rawValue
+
+    private struct Group: Identifiable {
+        let scope: HotKeyAction.Scope
+        let caption: String
+        var id: String { caption }
+        var actions: [HotKeyAction] { HotKeyAction.allCases.filter { $0.scope == scope } }
+    }
+
+    private let groups: [Group] = [
+        Group(scope: .global, caption: "Anywhere on the Mac"),
+        Group(scope: .inApp, caption: "While Mustard is frontmost"),
+        Group(
+            scope: .triage,
+            caption: "Agent console — single keys, ignored while you're typing"),
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -11,18 +28,22 @@ struct HotKeySettingsSection: View {
                 .font(Theme.Fonts.sectionHeader).tracking(0.06)
                 .foregroundStyle(Theme.Palette.textTertiary)
 
-            ForEach(HotKeyAction.allCases) { action in
-                row(action)
+            ForEach(groups) { group in
+                Text(group.caption)
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .padding(.top, 6)
+                ForEach(group.actions) { action in
+                    row(action)
+                    if action == .triageSnooze { snoozeLengthRow }
+                }
             }
 
             Button("Reset all to defaults") { hotKeys.resetAll() }
                 .font(Theme.Fonts.meta)
                 .foregroundStyle(Theme.Palette.accent)
                 .buttonStyle(.plain)
-
-            Text("The first four work anywhere on the Mac; the rest while Mustard is frontmost.")
-                .font(Theme.Fonts.caption)
-                .foregroundStyle(Theme.Palette.textTertiary)
+                .padding(.top, 6)
         }
     }
 
@@ -41,6 +62,26 @@ struct HotKeySettingsSection: View {
             Spacer()
             HotKeyRecorderView(action: action)
         }
+    }
+
+    /// How far the snooze key defers — it has no menu to pick from, unlike the
+    /// console's Snooze button.
+    private var snoozeLengthRow: some View {
+        HStack(spacing: 10) {
+            Text("Snooze key defers by")
+                .font(Theme.Fonts.meta)
+                .foregroundStyle(Theme.Palette.textSecondary)
+            Spacer()
+            Picker("", selection: $snoozePreset) {
+                ForEach(TriageSnoozePreset.allCases) { preset in
+                    Text(preset.label).tag(preset.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+        }
+        .padding(.leading, 14)
     }
 
     /// Live rebind status if the user changed this chord this session,
