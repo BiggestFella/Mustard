@@ -19,6 +19,12 @@ public enum SnoozeTargets {
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 
+    /// This afternoon (15:00), but always at least a minute out so a late snooze still hides.
+    public static func afternoon(after now: Date = .now, calendar: Calendar = .current) -> Date {
+        let target = calendar.date(bySettingHour: 15, minute: 0, second: 0, of: now) ?? now
+        return max(target, now.addingTimeInterval(60))
+    }
+
     /// This evening (19:00), but always at least a minute out so a late snooze still hides.
     public static func evening(after now: Date = .now, calendar: Calendar = .current) -> Date {
         let target = calendar.date(bySettingHour: 19, minute: 0, second: 0, of: now) ?? now

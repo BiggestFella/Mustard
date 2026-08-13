@@ -7,20 +7,26 @@ import Foundation
 public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
     case pushToTalk, dictation, rewrite, clips
     case hover, notch, commandBar, sourceInspector, noteSearch
+    case triageApprove, triageIgnore, triageSnooze, triageNext, triagePrevious
 
     public var id: String { rawValue }
 
-    public enum Scope: Equatable, Sendable {
+    public enum Scope: Equatable, Sendable, CaseIterable {
         /// Registered with Carbon; works anywhere on the Mac.
         case global
         /// A SwiftUI `.keyboardShortcut`; works while Mustard is frontmost.
         case inApp
+        /// A local key monitor inside the Agent console only. Single keys are
+        /// allowed here (triage is a rhythm) because the console suppresses them
+        /// whenever a text field has focus — see `TriageShortcuts.shouldHandle`.
+        case triage
     }
 
     public var scope: Scope {
         switch self {
         case .pushToTalk, .dictation, .rewrite, .clips: .global
         case .hover, .notch, .commandBar, .sourceInspector, .noteSearch: .inApp
+        case .triageApprove, .triageIgnore, .triageSnooze, .triageNext, .triagePrevious: .triage
         }
     }
 
@@ -35,6 +41,11 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .commandBar: "Command bar"
         case .sourceInspector: "Source inspector"
         case .noteSearch: "Note search"
+        case .triageApprove: "Approve & run"
+        case .triageIgnore: "Ignore"
+        case .triageSnooze: "Snooze"
+        case .triageNext: "Next recommendation"
+        case .triagePrevious: "Previous recommendation"
         }
     }
 
@@ -49,6 +60,12 @@ public enum HotKeyAction: String, CaseIterable, Identifiable, Sendable {
         case .commandBar: HotKeyChord(keyCode: 40, carbonModifiers: 0x100)  // ⌘K
         case .sourceInspector: HotKeyChord(keyCode: 1, carbonModifiers: 0x300)  // ⌘⇧S
         case .noteSearch: HotKeyChord(keyCode: 3, carbonModifiers: 0x300)  // ⌘⇧F
+        // Bare keys, console-only: A(pprove) · X (kill it) · S(nooze) · J/K to walk.
+        case .triageApprove: HotKeyChord(keyCode: 0, carbonModifiers: 0)  // A
+        case .triageIgnore: HotKeyChord(keyCode: 7, carbonModifiers: 0)  // X
+        case .triageSnooze: HotKeyChord(keyCode: 1, carbonModifiers: 0)  // S
+        case .triageNext: HotKeyChord(keyCode: 38, carbonModifiers: 0)  // J
+        case .triagePrevious: HotKeyChord(keyCode: 40, carbonModifiers: 0)  // K
         }
     }
 
@@ -117,20 +134,33 @@ public struct HotKeyBindings {
 public enum HotKeyValidationError: Equatable, Sendable {
     case needsModifier
     case keyNotSupportedInApp
+    case keyReservedWithoutModifier
 
     public var message: String {
         switch self {
         case .needsModifier: "Add ⌘, ⌃ or ⌥"
         case .keyNotSupportedInApp: "That key can't be an in-app shortcut"
+        case .keyReservedWithoutModifier: "That key needs a modifier"
         }
     }
 }
 
 public enum HotKeyValidation {
+    /// Space, Return and Tab drive the focused control (and the list), so they
+    /// can never be a bare triage key.
+    private static let reservedBareKeys: Set<UInt32> = [49, 36, 48]
+
     /// Shift alone is not enough — an unmodified (or shift-only) key would
     /// fire while typing. In-app chords must also be expressible as a SwiftUI
-    /// KeyEquivalent; global Carbon chords take any key code.
+    /// KeyEquivalent; global Carbon chords take any key code. Triage chords are
+    /// the exception to the modifier rule: they are matched by a monitor that
+    /// stands down while any text field has focus, so a single letter is safe.
     public static func validate(_ chord: HotKeyChord, scope: HotKeyAction.Scope) -> HotKeyValidationError? {
+        if scope == .triage {
+            let bare = chord.carbonModifiers & (0x1000 | 0x800 | 0x100) == 0
+            if bare, reservedBareKeys.contains(chord.keyCode) { return .keyReservedWithoutModifier }
+            return nil
+        }
         if chord.carbonModifiers & (0x1000 | 0x800 | 0x100) == 0 { return .needsModifier }
         if scope == .inApp, HotKeyKeyMap.keyEquivalentCharacter(forKeyCode: chord.keyCode) == nil {
             return .keyNotSupportedInApp
