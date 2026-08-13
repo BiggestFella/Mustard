@@ -44,12 +44,6 @@ public struct AgentConsoleView: View {
                 .frame(minWidth: 320, idealWidth: 420)
         }
         .background(Theme.Palette.bg)
-        .sheet(item: $console.sheetTask) { task in
-            // Reuse the task detail flow (which hosts the agent conversation) rather than
-            // duplicating the conversation UI in the console. A draft opens as a companion
-            // panel beside the task, same as the board drawer.
-            ConsoleTaskSheet(task: task, onClose: { self.console.sheetTask = nil })
-        }
         .onAppear {
             syncQueue()
             if console.selected == nil {
@@ -162,7 +156,12 @@ public struct AgentConsoleView: View {
 
     private var detailColumn: some View {
         Group {
-            if let selected = console.selected {
+            // A task under review opens HERE, in the same pane the triage items
+            // use — not as a modal card over the top of it (Leon, 2026-08-13).
+            if let task = console.sheetTask {
+                ConsoleTaskDetail(task: task, onClose: { console.sheetTask = nil })
+                    .id(task.persistentModelID)
+            } else if let selected = console.selected {
                 // Key to the selected rec so its detail view (and the @State comment
                 // field inside) is rebuilt fresh per selection — no carry-over.
                 ScrollView { RecommendationDetailView(rec: selected).id(selected.persistentModelID).padding(20) }
@@ -188,6 +187,9 @@ public struct AgentConsoleView: View {
     /// source if the setting is on and it has a web source. Programmatic re-selection
     /// (arrival / queue churn) does not auto-open — avoids surprise page loads.
     private func select(_ rec: Recommendation?) {
+        // Both share the detail column, and a task takes precedence there, so
+        // picking a recommendation has to release the task or the pane sticks.
+        console.sheetTask = nil
         console.selected = rec
         guard let rec,
               RecommendationSelection.shouldAutoOpenSource(settingOn: autoOpenSource, rec: rec),
@@ -490,8 +492,14 @@ struct FlowChips: View {
     }
 }
 
-/// Console host for the task detail: pairs the sheet with the companion draft panel.
-private struct ConsoleTaskSheet: View {
+/// Console host for the task detail: the task review, plus its companion draft
+/// panel when a draft is open.
+///
+/// This renders **inside the console's detail column**, so reviewing a task
+/// looks like triaging a recommendation instead of throwing a modal card over
+/// the whole console. `TaskDetailSheet`'s own Done button drives `onClose`,
+/// which just clears the selection and returns the pane to the recommendation.
+private struct ConsoleTaskDetail: View {
     let task: MustardTask
     let onClose: () -> Void
     @State private var draftPanel = AgentDraftPanelState()
@@ -504,10 +512,9 @@ private struct ConsoleTaskSheet: View {
                 Divider().overlay(Theme.Palette.hairline)
             }
             TaskDetailSheet(task: task, onClose: onClose)
-                .frame(minWidth: 480)
                 .environment(draftPanel)
         }
-        .frame(minHeight: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(Theme.Motion.expand, value: draftPanel.draft?.uid)
     }
 }

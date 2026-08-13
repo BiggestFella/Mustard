@@ -535,7 +535,7 @@ public struct TaskDetailSheet: View {
                     .frame(maxWidth: .infinity, minHeight: 90, alignment: .topLeading)
             } else {
                 TextEditor(text: $task.notes)
-                    .font(Theme.Fonts.body).frame(minHeight: 90, maxHeight: 220).padding(6)
+                    .font(Theme.Fonts.body).frame(minHeight: 150, maxHeight: 320).padding(6)
                     .background(Theme.Palette.bg, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.Palette.hairline))
             }

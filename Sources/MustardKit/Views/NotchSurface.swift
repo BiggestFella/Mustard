@@ -116,16 +116,10 @@ public final class NotchController {
             panel.hasShadow = false
             panel.hidesOnDeactivate = false
             panel.isMovableByWindowBackground = false
-            let hosting = NSHostingView(rootView: makeContent(self))
-            // The controller sets this panel's frame explicitly on every state
-            // change, so SwiftUI must NOT also push content-size extrema into
-            // the window: that path (`updateWindowContentSizeExtremaIfNecessary`
-            // → `sizeThatFits`) runs *inside* the window's constraint-update
-            // pass, and a graph change during it re-dirties the hosting view —
-            // AppKit throws from `_postWindowNeedsUpdateConstraints` and macOS
-            // 27 turns that uncaught exception into a crash.
-            hosting.sizingOptions = []
-            panel.contentView = hosting
+            // Nested one level below `contentView` on purpose — see
+            // `installPanelContent`. This panel crashed twice on the window
+            // content-size-extrema path before that.
+            installPanelContent(makeContent(self), in: panel)
             self.panel = panel
             // Follow display connect/disconnect: previously the panel only
             // re-resolved its screen on the next show()/hover, so unplugging an

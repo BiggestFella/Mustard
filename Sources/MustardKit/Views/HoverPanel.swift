@@ -38,7 +38,7 @@ public final class HoverPanel {
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hidesOnDeactivate = false
-            panel.contentView = NSHostingView(rootView: makeContent())
+            installPanelContent(makeContent(), in: panel)
             if let screen = NSScreen.main {
                 let frame = screen.visibleFrame
                 panel.setFrameTopLeftPoint(NSPoint(x: frame.maxX - 284, y: frame.maxY - 12))
