@@ -35,6 +35,11 @@ public enum RewriteWiring {
         bandInstructions(bundle: .module)
     }
 
+    /// The SwiftPM resource bundle used by the live loader. Kept internal so
+    /// tests can verify the shipped band files without reaching into a test
+    /// target's separate `Bundle.module`.
+    static var resourceBundle: Bundle { .module }
+
     static func bandInstructions(bundle: Bundle) -> String {
         let band = PromptCatalog.currentBand
         guard let name = PromptCatalog.bestResource(
