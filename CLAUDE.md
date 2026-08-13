@@ -65,7 +65,9 @@ Mustard/
                                    Craft editor: NoteDecoration, SlashMenu, BlockReorder,
                                    NoteMetadata, WikilinkURL;
                                    notch shelf (2026-08-12): ClipClassifier, ClipStoreRules,
-                                   NotchPinState, NotchTabModel/NotchPanelMetrics, NotchSearch
+                                   NotchPinState, NotchTabModel/NotchPanelMetrics, NotchSearch;
+                                   hotkeys: HotKeyBindings/-KeyMap/-RecorderLogic, TriageShortcuts
+                                   (Agent-console single-key triage: A · X · S · J/K, rebindable)
       Agent/                     ClaudeRunner (Process shell), VaultSweep (prompt+parser),
                                    AgentService (@Observable orchestrator), FileVaultIO
                                    (MeetingVaultIO + NoteVaultIO), NoteIndexService (notes reindex)
@@ -203,7 +205,8 @@ to Leon's Mac (cannot move to a cloud server without re-introducing API billing)
 Sweep (manual or scheduled) → Claude proposes ≤5 **Recommendations** (each with
 `confidence`, `reasoning`, an editable `draft`, an `action_type`) → you triage in
 the Agent console (Approve · Edit · Change action · Comment · Schedule · I'll do it
-· Snooze · Reject) → approved items become delegated tasks that **execute** via `claude -p`
+· Snooze · Reject; or by keyboard — **A** approve, **X** ignore, **S** snooze, **J/K** walk
+the queue, all rebindable in Settings → Hotkeys and suppressed while any field has focus) → approved items become delegated tasks that **execute** via `claude -p`
 and land in the board's **Needs Review** column (no silent completion; output review lives
 on the board, not `OutputCard` — ADR-0010) → you review (Accept · Request changes · Take
 back). **Trust** (Manual/Supervised/Trusted/Autonomous) × **confidence**

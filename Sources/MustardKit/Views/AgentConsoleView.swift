@@ -13,8 +13,10 @@ public struct AgentConsoleView: View {
     @AppStorage("autoOpenSourceOnSelect") private var autoOpenSource = true
     @Environment(SourcePanelController.self) private var sourcePanel
     @Environment(AgentTaskCoordinator.self) private var taskAgent
-    @State private var selected: Recommendation?
-    @State private var selectedTask: MustardTask?
+    @Environment(HotKeyBindingsStore.self) private var hotKeys
+    /// Selection + key routing. An object, not @State: the triage key monitor is
+    /// an escaping callback and must see the live selection and queue.
+    @State private var console = TriageConsoleState()
 
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query private var allTasks: [MustardTask]
@@ -34,31 +36,82 @@ public struct AgentConsoleView: View {
     private var attention: AgentInbox.AgentAttention { AgentInbox.attention(allTasks) }
 
     public var body: some View {
-        HSplitView {
+        @Bindable var console = console
+        return HSplitView {
             masterColumn
                 .frame(minWidth: 360, idealWidth: 480)
             detailColumn
                 .frame(minWidth: 320, idealWidth: 420)
         }
         .background(Theme.Palette.bg)
-        .sheet(item: $selectedTask) { task in
+        .sheet(item: $console.sheetTask) { task in
             // Reuse the task detail flow (which hosts the agent conversation) rather than
             // duplicating the conversation UI in the console. A draft opens as a companion
             // panel beside the task, same as the board drawer.
-            ConsoleTaskSheet(task: task, onClose: { selectedTask = nil })
+            ConsoleTaskSheet(task: task, onClose: { self.console.sheetTask = nil })
         }
         .onAppear {
-            if selected == nil {
-                selected = RecommendationSelection.nextSelection(current: nil, pending: pending)
+            syncQueue()
+            if console.selected == nil {
+                console.selected = RecommendationSelection.nextSelection(current: nil, pending: pending)
             }
+            startTriageKeys()
         }
+        .onDisappear { console.removeMonitor() }
         .onChange(of: pending.map(\.persistentModelID)) { _, _ in
-            let next = RecommendationSelection.nextSelection(current: selected, pending: pending)
-            if next !== selected { selected = next }
+            syncQueue()
+            let next = RecommendationSelection.nextSelection(current: console.selected, pending: pending)
+            if next !== console.selected { console.selected = next }
+        }
+    }
+
+    /// Keep the object's copy of the visible order in step with the query — the
+    /// key monitor walks this, not the view struct it was installed with.
+    private func syncQueue() {
+        console.order = TriageShortcuts.visibleOrder(SourceGrouping.grouped(pending))
+    }
+
+    /// Install the console-only triage keys. Environment objects are captured
+    /// once, here, so the escaping monitor never reads `@Environment` after body.
+    private func startTriageKeys() {
+        let agent = self.agent
+        let hotKeys = self.hotKeys
+        let console = self.console
+        console.installMonitor(chords: { hotKeys.chords }) { command in
+            Self.perform(command, console: console, agent: agent)
+        }
+    }
+
+    /// The keyboard mirror of the detail pane's buttons — same outcomes, same
+    /// guards, so a key and a click are never two different decisions.
+    private static func perform(
+        _ command: TriageCommand, console: TriageConsoleState, agent: AgentService
+    ) {
+        switch command {
+        case .next:
+            console.selected = TriageShortcuts.step(from: console.selected, in: console.order, by: 1)
+        case .previous:
+            console.selected = TriageShortcuts.step(from: console.selected, in: console.order, by: -1)
+        case .approve:
+            // `isExecuting` disables the Approve button; the key stands down too.
+            guard let rec = console.selected, !agent.isExecuting else { return }
+            switch TriageShortcuts.approveOutcome(for: rec) {
+            case .keep: agent.keep(rec)
+            case .approveAndRun: Task { await agent.decide(rec, .approved) }
+            }
+        case .ignore:
+            console.selected?.decision = .denied
+        case .snooze:
+            guard let rec = console.selected else { return }
+            agent.snooze(rec, until: TriageSnoozePreset.current().target())
         }
     }
 
     private var masterColumn: some View {
+        // ScrollViewReader so a keyboard-moved selection scrolls itself into
+        // view — walking the queue with J/K must never leave you looking at
+        // a card the selection has already left.
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -81,14 +134,16 @@ public struct AgentConsoleView: View {
                         SourceGroupHeader(rec: group.header)
                         ForEach(group.members) { rec in
                             RecommendationRow(rec: rec, inGroup: true,
-                                              isSelected: selected === rec,
+                                              isSelected: console.selected === rec,
                                               onSelect: { select(rec) })
+                                .id(rec.persistentModelID)
                                 .padding(.bottom, 8)
                         }
                     } else {
                         RecommendationRow(rec: group.header, inGroup: false,
-                                          isSelected: selected === group.header,
+                                          isSelected: console.selected === group.header,
                                           onSelect: { select(group.header) })
+                            .id(group.header.persistentModelID)
                             .padding(.bottom, 8)
                     }
                 }
@@ -98,11 +153,16 @@ public struct AgentConsoleView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
         }
+        .onChange(of: console.selected?.persistentModelID) { _, id in
+            guard let id else { return }
+            withAnimation(Theme.Motion.settle) { proxy.scrollTo(id, anchor: .center) }
+        }
+        }
     }
 
     private var detailColumn: some View {
         Group {
-            if let selected {
+            if let selected = console.selected {
                 // Key to the selected rec so its detail view (and the @State comment
                 // field inside) is rebuilt fresh per selection — no carry-over.
                 ScrollView { RecommendationDetailView(rec: selected).id(selected.persistentModelID).padding(20) }
@@ -128,7 +188,7 @@ public struct AgentConsoleView: View {
     /// source if the setting is on and it has a web source. Programmatic re-selection
     /// (arrival / queue churn) does not auto-open — avoids surprise page loads.
     private func select(_ rec: Recommendation?) {
-        selected = rec
+        console.selected = rec
         guard let rec,
               RecommendationSelection.shouldAutoOpenSource(settingOn: autoOpenSource, rec: rec),
               let link = SourceLink(from: rec) else { return }
@@ -259,7 +319,7 @@ public struct AgentConsoleView: View {
             Spacer(minLength: 8)
             if let action {
                 Button {
-                    if action.oneClick { advanceGate(task) } else { selectedTask = task }
+                    if action.oneClick { advanceGate(task) } else { console.sheetTask = task }
                 } label: {
                     Text(action.label)
                         .font(Theme.Fonts.caption.weight(.semibold))
@@ -281,7 +341,7 @@ public struct AgentConsoleView: View {
         .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.Palette.hairline, lineWidth: 0.5))
         .contentShape(Rectangle())
-        .onTapGesture { selectedTask = task }
+        .onTapGesture { console.sheetTask = task }
         .padding(.bottom, 8)
     }
 }

@@ -8,6 +8,7 @@ import SwiftData
 struct RecommendationDetailView: View {
     @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
+    @Environment(HotKeyBindingsStore.self) private var hotKeys
     let rec: Recommendation
     @State private var commenting = false
     @State private var commentText = ""
@@ -46,8 +47,23 @@ struct RecommendationDetailView: View {
             }
             drawer
             outcomes
+            keyHint
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The triage keys, taught once under the buttons rather than stamped on
+    /// each one. Reads the live chords, so a rebind shows here immediately.
+    private var keyHint: some View {
+        let key: (HotKeyAction) -> String = { hotKeys.chord(for: $0).description }
+        return Text(
+            rec.action == .fyi
+                ? "\(key(.triageApprove)) keep · \(key(.triageIgnore)) dismiss · \(key(.triageSnooze)) snooze · \(key(.triageNext))/\(key(.triagePrevious)) move"
+                : "\(key(.triageApprove)) approve · \(key(.triageIgnore)) ignore · \(key(.triageSnooze)) snooze · \(key(.triageNext))/\(key(.triagePrevious)) move"
+        )
+        .font(Theme.Fonts.caption)
+        .foregroundStyle(Theme.Palette.textTertiary)
+        .help("Editable in Settings → Hotkeys. Ignored while you're typing.")
     }
 
     private var actionAndConfidence: some View {
