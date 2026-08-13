@@ -760,7 +760,7 @@ private final class PanelHolder {
             panel.isOpaque = false
             panel.hidesOnDeactivate = false
             panel.isMovableByWindowBackground = false
-            panel.contentView = NSHostingView(rootView: VoiceCapturePillView(controller: coordinator))
+            installPanelContent(VoiceCapturePillView(controller: coordinator), in: panel)
             self.panel = panel
         }
         if let screen = NotchScreenPicker.currentScreen(), let panel {

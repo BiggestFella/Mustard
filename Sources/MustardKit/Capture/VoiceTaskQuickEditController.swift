@@ -196,7 +196,7 @@ public final class VoiceTaskQuickEditController {
         panel.isOpaque = false
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
-        panel.contentView = NSHostingView(rootView: VoiceTaskQuickEditView(state: state))
+        installPanelContent(VoiceTaskQuickEditView(state: state), in: panel)
         if let screen = NotchScreenPicker.currentScreen() {
             // Below the notch/menu bar of the chosen display, centred.
             let frame = screen.visibleFrame
