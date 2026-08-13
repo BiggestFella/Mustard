@@ -131,7 +131,7 @@ public final class CodeHeroesDecisionAdapter {
                 findings.append(.init(scope: .cluster, clusterID: preparedCluster.clusterID, reason: "Projection UID collides with a non-Code-Heroes task")); collisions += 1; continue
             }
             let links = stableLinks(queueURL: normalizedQueue, receiptURL: receiptURL, decisionURLs: preparedCluster.sourceURLs)
-            let metadata = sourceContext(digest: digest, runID: prepared.runID, generatedAt: prepared.generatedAt, clusterID: preparedCluster.clusterID, sourceIDs: projection.sourceDecisionIDs)
+            let metadata = sourceContext(digest: digest, runID: prepared.runID, generatedAt: prepared.generatedAt, clusterID: preparedCluster.clusterID, sourceIDs: projection.sourceDecisionIDs, decisionDigests: preparedCluster.decisionDigests)
             let projectionList = list(for: projection.area, insertedAreas: &insertedAreas, insertedLists: &insertedLists)
             if let task = existingTasks.first {
                 if matches(projection: projection, task: task, list: projectionList, sourceURL: normalizedQueue.path, sourceContext: metadata, links: links) { unchanged += 1; continue }
@@ -153,7 +153,7 @@ public final class CodeHeroesDecisionAdapter {
                   !task.tags.contains("source-stale"),
                   let priorGeneratedAt = contextValue("generated_at", in: task.sourceContext).flatMap(CodeHeroesDecisionQueue.generatedAtDate),
                   prepared.incomingGeneratedAt >= priorGeneratedAt else { continue }
-            task.tags = Array(Set(task.tags + ["source-stale"])).sorted()
+            task.tags = Array(Set(task.tags + ["source-stale", "human-action"])).sorted()
             task.stage = .needsReview
             task.notes = String((task.notes + "\nSource health: absent from latest read-only queue; review before acting.").prefix(1_200))
             stale += 1; changed = true
@@ -176,6 +176,7 @@ public final class CodeHeroesDecisionAdapter {
         let clusterID: String
         let projection: CodeHeroesDecisionPolicy.Projection
         let sourceURLs: [URL]
+        let decisionDigests: [String: String]
     }
 
     private struct PreparedSnapshot: @unchecked Sendable {
@@ -315,7 +316,8 @@ public final class CodeHeroesDecisionAdapter {
                 preparedClusters.append(.init(
                     clusterID: cluster.clusterID,
                     projection: try CodeHeroesDecisionPolicy.projection(for: cluster),
-                    sourceURLs: sourceURLs[cluster.clusterID] ?? []
+                    sourceURLs: sourceURLs[cluster.clusterID] ?? [],
+                    decisionDigests: decisionDigests(for: cluster.sourceDecisionIDs, urls: sourceURLs[cluster.clusterID] ?? [], fileAccess: fileAccess)
                 ))
             } catch {
                 findings.append(.init(scope: .cluster, clusterID: cluster.clusterID, reason: "Projection mapping failed"))
@@ -394,10 +396,12 @@ public final class CodeHeroesDecisionAdapter {
     }
 
     private func apply(projection: CodeHeroesDecisionPolicy.Projection, to task: MustardTask, list: TaskList, sourceURL: String, sourceContext: String, links: [TaskLink]) {
-        task.uid = projection.uid; task.title = projection.title; task.notes = projection.notes; task.list = list
-        task.stage = projection.stage; task.priority = projection.priority; task.owner = projection.owner; task.tags = projection.tags
+        let state = reconciledState(projection: projection, existing: task, incomingContext: sourceContext)
+        task.uid = projection.uid; task.title = projection.title; task.notes = state.notes; task.list = list
+        task.stage = state.stage; task.priority = projection.priority; task.owner = projection.owner; task.tags = state.tags
         task.source = projection.source; task.sourceURL = sourceURL; task.sourceContext = sourceContext; task.links = links
         task.actionTypeRaw = nil; task.confidence = nil; task.delegation = nil; task.agentRun = nil
+        if state.stage != .done { task.completedAt = nil }
     }
 
     private func list(for areaName: String, insertedAreas: inout [Area], insertedLists: inout [TaskList]) -> TaskList {
@@ -414,13 +418,58 @@ public final class CodeHeroesDecisionAdapter {
         [TaskLink(label: "Queue", url: queueURL.path), TaskLink(label: "Run", url: receiptURL.path)] + decisionURLs.sorted { $0.path < $1.path }.map { TaskLink(label: "Decision", url: $0.path) }
     }
     private func matches(projection: CodeHeroesDecisionPolicy.Projection, task: MustardTask, list: TaskList, sourceURL: String, sourceContext: String, links: [TaskLink]) -> Bool {
-        task.uid == projection.uid && task.title == projection.title && task.notes == projection.notes && task.list === list
-            && task.stage == projection.stage && task.priority == projection.priority && task.owner == projection.owner
-            && task.tags == projection.tags && task.source == projection.source && task.sourceURL == sourceURL
+        let state = reconciledState(projection: projection, existing: task, incomingContext: sourceContext)
+        return task.uid == projection.uid && task.title == projection.title && task.notes == state.notes && task.list === list
+            && task.stage == state.stage && task.priority == projection.priority && task.owner == projection.owner
+            && task.tags == state.tags && task.source == projection.source && task.sourceURL == sourceURL
             && task.sourceContext == sourceContext && task.links == links && task.actionTypeRaw == nil
             && task.confidence == nil && task.delegation == nil && task.agentRun == nil
     }
-    private func sourceContext(digest: String, runID: String, generatedAt: String, clusterID: String, sourceIDs: [String]) -> String { String("digest=\(digest);run=\(runID);generated_at=\(generatedAt);cluster=\(clusterID);source_ids=\(sourceIDs.sorted().joined(separator: ","))".prefix(900)) }
+
+    private func reconciledState(
+        projection: CodeHeroesDecisionPolicy.Projection,
+        existing: MustardTask,
+        incomingContext: String
+    ) -> (stage: TaskStage, tags: [String], notes: String) {
+        let incomingDigest = contextValue("digest", in: incomingContext)
+        let existingDigest = contextValue("digest", in: existing.sourceContext)
+        let sameQueue = incomingDigest != nil && incomingDigest == existingDigest
+        let responseTags = existing.tags.filter { $0.hasPrefix("response:") }
+        let preserveResponse = sameQueue && !responseTags.isEmpty
+        let stage: TaskStage
+        if preserveResponse && responseTags.contains("response:ignored") {
+            stage = .done
+        } else if preserveResponse && responseTags.contains("response:completed") {
+            stage = .done
+        } else if preserveResponse && responseTags.contains("response:commented") {
+            stage = .needsInput
+        } else if preserveResponse && (responseTags.contains("response:blocked") || responseTags.contains("response:failed")) {
+            stage = .needsReview
+        } else {
+            stage = projection.stage
+        }
+        let tags = preserveResponse ? Array(Set(projection.tags + responseTags)).sorted() : projection.tags
+        let responseNotes = preserveResponse
+            ? existing.notes.split(separator: "\n").map(String.init).filter {
+                $0.hasPrefix("Code Heroes action") || $0.hasPrefix("Comment sent") || $0.hasPrefix("Feedback recorded")
+            }
+            : []
+        let notes = responseNotes.isEmpty
+            ? projection.notes
+            : String((projection.notes + "\n" + responseNotes.joined(separator: "\n")).prefix(1_200))
+        return (stage, tags, notes)
+    }
+    private nonisolated static func decisionDigests(for ids: [String], urls: [URL], fileAccess: CodeHeroesDecisionFileAccess) -> [String: String] {
+        zip(ids, urls).reduce(into: [:]) { result, pair in
+            guard let data = fileAccess.contents(pair.1) else { return }
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            result[pair.0] = "sha256:\(digest)"
+        }
+    }
+    private func sourceContext(digest: String, runID: String, generatedAt: String, clusterID: String, sourceIDs: [String], decisionDigests: [String: String]) -> String {
+        let digestText = decisionDigests.keys.sorted().compactMap { key in decisionDigests[key].map { "\(key):\($0)" } }.joined(separator: ",")
+        return String("digest=\(digest);run=\(runID);generated_at=\(generatedAt);cluster=\(clusterID);source_ids=\(sourceIDs.sorted().joined(separator: ","));decision_digests=\(digestText)".prefix(1_600))
+    }
     private func contextValue(_ key: String, in context: String) -> String? { context.split(separator: ";").first { $0.hasPrefix("\(key)=") }.map { String($0.dropFirst(key.count + 1)) } }
     private func queueFinding(_ reason: String) -> CodeHeroesDecisionQueue.Finding { .init(scope: .queue, reason: reason) }
 

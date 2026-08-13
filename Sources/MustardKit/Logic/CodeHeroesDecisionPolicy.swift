@@ -27,7 +27,8 @@ public enum CodeHeroesDecisionPolicy {
 
     public static func projection(for cluster: CodeHeroesDecisionQueue.Cluster) throws -> Projection {
         var tags = ["codeheroes", "decision", "project:\(cluster.projectID)", "triage:\(cluster.triageState)"]
-        if cluster.humanActionRequired { tags.append("human-action") }
+        if cluster.humanActionRequired || cluster.decisionRequired { tags.append("human-action") }
+        else { tags.append("maintenance") }
         return .init(uid: uid(clusterID: cluster.clusterID), title: cluster.title, area: try area(for: cluster.projectID), stage: try stage(for: cluster.mustardStage), priority: try priority(for: cluster.priority), owner: .agent, tags: tags, notes: boundedNotes(for: cluster), source: source, sourceDecisionIDs: cluster.sourceDecisionIDs, isReadOnly: true)
     }
 

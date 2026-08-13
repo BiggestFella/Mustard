@@ -65,8 +65,8 @@ final class CodeHeroesDecisionPolicyTests: XCTestCase {
         ]
 
         XCTAssertEqual(CodeHeroesDecisionPresentation.badgeText,
-                       "Code Heroes · repository decision · read-only")
-        XCTAssertTrue(CodeHeroesDecisionPresentation.readOnlyExplanation.contains("next refresh"))
+                       "Code Heroes · repository decision")
+        XCTAssertTrue(CodeHeroesDecisionPresentation.readOnlyExplanation.contains("Approve, ignore, or comment"))
         XCTAssertEqual(
             CodeHeroesDecisionPresentation.sourceFiles(for: projection),
             [

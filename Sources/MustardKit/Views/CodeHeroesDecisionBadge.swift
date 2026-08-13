@@ -15,7 +15,7 @@ public enum CodeHeroesQueueRefreshPresentation {
 }
 
 /// Pure presentation policy shared by the Code Heroes projection card and detail view.
-/// Repository paths are shown as Finder-reveal affordances, never loaded or copied.
+    /// Repository paths are shown as Finder-reveal affordances, never loaded or copied.
 public enum CodeHeroesDecisionPresentation {
     /// Local task mutations exposed across compact surfaces such as Week and Notch.
     /// Repository projections deny every action; ordinary tasks keep existing behavior.
@@ -40,9 +40,11 @@ public enum CodeHeroesDecisionPresentation {
         }
     }
 
-    public static let badgeText = "Code Heroes · repository decision · read-only"
+    public static let badgeText = "Code Heroes · repository decision"
     public static let readOnlyExplanation =
-        "This card mirrors a repository decision. Resolve it in the Code Heroes repository; local deletion or stage changes are presentation-only, and the next refresh may restore source-derived state."
+        "This card mirrors a repository decision. Approve, ignore, or comment here; Code Heroes validates and records the response, and the next refresh reconciles the source state."
+    public static let actionExplanation =
+        "Your response is sent through the Code Heroes adapter. Mustard does not edit decision files directly."
 
     /// Today/List completion and reopen are local mutations, so repository projections
     /// never expose them. Ordinary tasks retain their existing toggle behavior.

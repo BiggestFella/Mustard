@@ -24,6 +24,9 @@ public struct TaskDetailSheet: View {
     @State private var newLinkURL = ""
     /// BAK-95: inline feedback when a hand-off is blocked because the task has no area.
     @State private var gateHint: String?
+    @State private var codeHeroesCommenting = false
+    @State private var codeHeroesComment = ""
+    @State private var codeHeroesFeedbackMessage: String?
 
     /// The Stage/Assignee pickers can hand a task to the agent, but the bridge routes by
     /// area — so, like the "Ask agent" buttons, block a hand-off on an area-less task.
@@ -269,13 +272,13 @@ public struct TaskDetailSheet: View {
                         Text(CodeHeroesDecisionPresentation.readOnlyExplanation)
                             .font(Theme.Fonts.meta)
                     } icon: {
-                        Image(systemName: "lock.fill").font(Theme.Fonts.caption)
+                        Image(systemName: "arrow.triangle.2.circlepath").font(Theme.Fonts.caption)
                     }
                     .foregroundStyle(Theme.Palette.agentText)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.Palette.agentTintLight, in: RoundedRectangle(cornerRadius: 9))
-                    .accessibilityLabel("Read-only repository decision")
+                    .accessibilityLabel("Repository decision response")
                     .accessibilityHint(CodeHeroesDecisionPresentation.readOnlyExplanation)
 
                     VStack(alignment: .leading, spacing: 12) {
@@ -283,7 +286,7 @@ public struct TaskDetailSheet: View {
                         readOnlyProperty("Stage", task.stage.label)
                         readOnlyProperty("Priority", task.priority.label)
                         readOnlyProperty("Assignee", task.owner.label)
-                        readOnlyProperty("Action", "Resolve in Code Heroes repository")
+                        readOnlyProperty("Action", "Respond through the Code Heroes adapter")
                         if let due = task.dueAt {
                             readOnlyProperty("Due", due.formatted(date: .abbreviated, time: .omitted))
                         }
@@ -314,15 +317,105 @@ public struct TaskDetailSheet: View {
             }
 
             Divider().overlay(Theme.Palette.hairline)
-            HStack {
-                Spacer()
-                Button("Close") { close() }.controlSize(.small)
+            VStack(alignment: .leading, spacing: 8) {
+                if codeHeroesCommenting {
+                    HStack(spacing: 8) {
+                        TextField("What should change?", text: $codeHeroesComment, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...4)
+                        Button("Send comment") {
+                            let text = codeHeroesComment
+                            Task {
+                                await agent.commentCodeHeroes(task, text: text)
+                                if task.stage == .needsInput { codeHeroesCommenting = false }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(agent.isExecuting || codeHeroesComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Cancel") { codeHeroesCommenting = false }
+                            .controlSize(.small)
+                    }
+                } else if task.stage.isOpen {
+                    HStack(spacing: 8) {
+                        Button("Approve & run") {
+                            Task { await agent.approveCodeHeroes(task) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.Palette.accent)
+                        .controlSize(.small)
+                        .disabled(agent.isExecuting)
+
+                        Button("Ignore") {
+                            Task { await agent.ignoreCodeHeroes(task) }
+                        }
+                        .controlSize(.small)
+                        .disabled(agent.isExecuting)
+
+                        Button("Comment adjustment") { codeHeroesCommenting = true }
+                            .controlSize(.small)
+                            .disabled(agent.isExecuting)
+                        Spacer(minLength: 0)
+                    }
+                }
+                if CodeHeroesDecisionPolicy.isProjection(task) {
+                    HStack(spacing: 8) {
+                        Menu {
+                            Button { recordCodeHeroesFeedback(.useful) } label: {
+                                Label("Useful", systemImage: "hand.thumbsup")
+                            }
+                            Button { recordCodeHeroesFeedback(.tooNoisy) } label: {
+                                Label("Too noisy", systemImage: "speaker.slash")
+                            }
+                            Button { recordCodeHeroesFeedback(.wrongProject) } label: {
+                                Label("Wrong project", systemImage: "arrow.triangle.branch")
+                            }
+                            Button { recordCodeHeroesFeedback(.alreadyHandled) } label: {
+                                Label("Already handled", systemImage: "checkmark.circle")
+                            }
+                        } label: {
+                            Label("Feedback", systemImage: "text.bubble")
+                        }
+                        .controlSize(.small)
+                        if let codeHeroesFeedbackMessage {
+                            Text(codeHeroesFeedbackMessage)
+                                .font(Theme.Fonts.caption)
+                                .foregroundStyle(Theme.Palette.agentText)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                if agent.isExecuting {
+                    Label("Sending response to Code Heroes…", systemImage: "hourglass")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                } else if task.stage == .needsInput && task.tags.contains(where: { $0 == "response:commented" }) {
+                    Label("Comment sent · awaiting revision", systemImage: "text.bubble")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.agentText)
+                } else if task.stage == .needsReview {
+                    Label("Code Heroes needs a fresh review before another response.", systemImage: "exclamationmark.triangle")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.warnText)
+                }
+                HStack {
+                    Spacer()
+                    Button("Close") { close() }.controlSize(.small)
+                }
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
         .frame(width: 460)
         .frame(maxHeight: .infinity)
         .background(Theme.Palette.bg)
+    }
+
+    private func recordCodeHeroesFeedback(_ signal: CodeHeroesFeedbackSignal) {
+        guard let result = agent.recordCodeHeroesFeedback(task, signal: signal) else { return }
+        codeHeroesFeedbackMessage = result.candidates.isEmpty
+            ? "Feedback saved"
+            : "Feedback saved · learning suggestion ready for review"
     }
 
     private func readOnlyProperty(_ label: String, _ value: String) -> some View {

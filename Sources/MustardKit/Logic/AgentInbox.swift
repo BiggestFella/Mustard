@@ -19,13 +19,16 @@ public enum AgentInbox {
     /// Agent tasks awaiting your approval, answer, or output review (all three gate
     /// stages) — matches PersonalBoard.waitingCount/needsHuman (F27 count unification).
     public static func attentionTaskCount(_ tasks: [MustardTask]) -> Int {
-        tasks.filter { $0.stage.isGate }.count
+        tasks.filter { isHumanAttention($0) }.count
     }
 
     /// The single attention bucket for the console's "In flight · needs you" tier:
     /// all three gate stages (needsApproval ∪ needsInput ∪ needsReview), oldest-first.
     public struct AgentAttention {
         public let inFlight: [MustardTask]
+        public let questions: [MustardTask]
+        public let reviews: [MustardTask]
+        public let background: [MustardTask]
     }
 
     public static func attention(_ tasks: [MustardTask]) -> AgentAttention {
@@ -34,9 +37,25 @@ public enum AgentInbox {
         func precedes(_ a: MustardTask, _ b: MustardTask) -> Bool {
             a.createdAt != b.createdAt ? a.createdAt < b.createdAt : a.uid < b.uid
         }
-        return AgentAttention(
-            inFlight: tasks.filter { $0.stage.isGate }.sorted(by: precedes)
-        )
+        let inFlight = tasks.filter { $0.stage.isGate && isHumanAttention($0) }.sorted(by: precedes)
+        let questions = tasks.filter { $0.stage == .needsInput && isHumanAttention($0) }.sorted(by: precedes)
+        let reviews = tasks.filter { $0.stage == .needsReview && isHumanAttention($0) }.sorted(by: precedes)
+        let background = tasks.filter {
+            $0.stage.isGate
+                && CodeHeroesDecisionPolicy.isProjection($0)
+                && !isHumanAttention($0)
+        }.sorted(by: precedes)
+        return AgentAttention(inFlight: inFlight, questions: questions, reviews: reviews, background: background)
+    }
+
+    /// A projection is actionable only when the source queue explicitly marks it
+    /// as requiring a human decision or action. Background memory-maintenance and
+    /// source-health projections remain visible in the console without inflating
+    /// the global "Needs You" count.
+    public static func isHumanAttention(_ task: MustardTask) -> Bool {
+        guard task.stage.isGate else { return false }
+        guard CodeHeroesDecisionPolicy.isProjection(task) else { return true }
+        return task.tags.contains("human-action")
     }
 
     /// The console gate row's primary button for a stage: its label, and whether it

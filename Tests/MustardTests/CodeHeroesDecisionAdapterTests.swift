@@ -151,13 +151,14 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         let firstTasks = try tasks(context)
         XCTAssertEqual(first.createdCount, 3)
         XCTAssertEqual(Set(firstTasks.map(\.uid)).count, 3)
-        XCTAssertEqual(AgentInbox.attentionTaskCount(firstTasks), 3)
+        XCTAssertEqual(AgentInbox.attentionTaskCount(firstTasks), 2)
         let firstAttention = AgentInbox.attention(firstTasks)
         XCTAssertEqual(
             Set(firstAttention.questions.map(\.uid)),
             Set(["codeheroes:decision:DL-INPUT", "codeheroes:decision:DL-ACTION"])
         )
-        XCTAssertEqual(firstAttention.reviews.map(\.uid), ["codeheroes:decision:DL-EVIDENCE"])
+        XCTAssertTrue(firstAttention.reviews.isEmpty)
+        XCTAssertEqual(firstAttention.background.map(\.uid), ["codeheroes:decision:DL-EVIDENCE"])
         let evidence = try XCTUnwrap(firstTasks.first { $0.uid == "codeheroes:decision:DL-EVIDENCE" })
         XCTAssertEqual(evidence.stage, .needsReview)
         XCTAssertFalse(evidence.tags.contains("human-action"))
@@ -172,13 +173,32 @@ final class CodeHeroesDecisionAdapterTests: XCTestCase {
         XCTAssertEqual(second.unchangedCount, 3)
         XCTAssertEqual(secondTasks.count, 3)
         XCTAssertEqual(Set(secondTasks.map(\.uid)).count, 3)
-        XCTAssertEqual(AgentInbox.attentionTaskCount(secondTasks), 3)
+        XCTAssertEqual(AgentInbox.attentionTaskCount(secondTasks), 2)
         let secondAttention = AgentInbox.attention(secondTasks)
         XCTAssertEqual(
             Set(secondAttention.questions.map(\.uid)),
             Set(["codeheroes:decision:DL-INPUT", "codeheroes:decision:DL-ACTION"])
         )
-        XCTAssertEqual(secondAttention.reviews.map(\.uid), ["codeheroes:decision:DL-EVIDENCE"])
+        XCTAssertTrue(secondAttention.reviews.isEmpty)
+        XCTAssertEqual(secondAttention.background.map(\.uid), ["codeheroes:decision:DL-EVIDENCE"])
+    }
+
+    func test_sameQueuePreservesLocalResponseLifecycleUntilFreshQueueArrives() async throws {
+        let fixture = try Fixture()
+        let context = try makeContext()
+        let adapter = CodeHeroesDecisionAdapter(context: context, repositoryRoot: fixture.root, now: { self.fixedNow })
+        _ = await adapter.importQueue(at: fixture.queueURL)
+        let task = try XCTUnwrap(try tasks(context).first)
+        task.stage = .done
+        task.tags.append("response:ignored")
+        task.notes += "\nFeedback recorded: already-handled"
+        try context.save()
+
+        _ = await adapter.importQueue(at: fixture.queueURL)
+
+        XCTAssertEqual(task.stage, .done)
+        XCTAssertTrue(task.tags.contains("response:ignored"))
+        XCTAssertTrue(task.notes.contains("Feedback recorded: already-handled"))
     }
 
     func test_newerQueueMarksAbsentProjectionStaleWithoutTouchingOtherSources() async throws {

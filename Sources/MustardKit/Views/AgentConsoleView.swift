@@ -15,6 +15,7 @@ public struct AgentConsoleView: View {
     @Environment(AgentTaskCoordinator.self) private var taskAgent
     @State private var selected: Recommendation?
     @State private var selectedTask: MustardTask?
+    @State private var showBackgroundMaintenance = false
 
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query private var allTasks: [MustardTask]
@@ -68,6 +69,14 @@ public struct AgentConsoleView: View {
                 if !attention.inFlight.isEmpty {
                     sectionLabel("IN FLIGHT · NEEDS YOU", count: attention.inFlight.count)
                     ForEach(attention.inFlight) { gateRow($0) }
+                }
+                if !attention.background.isEmpty {
+                    DisclosureGroup(isExpanded: $showBackgroundMaintenance) {
+                        ForEach(attention.background) { attentionRow($0, label: "Background") }
+                    } label: {
+                        sectionLabel("BACKGROUND MAINTENANCE", count: attention.background.count)
+                    }
+                    .padding(.top, 8)
                 }
 
                 sectionLabel("RECOMMENDATIONS", count: pending.count)
@@ -284,6 +293,32 @@ public struct AgentConsoleView: View {
         .onTapGesture { selectedTask = task }
         .padding(.bottom, 8)
     }
+
+    /// A compact attention row (Needs You / Needs Review) that opens the task's
+    /// conversation in the detail sheet.
+    private func attentionRow(_ task: MustardTask, label: String? = nil) -> some View {
+        Button { selectedTask = task } label: {
+            HStack(spacing: 8) {
+                if let area = task.list?.area {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color(hex: area.colorHex)).frame(width: 7, height: 7)
+                }
+                Text(task.title).font(Theme.Fonts.body).foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(label ?? (task.stage == .needsInput ? "Answer" : "Review"))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(task.stage == .needsInput ? Theme.Palette.warnText : Theme.Palette.reviewText)
+            }
+        }
+        .padding(.horizontal, 11).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture { selectedTask = task }
+        .padding(.bottom, 8)
+    }
 }
 
 /// Compact, selectable summary row for the recommendations master list. The full
@@ -451,4 +486,3 @@ private struct ConsoleTaskSheet: View {
         .animation(Theme.Motion.expand, value: draftPanel.draft?.uid)
     }
 }
-

@@ -69,8 +69,8 @@ public struct TimelineRow: View {
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.agentText)
                     .padding(.top, 2)
-                    .help("Read-only repository decision — resolve it in Code Heroes")
-                    .accessibilityLabel("Read-only repository decision")
+                    .help("Repository decision — respond through the Code Heroes adapter")
+                    .accessibilityLabel("Repository decision response")
                     .accessibilityHint("Completion and reopen are unavailable in Mustard")
             }
 
