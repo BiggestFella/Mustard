@@ -48,7 +48,7 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       Meeting Sync vault notes into the inbox; two-way completion (tick → note
       checkbox, snapshot-first); vault→Area mapping. Pure `MeetingTaskParser` +
       `MeetingTaskSync` + `FileVaultIO`; provenance fields on `MustardTask`; wired into
-      the 60s loop + `meetingVaultPath` Setting. Plan:
+      the hourly meeting-import cadence inside the 60s source loop + `meetingVaultPath` Setting. Plan:
       `docs/plans/2026-06-16-meeting-task-ingest.md`.
 - [x] **F18 Source-ingestion foundation + triage provenance** — per-source/project
       `SourceSettings`, `InboxIngest` (local `_recs/`), `SourceDedupe`; inert FYI +
@@ -386,4 +386,3 @@ Intended for Linear later — kept here for now.
       filterable yet; add filtering + saved views.
 - [ ] **I10 Focus mode** — "start" a task → live timer in the notch/hover, everything
       else dims.
-

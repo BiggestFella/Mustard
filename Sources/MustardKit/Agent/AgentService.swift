@@ -270,7 +270,7 @@ public final class AgentService {
 
     /// Harvest meeting tasks from the curated notes under `vaultRoot` and reflect
     /// completions back (bidirectional, idempotent — see `MeetingTaskSync`). Cheap
-    /// file I/O + parsing, no model call, so the 60s loop can call it every tick.
+    /// file I/O + parsing, no model call; the app batches this local import hourly.
     public func importMeetingTasks(vaultRoot: String) {
         guard !vaultRoot.isEmpty else { return }
         let sync = MeetingTaskSync(context: context, io: FileVaultIO(rootPath: vaultRoot))

@@ -26,6 +26,25 @@ final class GateTransitionTests: XCTestCase {
         XCTAssertEqual(PersonalBoard.approveTarget(for: t), .needsReview)
     }
 
+    func test_approveTarget_agentOwnedWithoutActionType_toQueued() {
+        let t = MustardTask(title: "Meeting task", owner: .agent)
+        t.stage = .needsApproval
+
+        XCTAssertEqual(PersonalBoard.approveTarget(for: t), .queued)
+    }
+
+    func test_moveToQueued_grantsMeetingApproval_andHoldingClearsIt() {
+        let t = MustardTask(title: "Meeting task", owner: .agent)
+        t.source = "meeting"
+        t.stage = .needsApproval
+
+        PersonalBoard.move(t, to: .queued)
+        XCTAssertTrue(t.agentApprovalGranted)
+
+        PersonalBoard.move(t, to: .needsApproval)
+        XCTAssertFalse(t.agentApprovalGranted)
+    }
+
     func test_approveTarget_needsReview_toDone() {
         let t = MustardTask(title: "Review me")
         t.stage = .needsReview

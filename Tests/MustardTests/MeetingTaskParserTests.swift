@@ -23,6 +23,29 @@ final class MeetingTaskParserTests: XCTestCase {
         XCTAssertEqual(tasks.map(\.title), ["Email Kamil the SDK spec", "Book the venue"])
     }
 
+    func test_ignoredLedgerLinesAreNotHarvested() {
+        let note = """
+        ## Code Heroes tasks
+        - [ ] Keep this task
+        - [ ] Do not bring this back <!-- mustard:ignored -->
+        """
+
+        XCTAssertEqual(
+            MeetingTaskParser.parse(note, notePath: "meetings/x.md").map(\.title),
+            ["Keep this task"]
+        )
+    }
+
+    func test_ignoredMarkerDoesNotChangeOriginKey() {
+        let open = "- [ ] Do not bring this back"
+        let ignored = "- [ ] Do not bring this back <!-- mustard:ignored -->"
+
+        XCTAssertEqual(
+            MeetingTaskParser.originKey(notePath: "meetings/x.md", line: open),
+            MeetingTaskParser.originKey(notePath: "meetings/x.md", line: ignored)
+        )
+    }
+
     func test_checkboxStates() {
         let note = """
         ## Code Heroes tasks

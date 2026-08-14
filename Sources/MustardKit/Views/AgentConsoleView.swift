@@ -247,8 +247,8 @@ public struct AgentConsoleView: View {
     }
 
     /// A compact, actionable gate row (Needs Approval / You / Review) — deliberately
-    /// distinct from the rich proposal cards. Tapping the row opens the conversation
-    /// sheet; the trailing button either advances in one click or opens the sheet.
+    /// distinct from the rich proposal cards. Meeting tasks expose both quick Do and
+    /// Don't decisions here; tapping the row still opens the full task sheet.
     private func gateRow(_ task: MustardTask) -> some View {
         let action = AgentInbox.gateAction(for: task.stage)
         return HStack(spacing: 10) {
@@ -270,7 +270,7 @@ public struct AgentConsoleView: View {
                 Button {
                     if action.oneClick { advanceGate(task) } else { selectedTask = task }
                 } label: {
-                    Text(action.label)
+                    Text(task.source == "meeting" && task.stage == .needsApproval ? "Do" : action.label)
                         .font(Theme.Fonts.caption.weight(.semibold))
                         .foregroundStyle(action.oneClick ? .white : Theme.Palette.textSecondary)
                         .padding(.horizontal, 11).padding(.vertical, 5)
@@ -283,6 +283,14 @@ public struct AgentConsoleView: View {
                         }
                 }
                 .buttonStyle(.plain)
+                if task.source == "meeting", task.stage == .needsApproval {
+                    Button("Don't") { rejectGate(task) }
+                        .font(Theme.Fonts.caption.weight(.medium))
+                        .foregroundStyle(Theme.Palette.confidenceLow)
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+                        .buttonStyle(.plain)
+                }
             }
         }
         .padding(.horizontal, 11).padding(.vertical, 9)
@@ -292,6 +300,11 @@ public struct AgentConsoleView: View {
         .contentShape(Rectangle())
         .onTapGesture { selectedTask = task }
         .padding(.bottom, 8)
+    }
+
+    private func rejectGate(_ task: MustardTask) {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
     }
 
     /// A compact attention row (Needs You / Needs Review) that opens the task's

@@ -477,7 +477,7 @@ public struct TaskDetailSheet: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Button(role: .destructive) {
-                context.delete(task); close()
+                deleteTask()
             } label: { Label("Delete task", systemImage: "trash") }
             .controlSize(.small)
             Spacer()
@@ -490,11 +490,11 @@ public struct TaskDetailSheet: View {
         switch task.stage {
         case .needsApproval:
             Button("I'll do it") { takeOver() }.controlSize(.small)
-            Button("Deny", role: .destructive) { context.delete(task); close() }.controlSize(.small)
-            Button(task.isGated ? "Approve & run" : "Approve") { approveGate() }
+            Button("Deny", role: .destructive) { deleteTask() }.controlSize(.small)
+            Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approveGate() }
                 .buttonStyle(.borderedProminent).tint(Theme.Palette.agent).controlSize(.small)
         case .needsReview:
-            Button("Discard", role: .destructive) { context.delete(task); close() }.controlSize(.small)
+            Button("Discard", role: .destructive) { deleteTask() }.controlSize(.small)
             if task.agentRun == nil {
                 // Legacy tasks without a conversation keep the shared state-machine controls;
                 // run-backed tasks get accept / request-changes / take-back in the
@@ -516,7 +516,7 @@ public struct TaskDetailSheet: View {
         case .inbox where task.isProposed:
             Button("I'll do it") { takeOver() }.controlSize(.small)
             Button("Schedule") { scheduleTomorrow() }.controlSize(.small)
-            Button("Dismiss", role: .destructive) { context.delete(task); close() }.controlSize(.small)
+            Button("Dismiss", role: .destructive) { deleteTask() }.controlSize(.small)
             Button("Approve") { PersonalBoard.move(task, to: .needsApproval) }
                 .buttonStyle(.borderedProminent).tint(Theme.Palette.agent).controlSize(.small)
         case .done:
@@ -548,6 +548,13 @@ public struct TaskDetailSheet: View {
     /// Approve a gate using the shared state machine (needsApproval → queued/needsReview).
     private func approveGate() {
         if let target = PersonalBoard.approveTarget(for: task) { PersonalBoard.move(task, to: target) }
+    }
+
+    private func deleteTask() {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        if MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot) {
+            close()
+        }
     }
 
     /// Schedule a proposed task for tomorrow 9am as your own planned/scheduled work.

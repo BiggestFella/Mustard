@@ -413,7 +413,8 @@ public struct WeekView: View {
 
     private func delete(_ task: MustardTask) {
         guard CodeHeroesDecisionPresentation.allows(.delete, for: task) else { return }
-        context.delete(task)
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
     }
 
     private func delegate(_ task: MustardTask) {

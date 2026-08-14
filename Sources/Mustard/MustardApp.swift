@@ -11,6 +11,7 @@ private final class MustardAppScheduler {
     private let calendar: GoogleCalendarService
     private var schedulerTask: Task<Void, Never>?
     private var lastInbox = Date.distantPast
+    private var lastMeetingImportAt: Date?
     private var didReconcileTaskRuns = false
 
     var isStarted: Bool { schedulerTask != nil }
@@ -57,9 +58,10 @@ private final class MustardAppScheduler {
     }
 
     private func runSourceTick() async {
+        let now = Date.now
         if !agent.isSweeping, !agent.isExecuting, !taskAgent.isRunning {
             let settings = SourceSettingsStore.loadOrMigrate()
-            let updated = await agent.sweepDueSources(settings, now: .now)
+            let updated = await agent.sweepDueSources(settings, now: now)
             SourceSettingsStore.save(updated)
             if Date.now.timeIntervalSince(lastInbox) >= 600 {
                 for source in updated.sources where source.enabled && !source.workingDirectory.isEmpty {
@@ -95,8 +97,10 @@ private final class MustardAppScheduler {
             agent.archiveStaleMeetingTasks()
             UserDefaults.standard.set(true, forKey: "didArchiveStaleMeetingTasks")
         }
-        if !meetingVaultPath.isEmpty, !agent.isSweeping, !agent.isExecuting {
+        if !meetingVaultPath.isEmpty, !agent.isSweeping, !agent.isExecuting,
+           MeetingTaskImportSchedule.isDue(lastImportAt: lastMeetingImportAt, now: now) {
             agent.importMeetingTasks(vaultRoot: meetingVaultPath)
+            lastMeetingImportAt = now
         }
         if calendar.state == .connected {
             await calendar.fetch()

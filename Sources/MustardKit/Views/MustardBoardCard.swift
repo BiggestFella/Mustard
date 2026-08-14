@@ -333,7 +333,7 @@ public struct MustardBoardCard: View {
     /// "✓ Approve & run" (gated approval) / "✓ Approve" (non-gated) / "✓ Accept" (review).
     private var primaryGateLabel: String {
         if stage == .needsReview { return "✓ Accept" }
-        return task.isGated ? "✓ Approve & run" : "✓ Approve"
+        return task.isGated || task.owner == .agent ? "✓ Approve & run" : "✓ Approve"
     }
 
     private var secondaryGateLabel: String { stage == .needsReview ? "Discard" : "Deny" }
@@ -343,8 +343,12 @@ public struct MustardBoardCard: View {
         PersonalBoard.move(task, to: target)
     }
 
-    /// Deny (needsApproval) / Discard (needsReview) both drop the task.
-    private func rejectGate() { context.delete(task) }
+    /// Deny (needsApproval) / Discard (needsReview) both drop the task. Meeting
+    /// tasks persist a ledger-level ignore marker before the local delete.
+    private func rejectGate() {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
+    }
 }
 
 // `FlowMeta` (the wrapping meta-row layout) moved to SharedUI/FlowMeta.swift so the iOS
