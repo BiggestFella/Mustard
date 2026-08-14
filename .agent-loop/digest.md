@@ -2,6 +2,58 @@
 
 Append-only ledger of merges and holds. Each entry carries a ready `git revert` line.
 
+## 2026-08-14 — MERGED · Meeting-task flood: approval gate, then durable identity + 7-day gate (PRs #129, #130)
+
+- **Trigger:** Leon reported the board's Needs Review column taking "a ridiculous amount"
+  of cards in 24 hours and asked whether it was a one-off or the new norm. It was both:
+  a one-off backfill *and* a self-sustaining loop.
+- **Diagnosis (from the live store, not the code):** 192 of 194 cards were created inside a
+  33-minute window on 2026-08-13 (12:20–12:53), harvested from 44 meetings dated
+  **Apr 15 – Jun 4**. Prior baseline was 1–2 agent-owned tasks reaching done *per week*.
+  ~200 unattended `claude -p` turns were spent re-deriving history that had already
+  resolved itself over the intervening 10–17 weeks; of 190 cards with output, ~65 concluded
+  "already done / superseded" and only ~45 produced a draft Leon actually needed.
+- **Root cause (three, compounding):**
+  1. `MeetingTaskParser.originKey` hashed the **entire ledger line**, so identity was hostage
+     to any edit. `dream` adds `[[wikilinks]]` on first mention and the agent appends its own
+     closure prose — each edit minted a new key and re-imported the item as a fresh task.
+     535 real ledger lines had become 693 rows; the queue grew **194 → 213 during the
+     session** and meeting tasks 693 → 711, confirming the loop live.
+  2. No staleness gate — `makeTask` set the runnable stage unconditionally regardless of
+     meeting age.
+  3. `archiveStaleMeetingTasks(olderThanDays: 7)` already existed with the right number but
+     was gated on a `didArchiveStaleMeetingTasks` one-shot flag: it fired once in June 2026
+     and never again, while the importer two lines below ran every tick.
+- **Not the routines.** `dream` and `distil` were behaving correctly; Mustard simply could not
+  tolerate a note being edited. Nothing upstream was changed.
+- **Prior art honoured:** another session had already built the approval gate on
+  `codex/phase6b-mustard-rollout` (f16939b7) and left it unmerged, 3 commits behind main.
+  Rebuilt onto main and landed as #129 rather than duplicated — one conflict resolved in
+  `AgentConsoleView` where PR #127 had refactored selection into `TriageConsoleState`.
+- **What landed:** #129 holds meeting tasks as `needsApproval`, excluded from
+  `AgentTaskQueue` (no token burn), with a Do/Don't and a durable
+  `<!-- mustard:ignored -->` ledger marker. #130 pins identity to the block id or the
+  action title plus an occurrence ordinal, adds `MeetingTaskFreshness` (7 days, UTC-pinned,
+  prefers the `src:` meeting date, fails open when undateable), makes stale items born as
+  `meeting:archived` tombstones, un-one-shots the sweep, and fixes `extractTitle` taking the
+  target half of an aliased wikilink (6 malformed cards).
+- **Checks:** #129 — swift build exit 0, swift test 1,919 pass/3 skip/0 fail, CI green 1m2s.
+  #130 — swift build exit 0, swift test **1,962** pass/3 skip/0 fail (+43 new), CI green 53s.
+  `build-app.sh` exit 0.
+- **A test caught a real trap:** for a plain line with no metadata the legacy whole-line hash
+  and the new title hash are *identical*, so the second of two duplicate lines "migrated" the
+  first line's task onto itself and collapsed two tasks into one. Guarded with a per-pass
+  claimed-key set.
+- **Known gap (open):** ~9 cards come from undated `meetings/Task Ledger.md` files whose
+  `sourceContext` carries no date either. They fail closed — the sweep will not archive what
+  it cannot date — so they stay in the queue and need clearing by hand.
+- **Follow-up (open, Leon deferred):** splitting Needs Review into "Drafts for you"
+  (blocking) vs "Findings" (batched digest), and a structured outcome field on `AgentRun` so
+  "nothing left for you to do" can auto-close instead of being sniffed from prose.
+- **Revert:** `git revert 7bee74e` (identity + staleness) then `git revert 9352132`
+  (approval gate) — in that order.
+
+
 ## 2026-07-24 — MERGED · Fix: compile shared task chips into the iOS target (PR #99)
 - **Risk:** low (mechanical file move, no behaviour change) · **Deep-review:** n/a
 - **Checks:** macOS swift build clean + swift test 1033 pass/1 skip · **iOS Simulator + device(arm64) CLEAN build SUCCEEDED (fresh DerivedData)** · CI (self-hosted, macOS-only) green 56s
