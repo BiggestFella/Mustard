@@ -92,13 +92,17 @@ private final class MustardAppScheduler {
         // Cheap local work remains independent of the Claude execution gate.
         noteIndex.reindexDueProjects(SourceSettingsStore.loadOrMigrate())
         let meetingVaultPath = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
-        if !meetingVaultPath.isEmpty,
-           !UserDefaults.standard.bool(forKey: "didArchiveStaleMeetingTasks") {
-            agent.archiveStaleMeetingTasks()
-            UserDefaults.standard.set(true, forKey: "didArchiveStaleMeetingTasks")
-        }
         if !meetingVaultPath.isEmpty, !agent.isSweeping, !agent.isExecuting,
            MeetingTaskImportSchedule.isDue(lastImportAt: lastMeetingImportAt, now: now) {
+            // Sweep before importing, every pass — not once ever. This used to be
+            // gated on a `didArchiveStaleMeetingTasks` flag, so it fired a single
+            // time in June 2026 and then never again while the importer kept
+            // running underneath it; that is how 194 cards from Apr–Jun meetings
+            // reached the board on 2026-08-13. Cheap (one fetch + filter) and
+            // self-limiting: archiving retags the source, so a row is only ever
+            // swept once. Shares the 7-day boundary with `MeetingTaskFreshness`,
+            // which now keeps stale lines out at the door.
+            agent.archiveStaleMeetingTasks(now: now)
             agent.importMeetingTasks(vaultRoot: meetingVaultPath)
             lastMeetingImportAt = now
         }

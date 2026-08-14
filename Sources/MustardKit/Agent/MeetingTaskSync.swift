@@ -23,6 +23,11 @@ public struct ImportDigest: Equatable {
     public var syncedToVault = 0
     /// Legacy tasks moved out of the fallback area into their real one.
     public var areasRepaired = 0
+    /// Imported straight to an archived tombstone: past the freshness window, so
+    /// never shown and never run (`MeetingTaskFreshness`).
+    public var archivedAsStale = 0
+    /// Rows re-keyed from the pre-2026-08-14 whole-line hash to the durable one.
+    public var keysMigrated = 0
     public var clients: Set<String> = []
 
     public var summary: String {
@@ -99,11 +104,34 @@ public final class MeetingTaskSync {
     public func importTasks(now: Date = .now) -> ImportDigest {
         var digest = ImportDigest()
         var byKey = existingMeetingTasksByKey()
+        // Keys already matched or created in this pass. The legacy re-key below
+        // must never steal a row another ledger line has already claimed: for a
+        // plain line with no metadata the old whole-line hash and the new
+        // title hash are identical, so the second of two duplicate lines would
+        // otherwise "migrate" the first line's task onto itself and collapse two
+        // real tasks into one.
+        var claimed: Set<String> = []
 
         for path in io.meetingNotePaths() {
             guard let text = io.read(path) else { continue }
             let subtitle = meetingSubtitle(text: text, path: path)
             for parsed in MeetingTaskParser.parse(text, notePath: path) {
+                // One-time re-key: rows imported before 2026-08-14 are stored under
+                // the old whole-line hash. Adopt them in place, otherwise the whole
+                // corpus would re-import once as duplicates. Self-limiting — after
+                // the rewrite the durable key matches directly.
+                if byKey[parsed.originKey] == nil {
+                    let legacy = MeetingTaskParser.legacyOriginKey(
+                        notePath: path, line: parsed.rawLine)
+                    if legacy != parsed.originKey, !claimed.contains(legacy),
+                       let existing = byKey[legacy] {
+                        existing.originKey = parsed.originKey
+                        byKey[parsed.originKey] = existing
+                        byKey[legacy] = nil
+                        digest.keysMigrated += 1
+                    }
+                }
+                claimed.insert(parsed.originKey)
                 if let task = byKey[parsed.originKey] {
                     // Heal legacy giant-title imports once: only when notes was never
                     // populated and the freshly-parsed concise title differs. Gated to
@@ -153,6 +181,7 @@ public final class MeetingTaskSync {
                     context.insert(task)
                     byKey[parsed.originKey] = task
                     digest.imported += 1
+                    if task.source == "meeting:archived" { digest.archivedAsStale += 1 }
                     digest.clients.insert(clientName(forNotePath: path))
                 }
             }
@@ -161,13 +190,23 @@ public final class MeetingTaskSync {
     }
 
     private func makeTask(_ p: ParsedMeetingTask, subtitle: String, now: Date) -> MustardTask {
-        // Meeting tasks are intentionally held for Leon's quick Do/Don't decision.
-        // `.needsApproval` is excluded from AgentTaskQueue; approval moves the
+        // A fresh meeting task is held for Leon's quick Do/Don't decision:
+        // `.needsApproval` is excluded from AgentTaskQueue, and approval moves the
         // agent-owned task to `.queued`, which is the runnable lane.
-        let task = MustardTask(title: p.title, owner: .agent)
+        //
+        // A stale one gets neither. Past the freshness window the item is nearly
+        // always already done, dead, or superseded, so asking for a decision on it
+        // spends the scarcest thing in the system — Leon's attention — on
+        // archaeology. It is born as an archived tombstone instead: invisible, not
+        // runnable, and never written back to the vault, but still keyed so its
+        // ledger line can never re-import as fresh work. Same `meeting:archived`
+        // semantics `archiveStaleMeetingTasks` uses, applied at the door.
+        let isFresh = MeetingTaskFreshness.isFresh(
+            srcNote: p.srcNote, notePath: p.notePath, now: now)
+        let task = MustardTask(title: p.title, owner: isFresh ? .agent : .me)
         let meeting = resolveMeetingNote(p)
-        task.stage = .needsApproval
-        task.source = "meeting"
+        task.stage = isFresh ? .needsApproval : .done
+        task.source = isFresh ? "meeting" : "meeting:archived"
         // Stays the harvested file (the ledger) — it is the write-back target and is
         // hashed into originKey. The meeting note travels in `notes` instead.
         task.sourceURL = p.notePath
@@ -178,7 +217,8 @@ public final class MeetingTaskSync {
         task.tags = p.tags
         task.list = defaultList(forClient: clientName(forNotePath: p.notePath))
         // Already ticked in the vault → import as done, don't resurrect it open.
-        if p.isDone { task.markDone(now: now) }
+        // Also the completion stamp for a stale tombstone, which is born closed.
+        if p.isDone || !isFresh { task.markDone(now: now) }
         return task
     }
 
@@ -265,10 +305,10 @@ public final class MeetingTaskSync {
               let contents = io.read(path) else { return false }
 
         var lines = contents.components(separatedBy: "\n")
-        guard let idx = lines.firstIndex(where: { line in
-            MeetingTaskParser.isCheckbox(line.trimmingCharacters(in: .whitespaces))
-                && MeetingTaskParser.originKey(notePath: path, line: line) == key
-        }) else { return false }
+        // Shared locator: it walks occurrence ordinals, so the nth of two identical
+        // ledger lines ticks the right one.
+        guard let idx = MeetingTaskParser.lineIndex(ofKey: key, in: lines, notePath: path)
+        else { return false }
 
         do { try io.snapshot(path, contents) } catch { return false }
         lines[idx] = Self.tick(lines[idx], doneISO: Self.isoDay(now))
@@ -290,10 +330,8 @@ public final class MeetingTaskSync {
               let contents = io.read(path) else { return false }
 
         var lines = contents.components(separatedBy: "\n")
-        guard let idx = lines.firstIndex(where: { line in
-            MeetingTaskParser.isCheckbox(line.trimmingCharacters(in: .whitespaces))
-                && MeetingTaskParser.originKey(notePath: path, line: line) == key
-        }) else { return false }
+        guard let idx = MeetingTaskParser.lineIndex(ofKey: key, in: lines, notePath: path)
+        else { return false }
 
         if !MeetingTaskParser.isIgnored(lines[idx]) {
             do { try io.snapshot(path, contents) } catch { return false }
