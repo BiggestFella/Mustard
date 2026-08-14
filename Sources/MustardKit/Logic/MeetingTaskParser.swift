@@ -47,9 +47,15 @@ public enum MeetingTaskParser {
     private static let metaEmoji = CharacterSet(charactersIn: "⏫🔺🔼🔽⏬🔁⏳🛫➕❌")
 
     /// Harvest the `- [ ]` lines under the "Code Heroes tasks" heading, in order.
+    ///
+    /// Lines whose title extracts to nothing are skipped — a metadata-only line
+    /// previously produced an untitled card in the store.
     public static func parse(_ text: String, notePath: String) -> [ParsedMeetingTask] {
         var out: [ParsedMeetingTask] = []
         var inSection = false
+        // Occurrence ordinal per stable identity, so two genuinely duplicated
+        // ledger lines in one note stay two tasks instead of colliding into one.
+        var seen: [String: Int] = [:]
         for rawLine in text.components(separatedBy: .newlines) {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("#") {
@@ -59,19 +65,24 @@ public enum MeetingTaskParser {
                 continue
             }
             guard inSection, isCheckbox(trimmed), !isIgnored(trimmed) else { continue }
+            let title = extractTitle(rawLine)
+            guard !title.isEmpty else { continue }
+            let identity = stableIdentity(rawLine)
+            let occurrence = seen[identity, default: 0]
+            seen[identity] = occurrence + 1
             out.append(
                 ParsedMeetingTask(
-                    title: extractTitle(rawLine),
+                    title: title,
                     isDone: isChecked(rawLine),
                     due: dueDate(rawLine),
                     desc: quotedField(rawLine, label: "desc"),
-                    owner: stripWikilinks(field(rawLine, label: "owner")),
+                    owner: wikilinkDisplay(field(rawLine, label: "owner")),
                     dueText: field(rawLine, label: "due"),
                     transcriptQuote: transcriptQuote(rawLine),
                     tags: tags(rawLine),
                     rawLine: rawLine,
                     notePath: notePath,
-                    originKey: originKey(notePath: notePath, line: rawLine),
+                    originKey: originKey(notePath: notePath, line: rawLine, occurrence: occurrence),
                     srcNote: stripWikilinks(field(rawLine, label: "src"))
                 )
             )
@@ -130,7 +141,7 @@ public enum MeetingTaskParser {
         s = s.replacingOccurrences(of: duePattern, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: ignoredMarker, with: "")
         s = s.replacingOccurrences(of: blockIdSuffix, with: "", options: .regularExpression)
-        s = stripWikilinks(s) ?? ""
+        s = wikilinkDisplay(s) ?? ""
         s = s.replacingOccurrences(of: #"#[\w-]+"#, with: "", options: .regularExpression)
         var kept = String.UnicodeScalarView()
         for scalar in s.unicodeScalars where !metaEmoji.contains(scalar) { kept.append(scalar) }
@@ -174,16 +185,88 @@ public enum MeetingTaskParser {
         return out
     }
 
-    /// Strip `[[wikilink]]` → inner text. Returns nil only for nil input.
+    /// Strip `[[wikilink]]` → the link **target**. For an aliased `[[target|alias]]`
+    /// that is the target half, because the only caller that needs this — `src:` —
+    /// must resolve to a real file on disk.
     static func stripWikilinks(_ s: String?) -> String? {
         guard let s else { return nil }
-        return s.replacingOccurrences(of: #"\[\[([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
+        return s
+            .replacingOccurrences(
+                of: #"\[\[([^\]|]+)\|[^\]]*\]\]"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(
+                of: #"\[\[([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
     }
 
-    /// Stable identity: SHA-256 of `notePath` + the line with its checkbox state
-    /// and `✅ <date>` stripped — so `- [ ]` → `- [x] ✅ date` keeps the same key.
-    public static func originKey(notePath: String, line: String) -> String {
+    /// Strip `[[wikilink]]` → the **display** text, which for `[[target|alias]]` is
+    /// the alias. This is what human-facing text wants: `dream` rewrites first
+    /// mentions to `[[Alex-Gouges|Alex]]`, and taking the target half rendered
+    /// titles like "Alex-Gouges|Alex to revisit DexGuard obfuscation depth".
+    static func wikilinkDisplay(_ s: String?) -> String? {
+        guard let s else { return nil }
+        return s
+            .replacingOccurrences(
+                of: #"\[\[[^\]|]*\|([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(
+                of: #"\[\[([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
+    }
+
+    /// Durable identity for a ledger line: SHA-256 of `notePath` + the line's
+    /// **stable identity** + its occurrence ordinal within that note.
+    ///
+    /// This used to hash the whole line, which made identity hostage to any edit.
+    /// Two upstream writers edit these lines as a matter of course — `dream` adds
+    /// `[[wikilinks]]` on first mention, and the agent appends its own resolution
+    /// prose when it closes a task — so every such edit minted a new key and the
+    /// importer re-imported the same action item as a fresh task. On 2026-08-13
+    /// that turned 535 real ledger lines into 693 task rows, and each agent
+    /// closure spawned another ghost the following tick.
+    ///
+    /// `occurrence` disambiguates two genuinely identical lines in one note; it
+    /// comes from `parse`, which counts them in file order.
+    public static func originKey(notePath: String, line: String, occurrence: Int = 0) -> String {
+        let suffix = occurrence == 0 ? "" : "#\(occurrence)"
+        return sha256Hex(notePath + "\n" + stableIdentity(line) + suffix)
+    }
+
+    /// The pre-2026-08-14 whole-line hash. Retained for **lookup only**, so the
+    /// importer can recognise rows stored under the old scheme and migrate them
+    /// in place instead of re-importing the entire corpus once. Do not write it.
+    public static func legacyOriginKey(notePath: String, line: String) -> String {
         sha256Hex(notePath + "\n" + normalize(line))
+    }
+
+    /// What identity is actually pinned to: the Obsidian block id when the line
+    /// carries one (durable across rewording, but present on only ~7% of lines),
+    /// otherwise the extracted title — everything after the first em-dash is
+    /// metadata and annotation, and none of it is identity.
+    static func stableIdentity(_ line: String) -> String {
+        if let id = blockID(line) { return "^" + id }
+        return extractTitle(line)
+    }
+
+    /// The trailing `^block-id`, without the caret.
+    static func blockID(_ line: String) -> String? {
+        let withoutMarker = line.replacingOccurrences(of: ignoredMarker, with: "")
+        guard let r = withoutMarker.range(of: blockIdSuffix, options: .regularExpression) else { return nil }
+        let id = withoutMarker[r].trimmingCharacters(in: .whitespaces).dropFirst()
+        return id.isEmpty ? nil : String(id)
+    }
+
+    /// Index of the ledger line in `lines` whose identity is `key`, honouring
+    /// occurrence order for duplicates. `nil` when the line is gone — the note
+    /// was moved or the action reworded — so write-back callers can flag it
+    /// rather than tick the wrong line.
+    public static func lineIndex(ofKey key: String, in lines: [String], notePath: String) -> Int? {
+        var seen: [String: Int] = [:]
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard isCheckbox(trimmed) else { continue }
+            let identity = stableIdentity(line)
+            let occurrence = seen[identity, default: 0]
+            seen[identity] = occurrence + 1
+            if originKey(notePath: notePath, line: line, occurrence: occurrence) == key { return index }
+        }
+        return nil
     }
 
     static func normalize(_ line: String) -> String {
