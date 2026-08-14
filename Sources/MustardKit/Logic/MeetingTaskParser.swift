@@ -34,6 +34,9 @@ public enum MeetingTaskParser {
     /// Heading whose checklist we harvest — case-insensitive, trailing text tolerated
     /// (`### Code Heroes tasks (Leon)` matches).
     static let sectionHeading = "code heroes tasks"
+    /// Durable, unobtrusive ledger marker written when Leon declines a meeting task.
+    /// Marked lines remain visible in the source note but never re-enter Mustard.
+    public static let ignoredMarker = "<!-- mustard:ignored -->"
 
     private static let checkboxPrefix = #"^\s*[-*]\s+\[[ xX]\]\s*"#
     private static let donePattern = #"✅\s*\d{4}-\d{2}-\d{2}"#
@@ -55,7 +58,7 @@ public enum MeetingTaskParser {
                 inSection = heading.hasPrefix(sectionHeading)
                 continue
             }
-            guard inSection, isCheckbox(trimmed) else { continue }
+            guard inSection, isCheckbox(trimmed), !isIgnored(trimmed) else { continue }
             out.append(
                 ParsedMeetingTask(
                     title: extractTitle(rawLine),
@@ -85,6 +88,23 @@ public enum MeetingTaskParser {
         return line[r].lowercased().contains("x")
     }
 
+    /// Whether a ledger line carries Mustard's durable human-decline marker.
+    static func isIgnored(_ line: String) -> Bool { line.contains(ignoredMarker) }
+
+    /// Add the ignore marker without disturbing an Obsidian block id suffix.
+    /// Idempotent so a retry after a successful write is harmless.
+    static func markIgnored(_ line: String) -> String {
+        guard !isIgnored(line) else { return line }
+        if let r = line.range(of: blockIdSuffix, options: .regularExpression) {
+            let blockID = line[r].trimmingCharacters(in: .whitespaces)
+            var out = line
+            out.replaceSubrange(r, with: " \(ignoredMarker) \(blockID)")
+            return out
+        }
+        return line.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression)
+            + " \(ignoredMarker)"
+    }
+
     /// Due date: the `due: YYYY-MM-DD` text the sync skill writes, falling back to
     /// the `📅 YYYY-MM-DD` Obsidian-Tasks form on hand-written lines.
     static func dueDate(_ line: String) -> Date? {
@@ -108,6 +128,7 @@ public enum MeetingTaskParser {
         if let i = s.firstIndex(of: "\u{2014}") { s = String(s[..<i]) }
         s = s.replacingOccurrences(of: donePattern, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: duePattern, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: ignoredMarker, with: "")
         s = s.replacingOccurrences(of: blockIdSuffix, with: "", options: .regularExpression)
         s = stripWikilinks(s) ?? ""
         s = s.replacingOccurrences(of: #"#[\w-]+"#, with: "", options: .regularExpression)
@@ -168,6 +189,7 @@ public enum MeetingTaskParser {
     static func normalize(_ line: String) -> String {
         var s = line.replacingOccurrences(of: checkboxPrefix, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: donePattern, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: ignoredMarker, with: "")
         return collapseWhitespace(s)
     }
 

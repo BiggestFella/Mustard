@@ -59,6 +59,9 @@ final class AgentInboxTests: XCTestCase {
         let planned = MustardTask(title: "p"); planned.stage = .planned
         let attention = AgentInbox.attention([planned])
         XCTAssertTrue(attention.inFlight.isEmpty)
+        XCTAssertTrue(attention.questions.isEmpty)
+        XCTAssertTrue(attention.reviews.isEmpty)
+        XCTAssertTrue(attention.background.isEmpty)
     }
 
     // MARK: F27 — in-flight bucket + gate actions + unified count
@@ -122,5 +125,20 @@ final class AgentInboxTests: XCTestCase {
         XCTAssertEqual(AgentInbox.gateAction(for: .needsReview)?.oneClick, true)
         XCTAssertNil(AgentInbox.gateAction(for: .planned))
         XCTAssertNil(AgentInbox.gateAction(for: .queued))
+    }
+
+    func test_backgroundCodeHeroesMaintenanceDoesNotInflateNeedsYou() {
+        let maintenance = MustardTask(title: "refresh memory"); maintenance.source = CodeHeroesDecisionPolicy.source
+        maintenance.stage = .needsReview
+        maintenance.tags = ["codeheroes", "decision", "maintenance"]
+        let action = MustardTask(title: "choose policy"); action.source = CodeHeroesDecisionPolicy.source
+        action.stage = .needsInput
+        action.tags = ["codeheroes", "decision", "human-action"]
+
+        XCTAssertEqual(AgentInbox.attentionTaskCount([maintenance, action]), 1)
+        let attention = AgentInbox.attention([maintenance, action])
+        XCTAssertEqual(attention.questions.map(\.title), ["choose policy"])
+        XCTAssertTrue(attention.reviews.isEmpty)
+        XCTAssertEqual(attention.background.map(\.title), ["refresh memory"])
     }
 }

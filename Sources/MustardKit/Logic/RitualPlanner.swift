@@ -13,14 +13,15 @@ public enum RitualPlanner {
     /// rather than vanishing mid-triage.
     public static func rollover(_ tasks: [MustardTask], day: Date, calendar: Calendar = .current) -> [MustardTask] {
         tasks.filter { task in
-            guard task.stage.isOpen, let stamp = task.carriedForwardAt else { return false }
+            guard !CodeHeroesDecisionPolicy.isProjection(task),
+                  task.stage.isOpen, let stamp = task.carriedForwardAt else { return false }
             return calendar.isDate(stamp, inSameDayAs: day)
         }
     }
 
     /// Step 1 mutation — push to the same time tomorrow.
     public static func pushToTomorrow(_ task: MustardTask, calendar: Calendar = .current) {
-        guard let when = task.scheduledAt else { return }
+        guard !CodeHeroesDecisionPolicy.isProjection(task), let when = task.scheduledAt else { return }
         task.scheduledAt = calendar.date(byAdding: .day, value: 1, to: when)
         PersonalBoard.normalizePlacement(task)
     }
@@ -28,12 +29,16 @@ public enum RitualPlanner {
     /// Step 1 mutation — back to the unscheduled inbox. Leaves the carry-forward
     /// stamp so the row keeps its rollover context for the rest of the wizard.
     public static func sendToInbox(_ task: MustardTask) {
+        guard !CodeHeroesDecisionPolicy.isProjection(task) else { return }
         task.scheduledAt = nil
     }
 
-    /// Step 3 — unscheduled open tasks (the pick pool). Excludes agent-owned.
+    /// Step 3 — unscheduled open tasks (the pick pool). Excludes agent-owned and read-only projections.
     public static func pickCandidates(_ tasks: [MustardTask]) -> [MustardTask] {
-        tasks.filter { $0.scheduledAt == nil && $0.stage.isOpen && $0.owner == .me }
+        tasks.filter {
+            !CodeHeroesDecisionPolicy.isProjection($0)
+                && $0.scheduledAt == nil && $0.stage.isOpen && $0.owner == .me
+        }
     }
 
     /// Step 3 — today's already-planned open tasks (the removable set shown with a
@@ -44,13 +49,15 @@ public enum RitualPlanner {
     /// legitimate watching; un-planning it is not.
     public static func plannedToday(_ tasks: [MustardTask], day: Date, calendar: Calendar = .current) -> [MustardTask] {
         tasks.filter { task in
-            guard task.stage.isOpen, task.owner == .me, let when = task.scheduledAt else { return false }
+            guard !CodeHeroesDecisionPolicy.isProjection(task),
+                  task.stage.isOpen, task.owner == .me, let when = task.scheduledAt else { return false }
             return calendar.isDate(when, inSameDayAs: day)
         }
     }
 
     /// Step 3 mutation — plan onto `day`, untimed.
     public static func planToday(_ task: MustardTask, day: Date, calendar: Calendar = .current) {
+        guard !CodeHeroesDecisionPolicy.isProjection(task) else { return }
         task.scheduledAt = calendar.startOfDay(for: day)
         task.isTimed = false
         PersonalBoard.normalizePlacement(task)
@@ -79,13 +86,16 @@ public enum RitualPlanner {
 
     /// Step 4 — today's open planned tasks (star candidates).
     public static func focusCandidates(_ tasks: [MustardTask], day: Date, calendar: Calendar = .current) -> [MustardTask] {
-        DayPlanner.tasksForDay(tasks, day: day, calendar: calendar).filter { $0.stage.isOpen }
+        DayPlanner.tasksForDay(tasks, day: day, calendar: calendar).filter {
+            $0.stage.isOpen && !CodeHeroesDecisionPolicy.isProjection($0)
+        }
     }
 
     /// Step 4 — the currently-starred tasks for `day`.
     public static func focused(_ tasks: [MustardTask], day: Date, calendar: Calendar = .current) -> [MustardTask] {
         tasks.filter { task in
-            guard let star = task.focusOnDay else { return false }
+            guard !CodeHeroesDecisionPolicy.isProjection(task),
+                  let star = task.focusOnDay else { return false }
             return calendar.isDate(star, inSameDayAs: day)
         }
     }
@@ -97,6 +107,7 @@ public enum RitualPlanner {
     /// for a replacement.
     @discardableResult
     public static func toggleFocus(_ task: MustardTask, in all: [MustardTask], day: Date, calendar: Calendar = .current) -> Bool {
+        guard !CodeHeroesDecisionPolicy.isProjection(task) else { return false }
         let isStarred = task.focusOnDay.map { calendar.isDate($0, inSameDayAs: day) } ?? false
         if isStarred {
             // Un-star is always allowed.

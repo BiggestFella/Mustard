@@ -52,6 +52,21 @@ final class AgentTaskQueueTests: XCTestCase {
         XCTAssertTrue(AgentTaskQueue.nextRunnable([queued, forAgent]) === forAgent)
     }
 
+    func test_nextRunnableSkipsUnapprovedMeetingTasks() {
+        let meeting = makeTask(uid: "meeting", stage: .queued)
+        meeting.source = "meeting"
+
+        XCTAssertNil(AgentTaskQueue.nextRunnable([meeting]))
+    }
+
+    func test_nextRunnableAcceptsApprovedMeetingTasks() {
+        let meeting = makeTask(uid: "meeting", stage: .queued)
+        meeting.source = "meeting"
+        meeting.agentApprovalGranted = true
+
+        XCTAssertTrue(AgentTaskQueue.nextRunnable([meeting]) === meeting)
+    }
+
     func test_nextRunnableSkipsConnectedWorkerRunAndKeepsNoRunTaskRunnable() {
         let connectedWorker = makeTask(
             uid: "connected-worker",

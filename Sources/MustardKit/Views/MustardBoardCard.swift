@@ -22,10 +22,15 @@ public struct MustardBoardCard: View {
     private var isDone: Bool { stage == .done }
     private var isAgent: Bool { task.owner == .agent }
     private var isBlocked: Bool { stage == .blocked || task.isBlocked }
+    private var isProjection: Bool { CodeHeroesDecisionPolicy.isProjection(task) }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             topRow
+            if isProjection {
+                CodeHeroesDecisionBadge(task: task)
+                    .padding(.bottom, 7)
+            }
             title
             metaRow
             tagsRow
@@ -62,7 +67,7 @@ public struct MustardBoardCard: View {
         if !isDone {
             HStack(spacing: 6) {
                 PriorityFlag(priority: task.priority)   // shared with TimelineRow (BAK-245)
-                if hovering { ownerToggle }   // hover-revealed (handoff); agent shown via the left accent
+                if hovering, !isProjection { ownerToggle }   // projections never expose reassignment/delegation
                 Spacer(minLength: 0)
                 if let capture = task.captureState, capture != .cleaned {
                     capturePill(capture)
@@ -299,7 +304,7 @@ public struct MustardBoardCard: View {
     // MARK: Inline gate actions (hover-revealed on the two gate stages)
 
     @ViewBuilder private var gateActions: some View {
-        if hovering, stage == .needsApproval || stage == .needsReview {
+        if !isProjection, hovering, stage == .needsApproval || stage == .needsReview {
             HStack(spacing: 6) {
                 Button(action: approveGate) {
                     Text(primaryGateLabel)
@@ -328,7 +333,7 @@ public struct MustardBoardCard: View {
     /// "✓ Approve & run" (gated approval) / "✓ Approve" (non-gated) / "✓ Accept" (review).
     private var primaryGateLabel: String {
         if stage == .needsReview { return "✓ Accept" }
-        return task.isGated ? "✓ Approve & run" : "✓ Approve"
+        return task.isGated || task.owner == .agent ? "✓ Approve & run" : "✓ Approve"
     }
 
     private var secondaryGateLabel: String { stage == .needsReview ? "Discard" : "Deny" }
@@ -338,8 +343,12 @@ public struct MustardBoardCard: View {
         PersonalBoard.move(task, to: target)
     }
 
-    /// Deny (needsApproval) / Discard (needsReview) both drop the task.
-    private func rejectGate() { context.delete(task) }
+    /// Deny (needsApproval) / Discard (needsReview) both drop the task. Meeting
+    /// tasks persist a ledger-level ignore marker before the local delete.
+    private func rejectGate() {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
+    }
 }
 
 // `FlowMeta` (the wrapping meta-row layout) moved to SharedUI/FlowMeta.swift so the iOS

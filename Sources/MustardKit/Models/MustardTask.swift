@@ -73,6 +73,10 @@ public final class MustardTask {
     // Board stage model (BAK-74). `stage` supersedes `status`; `statusRaw` is kept
     // only so existing stores decode and `BoardMigration` can backfill `stage`.
     public var stageRaw: String = TaskStage.inbox.rawValue
+    /// Durable human approval for meeting tasks. New imports start false; moving
+    /// one through the approval gate sets true so restarts cannot resume an
+    /// unapproved legacy task. Additive default keeps existing stores decodable.
+    public var agentApprovalGranted: Bool = false
     /// True once `stage` has been backfilled from legacy `statusRaw` (one-time).
     public var migratedStage: Bool = false
     /// Outward/connector action this task performs when agent-bound — drives gating

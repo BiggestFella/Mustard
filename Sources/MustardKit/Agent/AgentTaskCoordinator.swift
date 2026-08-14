@@ -9,6 +9,7 @@ public final class AgentTaskCoordinator {
         let stage: TaskStage
         let status: TaskStatus
         let owner: TaskOwner
+        let agentApprovalGranted: Bool
         let links: [TaskLink]
         let completedAt: Date?
         let autoCompleted: Bool
@@ -348,6 +349,11 @@ public final class AgentTaskCoordinator {
                 task.stage = .needsReview
                 run.completedAt = now
                 content = "Recovered an interrupted run. Completion uncertain — check whether the external artifact exists before requesting a retry."
+            } else if let task, task.owner == .agent, task.stage == .inProgress,
+                      task.source == "meeting", !task.agentApprovalGranted {
+                task.stage = .needsApproval
+                run.completedAt = nil
+                content = "Recovered an unapproved meeting task. Review it before allowing the agent to resume."
             } else {
                 if let task, task.owner == .agent, task.stage == .inProgress {
                     task.stage = .queued
@@ -818,6 +824,7 @@ public final class AgentTaskCoordinator {
             stage: task.stage,
             status: task.status,
             owner: task.owner,
+            agentApprovalGranted: task.agentApprovalGranted,
             links: task.links,
             completedAt: task.completedAt,
             autoCompleted: task.autoCompleted,
@@ -848,6 +855,7 @@ public final class AgentTaskCoordinator {
         task.stage = snapshot.stage
         task.status = snapshot.status
         task.owner = snapshot.owner
+        task.agentApprovalGranted = snapshot.agentApprovalGranted
         task.links = snapshot.links
         task.completedAt = snapshot.completedAt
         task.autoCompleted = snapshot.autoCompleted
@@ -908,6 +916,7 @@ public final class AgentTaskCoordinator {
     ) -> Bool {
         let taskBefore = taskSnapshot(task)
         let runBefore = run.map(runSnapshot)
+        if task.source == "meeting" { task.agentApprovalGranted = false }
         task.owner = .me
         task.stage = .planned
         var message: AgentMessage?

@@ -1,7 +1,7 @@
 # Source Cadence + Channel Routing — Design
 
 **Date:** 2026-06-22
-**Status:** Approved (brainstormed with Leon 2026-06-22; cadence amended 2026-06-24 — see A.1)
+**Status:** Approved (brainstormed with Leon 2026-06-22; cadence amended 2026-06-24 and 2026-08-14 — see A.1)
 **Related:** ADR-0008 (local-only email scout — this *switches it on*), `docs/scout-routine-prompt.md`, F17 (meeting ingest), F18 (source-ingestion foundation).
 
 ## Problem
@@ -19,7 +19,7 @@ Separately, testing surfaced three recommendation-quality gaps (seen on VAULT ca
 ### A. Cadence — config only, no code
 
 1. **`inbox-sweep` → twice daily, 6:30am & 1pm, weekdays** (cron `30 6,13 * * 1-5`). *(Amended 2026-06-24 — originally hourly `0 6-17 * * 1-5`; cut back to the scout prompt's intended ~2×/day.)* Give the existing routine a cron (it was Manual only). It's idempotent (identity = Gmail message id; already-seen ids are skipped) and runs locally. Because the gap between runs is now large (up to ~66h across a weekend: Fri 1pm → Mon 6:30am), the scout prompt scopes each run to `newer_than:3d` and reviews **all** of it — a window deliberately wider than the largest gap — so an email arriving since the last run can't be buried under newer mail and missed; the message-id dedup makes the overlapping re-scan free of duplicates. New email/Jira/Shortcut recs reach the app at the next run (≤~7h during the day; overnight/weekend longer) + the existing ~10-min `_recs/` ingest loop. Jira/Shortcut remain **notification-led** (scope A) — direct API sweeps deferred.
-2. **Meeting tasks → set `meetingVaultPath` = `…/Codeheroes work`** (the parent of the sub-vaults; harvests DL + SB + Sandvik + CH `meetings/`). Mustard reconciles meeting-note tasks **every 60s in-app** once set (a free local file-parse, no model call) — far more frequent than the inbox sweep; no throttle added. One small code fix: `FileVaultIO.meetingNotePaths()` must **prune `node_modules`/`.git`** when enumerating — `Codeheroes work` is ~32k files, ~92% under `sites/**/node_modules`, so the 60s walk would otherwise visit ~30k irrelevant files each tick. Results are unchanged (the `meetings/` filter already excludes them) — pure perf prune.
+2. **Meeting tasks → set `meetingVaultPath` = `…/Codeheroes work`** (the parent of the sub-vaults; harvests DL + SB + Sandvik + CH `meetings/`). Mustard now reconciles meeting-note tasks **hourly in-app** once set (a free local file-parse, no model call), while the global source tick remains 60s for other local work. One small code fix: `FileVaultIO.meetingNotePaths()` must **prune `node_modules`/`.git`** when enumerating — `Codeheroes work` is ~32k files, ~92% under `sites/**/node_modules`, so even an hourly walk should avoid irrelevant files. Results are unchanged (the `meetings/` filter already excludes them).
 3. **Vault sweep → already off; no change.** The DL vault source migrated with `intervalHours == 0`, which `SweepScheduler` treats as off — so auto-sweep is already disabled and it only runs on a manual ⌘K. Leave it. (The Source Settings panel offers Off / Hourly / 4h / Daily if a schedule is ever wanted.)
 
 ### B. Channel routing rule — applies to both prompts

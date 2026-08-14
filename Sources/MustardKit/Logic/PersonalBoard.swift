@@ -67,16 +67,22 @@ public enum PersonalBoard {
     public static func move(_ task: MustardTask, to stage: TaskStage, now: Date = .now) {
         if stage == .done { task.markDone(now: now) }
         else { task.stage = stage; task.completedAt = nil }
+        if task.source == "meeting" {
+            if stage == .queued { task.agentApprovalGranted = true }
+            if stage == .forAgent || stage == .needsApproval { task.agentApprovalGranted = false }
+        }
     }
 
-    /// Target stage when the human approves a gate (BAK-100). needsApproval → queued
-    /// (gated, will run) or needsReview (non-gated, straight to output review);
+    /// Target stage when the human approves a gate (BAK-100). Agent-owned
+    /// needsApproval tasks always queue for execution; personal non-gated tasks
+    /// advance straight to output review. Gated actions always queue regardless of
+    /// owner.
     /// needsReview → done. Nil when the task isn't on a gate stage. Reject/Discard
     /// (deletion) and the reverse transitions (Hold→needsApproval, Request changes→
     /// queued) are handled by the caller via `move`/delete.
     public static func approveTarget(for task: MustardTask) -> TaskStage? {
         switch task.stage {
-        case .needsApproval: return task.isGated ? .queued : .needsReview
+        case .needsApproval: return task.isGated || task.owner == .agent ? .queued : .needsReview
         case .needsReview: return .done
         default: return nil
         }

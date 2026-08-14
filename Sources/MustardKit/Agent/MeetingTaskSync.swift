@@ -72,6 +72,27 @@ public final class MeetingTaskSync {
         self.fallbackArea = fallbackArea
     }
 
+    /// Apply the common gate rejection behavior used by desktop, mobile, and
+    /// scheduled-board surfaces. Meeting tasks must first persist their ledger decision;
+    /// ordinary tasks retain the existing local-delete behavior.
+    @discardableResult
+    public static func reject(
+        _ task: MustardTask,
+        context: ModelContext,
+        vaultRoot: String,
+        now: Date = .now
+    ) -> Bool {
+        guard task.source == "meeting" else {
+            context.delete(task)
+            return true
+        }
+        guard !vaultRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let sync = MeetingTaskSync(context: context, io: FileVaultIO(rootPath: vaultRoot))
+        guard sync.ignoreInVault(task, now: now) else { return false }
+        context.delete(task)
+        return true
+    }
+
     // MARK: Import (vault → Mustard)
 
     @discardableResult
@@ -107,6 +128,15 @@ public final class MeetingTaskSync {
                         task.list = defaultList(forClient: impliedArea)
                         digest.areasRepaired += 1
                     }
+                    // One-time safety migration for tasks imported before the
+                    // approval gate existed. An unapproved runnable meeting task
+                    // cannot bypass the new human decision.
+                    if task.source == "meeting",
+                       task.owner == .agent,
+                       !task.agentApprovalGranted,
+                       task.stage == .forAgent || task.stage == .queued {
+                        task.stage = .needsApproval
+                    }
                     if parsed.isDone && task.stage.isOpen {
                         // Line ticked in the vault while the task was open → vault won.
                         task.markDone(now: now)
@@ -131,13 +161,12 @@ public final class MeetingTaskSync {
     }
 
     private func makeTask(_ p: ParsedMeetingTask, subtitle: String, now: Date) -> MustardTask {
-        // Meeting tasks are handed to the agent on arrival: the ledger filter already
-        // guarantees they are real, discrete, Leon-owned actions, so the agent attempts
-        // each one and hands back what only Leon can do. See TaskStage/AgentTaskQueue —
-        // `.forAgent` alone is inert; `owner == .agent` is what makes it runnable.
+        // Meeting tasks are intentionally held for Leon's quick Do/Don't decision.
+        // `.needsApproval` is excluded from AgentTaskQueue; approval moves the
+        // agent-owned task to `.queued`, which is the runnable lane.
         let task = MustardTask(title: p.title, owner: .agent)
         let meeting = resolveMeetingNote(p)
-        task.stage = .forAgent
+        task.stage = .needsApproval
         task.source = "meeting"
         // Stays the harvested file (the ledger) — it is the write-back target and is
         // hashed into originKey. The meeting note travels in `notes` instead.
@@ -244,6 +273,36 @@ public final class MeetingTaskSync {
         do { try io.snapshot(path, contents) } catch { return false }
         lines[idx] = Self.tick(lines[idx], doneISO: Self.isoDay(now))
         do { try io.write(path, lines.joined(separator: "\n")) } catch { return false }
+        return true
+    }
+
+    /// Record Leon's explicit decision not to do a meeting task in the source
+    /// ledger. The snapshot is taken before the edit, and the local task is moved
+    /// to a non-runnable sentinel state before the caller removes it. This keeps a
+    /// crash between the vault write and SwiftData deletion from re-executing work.
+    /// Returns `false` without mutating either side when the source line cannot be
+    /// located or the snapshot/write fails.
+    @discardableResult
+    public func ignoreInVault(_ task: MustardTask, now: Date = .now) -> Bool {
+        guard task.source == "meeting",
+              let key = task.originKey,
+              let path = task.sourceURL,
+              let contents = io.read(path) else { return false }
+
+        var lines = contents.components(separatedBy: "\n")
+        guard let idx = lines.firstIndex(where: { line in
+            MeetingTaskParser.isCheckbox(line.trimmingCharacters(in: .whitespaces))
+                && MeetingTaskParser.originKey(notePath: path, line: line) == key
+        }) else { return false }
+
+        if !MeetingTaskParser.isIgnored(lines[idx]) {
+            do { try io.snapshot(path, contents) } catch { return false }
+            lines[idx] = MeetingTaskParser.markIgnored(lines[idx])
+            do { try io.write(path, lines.joined(separator: "\n")) } catch { return false }
+        }
+
+        task.source = "meeting:ignored"
+        task.markDone(now: now)
         return true
     }
 

@@ -24,6 +24,9 @@ public struct TaskDetailSheet: View {
     @State private var newLinkURL = ""
     /// BAK-95: inline feedback when a hand-off is blocked because the task has no area.
     @State private var gateHint: String?
+    @State private var codeHeroesCommenting = false
+    @State private var codeHeroesComment = ""
+    @State private var codeHeroesFeedbackMessage: String?
 
     /// The Stage/Assignee pickers can hand a task to the agent, but the bridge routes by
     /// area — so, like the "Ask agent" buttons, block a hand-off on an area-less task.
@@ -56,6 +59,14 @@ public struct TaskDetailSheet: View {
     }
 
     public var body: some View {
+        if CodeHeroesDecisionPolicy.isProjection(task) {
+            readOnlyProjectionDetail
+        } else {
+            editableDetail
+        }
+    }
+
+    private var editableDetail: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().overlay(Theme.Palette.hairline)
@@ -229,6 +240,193 @@ public struct TaskDetailSheet: View {
         .background(Theme.Palette.bg)
     }
 
+    private var readOnlyProjectionDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    stageBadge
+                    Text(task.owner == .agent ? "✦ Agent" : "You")
+                        .font(Theme.Fonts.meta)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Spacer()
+                    SourceLinkButton(task: task)
+                    Button("Done") { close() }.controlSize(.small)
+                }
+                CodeHeroesDecisionBadge(task: task)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    PriorityFlag(priority: task.priority)
+                    Text(task.title)
+                        .font(Theme.Fonts.docH1)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .textSelection(.enabled)
+                }
+                if TaskChipRow.hasChips(task) { TaskChipRow(task: task) }
+            }
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
+
+            Divider().overlay(Theme.Palette.hairline)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label {
+                        Text(CodeHeroesDecisionPresentation.readOnlyExplanation)
+                            .font(Theme.Fonts.meta)
+                    } icon: {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(Theme.Fonts.caption)
+                    }
+                    .foregroundStyle(Theme.Palette.agentText)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.Palette.agentTintLight, in: RoundedRectangle(cornerRadius: 9))
+                    .accessibilityLabel("Repository decision response")
+                    .accessibilityHint(CodeHeroesDecisionPresentation.readOnlyExplanation)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeader("Details")
+                        readOnlyProperty("Stage", task.stage.label)
+                        readOnlyProperty("Priority", task.priority.label)
+                        readOnlyProperty("Assignee", task.owner.label)
+                        readOnlyProperty("Action", "Respond through the Code Heroes adapter")
+                        if let due = task.dueAt {
+                            readOnlyProperty("Due", due.formatted(date: .abbreviated, time: .omitted))
+                        }
+                        if let scheduled = task.scheduledAt {
+                            readOnlyProperty("Scheduled", scheduled.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        readOnlyProperty("Estimate", "\(task.estimateMinutes)m")
+                        readOnlyProperty("In", task.list?.name ?? "None")
+                        readOnlyProperty("Tags", task.tags.isEmpty ? "None" : task.tags.map { "#\($0)" }.joined(separator: "  "))
+                    }
+
+                    sectionDivider
+                    CodeHeroesDecisionSourceLinks(task: task)
+                    sectionDivider
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionHeader("Body")
+                        MarkdownBlocksView(
+                            content: task.notes,
+                            resolve: { _ in nil },
+                            onWikilinkTap: { _ in },
+                            bodyFont: Theme.Fonts.reading
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 90, alignment: .topLeading)
+                        .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 16)
+            }
+
+            Divider().overlay(Theme.Palette.hairline)
+            VStack(alignment: .leading, spacing: 8) {
+                if codeHeroesCommenting {
+                    HStack(spacing: 8) {
+                        TextField("What should change?", text: $codeHeroesComment, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...4)
+                        Button("Send comment") {
+                            let text = codeHeroesComment
+                            Task {
+                                await agent.commentCodeHeroes(task, text: text)
+                                if task.stage == .needsInput { codeHeroesCommenting = false }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(agent.isExecuting || codeHeroesComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Cancel") { codeHeroesCommenting = false }
+                            .controlSize(.small)
+                    }
+                } else if task.stage.isOpen {
+                    HStack(spacing: 8) {
+                        Button("Approve & run") {
+                            Task { await agent.approveCodeHeroes(task) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.Palette.accent)
+                        .controlSize(.small)
+                        .disabled(agent.isExecuting)
+
+                        Button("Ignore") {
+                            Task { await agent.ignoreCodeHeroes(task) }
+                        }
+                        .controlSize(.small)
+                        .disabled(agent.isExecuting)
+
+                        Button("Comment adjustment") { codeHeroesCommenting = true }
+                            .controlSize(.small)
+                            .disabled(agent.isExecuting)
+                        Spacer(minLength: 0)
+                    }
+                }
+                if CodeHeroesDecisionPolicy.isProjection(task) {
+                    HStack(spacing: 8) {
+                        Menu {
+                            Button { recordCodeHeroesFeedback(.useful) } label: {
+                                Label("Useful", systemImage: "hand.thumbsup")
+                            }
+                            Button { recordCodeHeroesFeedback(.tooNoisy) } label: {
+                                Label("Too noisy", systemImage: "speaker.slash")
+                            }
+                            Button { recordCodeHeroesFeedback(.wrongProject) } label: {
+                                Label("Wrong project", systemImage: "arrow.triangle.branch")
+                            }
+                            Button { recordCodeHeroesFeedback(.alreadyHandled) } label: {
+                                Label("Already handled", systemImage: "checkmark.circle")
+                            }
+                        } label: {
+                            Label("Feedback", systemImage: "text.bubble")
+                        }
+                        .controlSize(.small)
+                        if let codeHeroesFeedbackMessage {
+                            Text(codeHeroesFeedbackMessage)
+                                .font(Theme.Fonts.caption)
+                                .foregroundStyle(Theme.Palette.agentText)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                if agent.isExecuting {
+                    Label("Sending response to Code Heroes…", systemImage: "hourglass")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                } else if task.stage == .needsInput && task.tags.contains(where: { $0 == "response:commented" }) {
+                    Label("Comment sent · awaiting revision", systemImage: "text.bubble")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.agentText)
+                } else if task.stage == .needsReview {
+                    Label("Code Heroes needs a fresh review before another response.", systemImage: "exclamationmark.triangle")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.warnText)
+                }
+                HStack {
+                    Spacer()
+                    Button("Close") { close() }.controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12)
+        }
+        .frame(width: 460)
+        .frame(maxHeight: .infinity)
+        .background(Theme.Palette.bg)
+    }
+
+    private func recordCodeHeroesFeedback(_ signal: CodeHeroesFeedbackSignal) {
+        guard let result = agent.recordCodeHeroesFeedback(task, signal: signal) else { return }
+        codeHeroesFeedbackMessage = result.candidates.isEmpty
+            ? "Feedback saved"
+            : "Feedback saved · learning suggestion ready for review"
+    }
+
+    private func readOnlyProperty(_ label: String, _ value: String) -> some View {
+        PropertyRow(label: label) {
+            Text(value)
+                .font(Theme.Fonts.meta)
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .textSelection(.enabled)
+        }
+    }
+
     // Designed header (BAK-244): stage badge + owner on top, a large editable title
     // with the inline priority flag, then the at-a-glance chip strip shared with the
     // row/card (BAK-245). The sheet stays live-edit — the title is a plain field and
@@ -279,7 +477,7 @@ public struct TaskDetailSheet: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Button(role: .destructive) {
-                context.delete(task); close()
+                deleteTask()
             } label: { Label("Delete task", systemImage: "trash") }
             .controlSize(.small)
             Spacer()
@@ -292,11 +490,11 @@ public struct TaskDetailSheet: View {
         switch task.stage {
         case .needsApproval:
             Button("I'll do it") { takeOver() }.controlSize(.small)
-            Button("Deny", role: .destructive) { context.delete(task); close() }.controlSize(.small)
-            Button(task.isGated ? "Approve & run" : "Approve") { approveGate() }
+            Button("Deny", role: .destructive) { deleteTask() }.controlSize(.small)
+            Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approveGate() }
                 .buttonStyle(.borderedProminent).tint(Theme.Palette.agent).controlSize(.small)
         case .needsReview:
-            Button("Discard", role: .destructive) { context.delete(task); close() }.controlSize(.small)
+            Button("Discard", role: .destructive) { deleteTask() }.controlSize(.small)
             if task.agentRun == nil {
                 // Legacy tasks without a conversation keep the shared state-machine controls;
                 // run-backed tasks get accept / request-changes / take-back in the
@@ -318,7 +516,7 @@ public struct TaskDetailSheet: View {
         case .inbox where task.isProposed:
             Button("I'll do it") { takeOver() }.controlSize(.small)
             Button("Schedule") { scheduleTomorrow() }.controlSize(.small)
-            Button("Dismiss", role: .destructive) { context.delete(task); close() }.controlSize(.small)
+            Button("Dismiss", role: .destructive) { deleteTask() }.controlSize(.small)
             Button("Approve") { PersonalBoard.move(task, to: .needsApproval) }
                 .buttonStyle(.borderedProminent).tint(Theme.Palette.agent).controlSize(.small)
         case .done:
@@ -350,6 +548,13 @@ public struct TaskDetailSheet: View {
     /// Approve a gate using the shared state machine (needsApproval → queued/needsReview).
     private func approveGate() {
         if let target = PersonalBoard.approveTarget(for: task) { PersonalBoard.move(task, to: target) }
+    }
+
+    private func deleteTask() {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        if MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot) {
+            close()
+        }
     }
 
     /// Schedule a proposed task for tomorrow 9am as your own planned/scheduled work.

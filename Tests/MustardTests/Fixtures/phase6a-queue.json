@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "report_type": "dream_decision_triage",
+  "generated_at": "2026-08-11T03:11:00Z",
+  "source_run_id": "RUN-20260811-dream-002",
+  "source_receipt": "operations/runs/dream/RUN-20260811-dream-002.md",
+  "canonical_input": "operations/decisions/open/",
+  "read_only": true,
+  "decision_status_mutations": 0,
+  "mustard_import": "future-adapter-only",
+  "summary": {
+    "current_decision_count": 22,
+    "grouped_queue_count": 13,
+    "current_ids_accounted_for": 22,
+    "current_ids_accounted_for_exactly_once": true,
+    "historical_open_decision_count": 4,
+    "historical_ids_attached_to_current_clusters": 3,
+    "historical_ids_excluded_from_current_queue": 1,
+    "human_decision_clusters": 9,
+    "evidence_or_maintenance_clusters": 4
+  },
+  "historical_open_decision_ids": [
+    "DEC-20260811-dream-dl-1c5de5db52f3d355",
+    "DEC-20260811-dream-dl-5ef20c8727a51c99",
+    "DEC-20260811-dream-dl-b2865be0bf62dacd",
+    "DEC-20260811-dream-dl-cdc35f0bca2be100"
+  ],
+  "historical_exclusions": [
+    {
+      "decision_id": "DEC-20260811-dream-dl-cdc35f0bca2be100",
+      "reason": "RUN-20260811-dream-001 adapter cross-link resolver finding; historical evidence only and not linked to a current run-002 decision.",
+      "mustard_visibility": "historical-only"
+    }
+  ],
+  "queue": [
+    {
+      "cluster_id": "CH-01",
+      "project_id": "code-heroes-internal",
+      "title": "Investigate repeated off-cron Dream launches",
+      "triage_state": "needs-evidence",
+      "mustard_stage": "needsReview",
+      "priority": "high",
+      "decision_required": false,
+      "human_action_required": false,
+      "question": "What launched Dream at 06:02 and 09:22 Brisbane when the declared schedule is 18:00, and how can the trigger be proven?",
+      "next_action": "Inspect the declared task, launch-agent or scheduler evidence, and receipt timing. Record the confirmed trigger before proposing any schedule change.",
+      "why_grouped": "This is one repeated reliability anomaly, not a separate decision for each stray firing.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-code-heroes-internal-6d209ed578550f23"
+      ]
+    },
+    {
+      "cluster_id": "CH-02",
+      "project_id": "code-heroes-internal",
+      "title": "Resolve the agent-memory scope and review-stamp policy",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "Does the Dream pass include agent-memory/**, and which existing reviewed/backdating rule is the canonical policy?",
+      "next_action": "Choose and record one scope/stamping rule, reconcile the missing hub entry, and use that policy as the gate for any backlog maintenance.",
+      "why_grouped": "The four records are the same policy conflict expressed as backlog, scope, mass-stamping, and missing-decision evidence.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-code-heroes-internal-157af6fd2c11fb24",
+        "DEC-20260811-dream-code-heroes-internal-42cc164d26f0be4a",
+        "DEC-20260811-dream-code-heroes-internal-6aad24cfa9df977a",
+        "DEC-20260811-dream-code-heroes-internal-ea6d5ae358568428"
+      ]
+    },
+    {
+      "cluster_id": "CH-03",
+      "project_id": "code-heroes-internal",
+      "title": "Choose the attended memory-maintenance batch",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "After the scope policy is settled, should the attended one-time backfill run, and which learnings candidates should be promoted?",
+      "next_action": "Review the bounded backfill and promotion candidates as one supervised batch; do not run either action from queue status alone.",
+      "why_grouped": "Both records concern deferred, attended maintenance of the same agent-memory backlog and depend on CH-02's policy decision.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-code-heroes-internal-2fb6031568d106f9",
+        "DEC-20260811-dream-code-heroes-internal-3aede41ba8c06dc7"
+      ]
+    },
+    {
+      "cluster_id": "OPS-01",
+      "project_id": "cross-project",
+      "title": "Review stale or already-completed hygiene findings",
+      "triage_state": "candidate-to-supersede",
+      "mustard_stage": "needsReview",
+      "priority": "medium",
+      "decision_required": false,
+      "human_action_required": false,
+      "question": "Do current canonical files confirm that these findings are already resolved or superseded?",
+      "next_action": "Re-read the referenced current files, then resolve or supersede each source decision with an evidence note. Keep them out of Leon's decision lane until that check is done.",
+      "why_grouped": "These records describe stale dashboards or a run already quarantined; they are cleanup work, not four independent user choices.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-code-heroes-internal-68b971da79a2d687",
+        "DEC-20260811-dream-dl-1584a5af38f371b2",
+        "DEC-20260811-dream-dl-2e8c61ea559031de",
+        "DEC-20260811-dream-sales-buddi-722b695748a7e151"
+      ]
+    },
+    {
+      "cluster_id": "DL-01",
+      "project_id": "dl",
+      "title": "Make the DLA 3.24.0 go/no-go decision",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "high",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "What is the current state of sc-148513, and is DLA 3.24.0 approved to proceed?",
+      "next_action": "Verify the current Shortcut state first, then record one explicit go/no-go answer; the run-001 record is a historical duplicate, not a second choice.",
+      "why_grouped": "The current and quarantined-run records describe the same release gate.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-dl-b63444a2e7b0b5fd",
+        "DEC-20260811-dream-dl-1c5de5db52f3d355"
+      ]
+    },
+    {
+      "cluster_id": "DL-02",
+      "project_id": "dl",
+      "title": "Set the DLA-6034 scope",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "Should DLA-6034 cover both themes or SQ only, and every occurrence or only the onboarding re-entry screen?",
+      "next_action": "Choose the scope once, then update the issue/story drafts through the approved workflow. Do not treat the two run records as separate questions.",
+      "why_grouped": "The current and historical records are duplicate observations of the same unresolved implementation scope.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-dl-cad21ec858fcac7b",
+        "DEC-20260811-dream-dl-5ef20c8727a51c99"
+      ]
+    },
+    {
+      "cluster_id": "DL-03",
+      "project_id": "dl",
+      "title": "Reconcile Radar counts before making queue decisions",
+      "triage_state": "needs-evidence",
+      "mustard_stage": "needsReview",
+      "priority": "medium",
+      "decision_required": false,
+      "human_action_required": false,
+      "question": "Which Radar snapshot and counting definition is authoritative for the seed totals and classification counts?",
+      "next_action": "Recompute both discrepancies from the canonical Register/snapshot and publish one count definition; only then present backlog sizing to Leon.",
+      "why_grouped": "The current seed-count mismatch and the historical frontmatter/body mismatch are evidence-quality issues, not separate product decisions.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-dl-74c3fed38b6ac887",
+        "DEC-20260811-dream-dl-b2865be0bf62dacd"
+      ]
+    },
+    {
+      "cluster_id": "DL-04",
+      "project_id": "dl",
+      "title": "Choose how to handle the 154-item Radar backlog",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "Should queues 2, 3, and 4 continue now, or be scheduled for a later review window?",
+      "next_action": "Choose keep-going or schedule-it after DL-03's count reconciliation; preserve the 154-item estimate as provisional until then.",
+      "why_grouped": "There is one pacing decision for the three untriaged queues, not one decision per queue.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-dl-ad934ad0bf3201a6"
+      ]
+    },
+    {
+      "cluster_id": "SB-01",
+      "project_id": "sales-buddi",
+      "title": "Decide whether to merge and publish the transcription worktree",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "high",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "Should claude/salesbuddi-mvp-transcription-970618 be merged into SB main and its epic, spike, stories, and project note published?",
+      "next_action": "Verify the branch diff and target repository, then make one merge/publication decision. Do not treat the missing note and missing stories as separate approvals.",
+      "why_grouped": "The dashboard gap, missing live project note, and nine-file branch are one integration gate.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-sales-buddi-5e782a95e3b8a510",
+        "DEC-20260811-dream-sales-buddi-80e955186a741246",
+        "DEC-20260811-dream-sales-buddi-e024663846ba02ec"
+      ]
+    },
+    {
+      "cluster_id": "SB-02",
+      "project_id": "sales-buddi",
+      "title": "Resolve the call-recording and upload consent gate",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "high",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "What has legal approved for call recording and upload, and can the beta proceed?",
+      "next_action": "Obtain or record the legal answer before enabling the beta; this is a safety gate, not a knowledge-file cleanup task.",
+      "why_grouped": "This is one external approval dependency with a direct beta impact.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-sales-buddi-9537958e7ae5a121"
+      ]
+    },
+    {
+      "cluster_id": "SB-03",
+      "project_id": "sales-buddi",
+      "title": "Choose the Granola information architecture",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "Should the lead design use folders and sections, or follow Jonah's singular-structure ruling?",
+      "next_action": "Choose the governing structure before sending the design to Jonah and record the rationale in the Decision Log.",
+      "why_grouped": "The two design positions are one unresolved product decision.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-sales-buddi-64e7dc675a322abc"
+      ]
+    },
+    {
+      "cluster_id": "SB-04",
+      "project_id": "sales-buddi",
+      "title": "Confirm audio-capture sequencing",
+      "triage_state": "needs-human-decision",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": true,
+      "human_action_required": false,
+      "question": "Should desktop audio capture remain Track 0, with F1-F7 Shortcut stories held until sc-155516 returns?",
+      "next_action": "Confirm or change the sequencing rule, then record it once in the Decision Log; queue status must not create the stories automatically.",
+      "why_grouped": "This is a single sequencing/gating decision for the transcription workstream.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-sales-buddi-710b2e129d746467"
+      ]
+    },
+    {
+      "cluster_id": "SB-05",
+      "project_id": "sales-buddi",
+      "title": "Move the Code Heroes Miro board manually",
+      "triage_state": "manual-action",
+      "mustard_stage": "needsInput",
+      "priority": "medium",
+      "decision_required": false,
+      "human_action_required": true,
+      "question": "Can Leon move the board from the current account into the Code Heroes organisation?",
+      "next_action": "Perform the approximately five-minute manual move when convenient; the current MCP boundary cannot do it safely.",
+      "why_grouped": "This is an explicit external manual action, not a decision about the knowledge base or product scope.",
+      "source_decision_ids": [
+        "DEC-20260811-dream-sales-buddi-fde9bc7a6687c11c"
+      ]
+    }
+  ]
+}
