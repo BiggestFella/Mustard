@@ -68,6 +68,21 @@ final class DayPlannerTests: XCTestCase {
         XCTAssertEqual(doneStale.scheduledAt, at("2026-06-10T14:30:00Z"))
     }
 
+    func test_carryForward_excludesRepositoryProjectionWhileMovingOrdinaryTask() {
+        let today = at("2026-06-12T00:00:00Z")
+        let oldDate = at("2026-06-10T14:30:00Z")
+        let projection = MustardTask(title: "Repository decision", scheduledAt: oldDate)
+        projection.source = CodeHeroesDecisionPolicy.source
+        let ordinary = MustardTask(title: "Ordinary task", scheduledAt: oldDate)
+
+        DayPlanner.carryForward([projection, ordinary], to: today, calendar: cal)
+
+        XCTAssertEqual(projection.scheduledAt, oldDate)
+        XCTAssertNil(projection.carriedForwardAt)
+        XCTAssertTrue(cal.isDate(ordinary.scheduledAt!, inSameDayAs: today))
+        XCTAssertTrue(cal.isDate(ordinary.carriedForwardAt!, inSameDayAs: today))
+    }
+
     func test_upcoming_returnsOpenScheduledAfterNow_soonestFirst_limited() {
         let now = at("2026-06-12T10:00:00Z")
         let soon = MustardTask(title: "soon", scheduledAt: at("2026-06-12T11:00:00Z"))

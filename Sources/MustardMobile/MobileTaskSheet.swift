@@ -141,11 +141,11 @@ struct MobileTaskSheet: View {
         HStack(spacing: 8) {
             switch task.stage {
             case .needsApproval:
-                Button("Deny", role: .destructive) { context.delete(task); dismiss() }
+                Button("Deny", role: .destructive) { deleteTask() }
                 Spacer()
-                Button(task.isGated ? "Approve & run" : "Approve") { approve() }.buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
+                Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approve() }.buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
             case .needsReview:
-                Button("Discard", role: .destructive) { context.delete(task); dismiss() }
+                Button("Discard", role: .destructive) { deleteTask() }
                 Spacer()
                 Button("Accept output") { TaskCompletion.complete(task, in: context); dismiss() }.buttonStyle(.borderedProminent).tint(Theme.Palette.done)
             case .queued:
@@ -176,5 +176,12 @@ struct MobileTaskSheet: View {
 
     private func approve() {
         if let target = PersonalBoard.approveTarget(for: task) { PersonalBoard.move(task, to: target) }
+    }
+
+    private func deleteTask() {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        if MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot) {
+            dismiss()
+        }
     }
 }

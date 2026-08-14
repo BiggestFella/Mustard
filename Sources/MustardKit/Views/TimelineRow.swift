@@ -56,13 +56,23 @@ public struct TimelineRow: View {
 
     public var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Button(action: onToggleDone) {
-                Image(systemName: isDone ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(isDone ? Theme.Palette.done
-                                     : (task.owner == .agent ? Theme.Palette.agent : Theme.Palette.textTertiary))
+            if CodeHeroesDecisionPresentation.allowsLocalCompletion(for: task) {
+                Button(action: onToggleDone) {
+                    Image(systemName: isDone ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(isDone ? Theme.Palette.done
+                                         : (task.owner == .agent ? Theme.Palette.agent : Theme.Palette.textTertiary))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 1)
+            } else {
+                Image(systemName: "lock.fill")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.agentText)
+                    .padding(.top, 2)
+                    .help("Repository decision — respond through the Code Heroes adapter")
+                    .accessibilityLabel("Repository decision response")
+                    .accessibilityHint("Completion and reopen are unavailable in Mustard")
             }
-            .buttonStyle(.plain)
-            .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: density.rowSpacing) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {

@@ -241,9 +241,7 @@ public struct BoardView: View {
                             .padding(.vertical, 6)
                     }
                     ForEach(visible) { task in
-                        MustardBoardCard(task: task, showConfidence: showConfidence)
-                            .draggable(task.uid)
-                            .onTapGesture { selectedTask = task }
+                        boardCard(task)
                     }
                     if older > 0 {
                         Text("+\(older) older completed")
@@ -268,6 +266,7 @@ public struct BoardView: View {
         .dropDestination(for: String.self) { uids, _ in
             guard let uid = uids.first,
                   let task = allTasks.first(where: { $0.uid == uid }) else { return false }
+            guard !CodeHeroesDecisionPolicy.isProjection(task) else { return false }
             guard task.stage != stage else { return true }
             // BAK-90: dropping into an agent lane is a hand-off — require a client area
             // first, or the bridge export silently won't route it. Reject + surface a hint.
@@ -310,6 +309,18 @@ public struct BoardView: View {
         } isTargeted: { targeted in
             if targeted { dropTargetStage = stage }
             else if dropTargetStage == stage { dropTargetStage = nil }
+        }
+    }
+
+    @ViewBuilder
+    private func boardCard(_ task: MustardTask) -> some View {
+        if CodeHeroesDecisionPolicy.isProjection(task) {
+            MustardBoardCard(task: task, showConfidence: showConfidence)
+                .onTapGesture { selectedTask = task }
+        } else {
+            MustardBoardCard(task: task, showConfidence: showConfidence)
+                .draggable(task.uid)
+                .onTapGesture { selectedTask = task }
         }
     }
 

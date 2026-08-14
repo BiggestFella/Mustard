@@ -29,6 +29,12 @@ public final class AgentService {
     public private(set) var currentTitle: String?
     /// Digest of the last meeting-task import (e.g. "imported 3 meeting tasks (2 clients)").
     public private(set) var lastMeetingSummary: String?
+    /// Summary of the most recent manual Code Heroes decision queue import.
+    public private(set) var lastCodeHeroesImportSummary: String?
+    /// Code Heroes queue import feedback, kept separate from the agent loop's error state.
+    public private(set) var lastCodeHeroesImportError: String?
+    /// Synchronous for now; exposed so a future UI can disable its import action.
+    public private(set) var isImportingCodeHeroesQueue = false
     /// Transient guidance for the user (not a failure) — e.g. a blocked hand-off needing
     /// a client area first (BAK-90). Surfaced as a calm banner, cleared on the next success.
     public private(set) var lastHint: String?
@@ -37,18 +43,195 @@ public final class AgentService {
     private let claude: ClaudeRun
     private let bridge: BridgeIO
     private let executionGate: AgentExecutionGate
+    private let codeHeroesActionRunner: CodeHeroesDecisionActionRunning
     private let persist: () throws -> Void
     private let busyHint = "The agent is finishing another task. This work will stay queued and retry shortly."
 
     public init(context: ModelContext, claude: @escaping ClaudeRun = ClaudeRunner.run,
                 bridge: BridgeIO = FileBridgeIO(),
                 executionGate: AgentExecutionGate? = nil,
-                persist: (() throws -> Void)? = nil) {
+                persist: (() throws -> Void)? = nil,
+                codeHeroesActionRunner: CodeHeroesDecisionActionRunning? = nil) {
         self.context = context
         self.claude = claude
         self.bridge = bridge
         self.executionGate = executionGate ?? AgentExecutionGate()
+        self.codeHeroesActionRunner = codeHeroesActionRunner ?? ProductionCodeHeroesDecisionActionRunner()
         self.persist = persist ?? { try context.save() }
+    }
+
+    /// Imports a reviewed Code Heroes queue through the read-only projection adapter.
+    /// This is intentionally available even when `settings.enabled` is false:
+    /// that preference is reserved for a later automatic-refresh opt-in. This
+    /// method performs no connector, repository, export, or scheduler work.
+    @discardableResult
+    public func importCodeHeroesDecisionQueue(
+        settings: CodeHeroesQueueSettings,
+        now: Date = .now
+    ) async -> CodeHeroesDecisionAdapter.ImportReport? {
+        let repositoryRoot = settings.repositoryRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        let queuePath = settings.queuePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !repositoryRoot.isEmpty, !queuePath.isEmpty else {
+            lastCodeHeroesImportSummary = nil
+            lastCodeHeroesImportError = "Code Heroes import requires a repository root and queue file path."
+            return nil
+        }
+
+        isImportingCodeHeroesQueue = true
+        lastCodeHeroesImportError = nil
+        defer { isImportingCodeHeroesQueue = false }
+
+        let report = await CodeHeroesDecisionAdapter(
+            context: context,
+            repositoryRoot: URL(fileURLWithPath: repositoryRoot),
+            now: { now }
+        ).importQueue(at: URL(fileURLWithPath: queuePath))
+        lastCodeHeroesImportSummary = report.summary
+        lastCodeHeroesImportError = report.findings.first.map { "Code Heroes import: \($0.reason)" }
+        return report
+    }
+
+    /// Approve and execute a Code Heroes projection through the same serial execution
+    /// gate used by ordinary agent actions. The projection remains repository-owned;
+    /// this method only changes Mustard's local lifecycle after the adapter responds.
+    public func approveCodeHeroes(_ task: MustardTask) async {
+        await performCodeHeroesAction(task, kind: .approveAndRun)
+    }
+
+    /// Ignore a Code Heroes decision without a second confirmation or a required reason.
+    public func ignoreCodeHeroes(_ task: MustardTask) async {
+        await performCodeHeroesAction(task, kind: .ignore)
+    }
+
+    /// Send a bounded adjustment comment and leave the decision active for revision.
+    public func commentCodeHeroes(_ task: MustardTask, text: String) async {
+        await performCodeHeroesAction(task, kind: .comment, comment: text)
+    }
+
+    /// Records one explicit, bounded feedback signal. A candidate is surfaced only
+    /// after the recorder finds three comparable signals across distinct records;
+    /// candidate tasks are proposals and never mutate a routine or policy.
+    @discardableResult
+    public func recordCodeHeroesFeedback(
+        _ task: MustardTask,
+        signal: CodeHeroesFeedbackSignal,
+        reason: String? = nil,
+        now: Date = .now
+    ) -> CodeHeroesFeedbackRecordResult? {
+        do {
+            let result = try CodeHeroesFeedbackRecorder.record(task: task, signal: signal, reason: reason, now: now)
+            task.notes = boundedActionNote(task.notes, "Feedback recorded: \(signal.rawValue)")
+            for candidate in result.candidates {
+                upsertFeedbackCandidate(candidate, sourceTask: task)
+            }
+            _ = saveCodeHeroes("Could not persist Code Heroes feedback")
+            return result
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func performCodeHeroesAction(
+        _ task: MustardTask,
+        kind: CodeHeroesDecisionActionKind,
+        comment: String? = nil
+    ) async {
+        guard CodeHeroesDecisionPolicy.isProjection(task), task.stage.isOpen else { return }
+        guard !isExecuting else {
+            lastHint = busyHint
+            return
+        }
+        let request: CodeHeroesDecisionActionRequest
+        let settings: CodeHeroesQueueSettings
+        do {
+            request = try CodeHeroesDecisionActionRequestBuilder.make(task: task, action: kind, comment: comment)
+            settings = try CodeHeroesDecisionActionRequestBuilder.settings(for: task)
+        } catch {
+            lastError = error.localizedDescription
+            task.stage = .needsReview
+            _ = saveCodeHeroes("Could not prepare the Code Heroes action")
+            return
+        }
+        guard let token = executionGate.tryAcquire(owner: "Code Heroes decision") else {
+            lastHint = busyHint
+            return
+        }
+        defer { executionGate.release(token) }
+        let previousStage = task.stage
+        task.owner = .agent
+        task.stage = .inProgress
+        guard saveCodeHeroes("Could not start the Code Heroes action") else {
+            task.stage = previousStage
+            return
+        }
+        lastError = nil
+        lastHint = nil
+        isExecuting = true
+        currentTitle = task.title
+        defer { isExecuting = false; currentTitle = nil }
+
+        let result = await codeHeroesActionRunner.run(request: request, settings: settings)
+        switch result.status {
+        case "completed":
+            task.tags = Array(Set(task.tags + ["response:completed"])).sorted()
+            task.markDone()
+        case "ignored":
+            task.tags = Array(Set(task.tags + ["response:ignored"])).sorted()
+            task.markDone()
+        case "commented":
+            task.tags = Array(Set(task.tags + ["response:commented"])).sorted()
+            task.stage = .needsInput
+            task.notes = boundedActionNote(task.notes, "Comment sent · awaiting revision: \(result.message)")
+        case "blocked", "conflict":
+            task.tags = Array(Set(task.tags + ["response:blocked"])).sorted()
+            task.stage = .needsReview
+            task.notes = boundedActionNote(task.notes, "Code Heroes action blocked: \(result.message)")
+            lastError = result.message
+        default:
+            task.tags = Array(Set(task.tags + ["response:failed"])).sorted()
+            task.stage = .needsReview
+            task.notes = boundedActionNote(task.notes, "Code Heroes action failed: \(result.message)")
+            lastError = result.message
+        }
+        _ = saveCodeHeroes("Could not persist the Code Heroes action result")
+    }
+
+    private func boundedActionNote(_ existing: String, _ addition: String) -> String {
+        String((existing + "\n" + addition).trimmingCharacters(in: .whitespacesAndNewlines).prefix(1_600))
+    }
+
+    private func upsertFeedbackCandidate(_ candidate: CodeHeroesFeedbackCandidate, sourceTask: MustardTask) {
+        let tasks = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
+        let task: MustardTask
+        if let existing = tasks.first(where: { $0.uid == candidate.taskUID }) {
+            task = existing
+        } else {
+            task = MustardTask(title: "Review Code Heroes learning suggestion", owner: .agent)
+            context.insert(task)
+        }
+        task.uid = candidate.taskUID
+        task.title = "Review Code Heroes learning suggestion"
+        task.notes = candidate.notes
+        task.owner = .agent
+        task.stage = .needsReview
+        task.priority = .normal
+        task.source = "codeheroes:feedback-candidate"
+        task.sourceURL = (try? CodeHeroesDecisionActionRequestBuilder.repositoryRoot(for: sourceTask))
+            .map { $0.appendingPathComponent("operations/feedback/candidates/\(candidate.candidateID).md").path }
+        task.sourceContext = "candidate_id=\(candidate.candidateID);signal=\(candidate.signal.rawValue);project=\(candidate.projectID);source_routine=\(candidate.sourceRoutine)"
+        task.tags = ["codeheroes", "feedback", "feedback-candidate", "human-action"]
+    }
+
+    @discardableResult
+    private func saveCodeHeroes(_ prefix: String) -> Bool {
+        do {
+            try persist()
+            return true
+        } catch {
+            lastError = "\(prefix): \(error.localizedDescription)"
+            return false
+        }
     }
 
     /// Manual vault sweep: ask claude for recommendations, ingest them through the
@@ -87,7 +270,7 @@ public final class AgentService {
 
     /// Harvest meeting tasks from the curated notes under `vaultRoot` and reflect
     /// completions back (bidirectional, idempotent — see `MeetingTaskSync`). Cheap
-    /// file I/O + parsing, no model call, so the 60s loop can call it every tick.
+    /// file I/O + parsing, no model call; the app batches this local import hourly.
     public func importMeetingTasks(vaultRoot: String) {
         guard !vaultRoot.isEmpty else { return }
         let sync = MeetingTaskSync(context: context, io: FileVaultIO(rootPath: vaultRoot))

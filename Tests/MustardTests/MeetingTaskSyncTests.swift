@@ -52,15 +52,54 @@ final class MeetingTaskSyncTests: XCTestCase {
         let t = all[0]
         XCTAssertEqual(t.title, "Email Kamil the SDK spec")
         XCTAssertEqual(t.status, .inbox)
-        // Handed to the agent on arrival. Both are required: `.forAgent` alone is
-        // inert because AgentTaskQueue filters on `owner == .agent`.
+        // Imported meeting work waits for Leon's explicit decision. Approval later
+        // moves it to `.queued`, which is the runnable agent lane.
         XCTAssertEqual(t.owner, .agent)
-        XCTAssertEqual(t.stage, .forAgent)
+        XCTAssertEqual(t.stage, .needsApproval)
         XCTAssertEqual(t.source, "meeting")
         XCTAssertEqual(t.sourceURL, "DL/meetings/sync.md")
         XCTAssertEqual(t.dueAt, at("2026-06-20T00:00:00Z"))
         XCTAssertNotNil(t.originKey)
         XCTAssertEqual(digest.imported, 1)
+    }
+
+    func test_ignoreInVault_marksOnlyMatchingLineAndPreventsReimport() throws {
+        let ctx = try makeContext()
+        let path = "DL/meetings/Task Ledger.md"
+        let before = note("- [ ] Keep this task\n- [ ] Ignore this task")
+        let io = FakeVaultIO([path: before])
+        let sync = MeetingTaskSync(context: ctx, io: io)
+
+        _ = sync.importTasks()
+        let ignored = try XCTUnwrap(try tasks(ctx).first { $0.title == "Ignore this task" })
+
+        XCTAssertTrue(sync.ignoreInVault(ignored))
+        XCTAssertEqual(io.snapshots[path], before)
+        let after = try XCTUnwrap(io.files[path])
+        XCTAssertTrue(after.contains("- [ ] Ignore this task <!-- mustard:ignored -->"))
+        XCTAssertTrue(after.contains("- [ ] Keep this task"))
+        XCTAssertFalse(after.contains("- [ ] Keep this task <!-- mustard:ignored -->"))
+        XCTAssertEqual(sync.importTasks().imported, 0)
+    }
+
+    func test_import_reholdsLegacyRunnableMeetingTaskUntilApproved() throws {
+        let ctx = try makeContext()
+        let io = FakeVaultIO(["DL/meetings/Task Ledger.md": note("- [ ] Legacy task")])
+        let sync = MeetingTaskSync(context: ctx, io: io)
+
+        _ = sync.importTasks()
+        let task = try XCTUnwrap(try tasks(ctx).first)
+        task.stage = .forAgent
+        task.agentApprovalGranted = false
+
+        _ = sync.importTasks()
+
+        XCTAssertEqual(task.stage, .needsApproval)
+
+        task.agentApprovalGranted = true
+        task.stage = .queued
+        _ = sync.importTasks()
+        XCTAssertEqual(task.stage, .queued)
     }
 
     func test_import_isIdempotent_dedupByOriginKey() throws {

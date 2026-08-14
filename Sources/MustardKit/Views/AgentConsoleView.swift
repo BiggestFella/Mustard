@@ -17,6 +17,8 @@ public struct AgentConsoleView: View {
     /// Selection + key routing. An object, not @State: the triage key monitor is
     /// an escaping callback and must see the live selection and queue.
     @State private var console = TriageConsoleState()
+    /// Approval-gate spec (2026-08-14): reveals the held meeting-task rows.
+    @State private var showBackgroundMaintenance = false
 
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query private var allTasks: [MustardTask]
@@ -115,6 +117,14 @@ public struct AgentConsoleView: View {
                 if !attention.inFlight.isEmpty {
                     sectionLabel("IN FLIGHT · NEEDS YOU", count: attention.inFlight.count)
                     ForEach(attention.inFlight) { gateRow($0) }
+                }
+                if !attention.background.isEmpty {
+                    DisclosureGroup(isExpanded: $showBackgroundMaintenance) {
+                        ForEach(attention.background) { attentionRow($0, label: "Background") }
+                    } label: {
+                        sectionLabel("BACKGROUND MAINTENANCE", count: attention.background.count)
+                    }
+                    .padding(.top, 8)
                 }
 
                 sectionLabel("RECOMMENDATIONS", count: pending.count)
@@ -300,8 +310,8 @@ public struct AgentConsoleView: View {
     }
 
     /// A compact, actionable gate row (Needs Approval / You / Review) — deliberately
-    /// distinct from the rich proposal cards. Tapping the row opens the conversation
-    /// sheet; the trailing button either advances in one click or opens the sheet.
+    /// distinct from the rich proposal cards. Meeting tasks expose both quick Do and
+    /// Don't decisions here; tapping the row still opens the full task sheet.
     private func gateRow(_ task: MustardTask) -> some View {
         let action = AgentInbox.gateAction(for: task.stage)
         return HStack(spacing: 10) {
@@ -323,7 +333,7 @@ public struct AgentConsoleView: View {
                 Button {
                     if action.oneClick { advanceGate(task) } else { console.sheetTask = task }
                 } label: {
-                    Text(action.label)
+                    Text(task.source == "meeting" && task.stage == .needsApproval ? "Do" : action.label)
                         .font(Theme.Fonts.caption.weight(.semibold))
                         .foregroundStyle(action.oneClick ? .white : Theme.Palette.textSecondary)
                         .padding(.horizontal, 11).padding(.vertical, 5)
@@ -336,6 +346,45 @@ public struct AgentConsoleView: View {
                         }
                 }
                 .buttonStyle(.plain)
+                if task.source == "meeting", task.stage == .needsApproval {
+                    Button("Don't") { rejectGate(task) }
+                        .font(Theme.Fonts.caption.weight(.medium))
+                        .foregroundStyle(Theme.Palette.confidenceLow)
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 11).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture { console.sheetTask = task }
+        .padding(.bottom, 8)
+    }
+
+    private func rejectGate(_ task: MustardTask) {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
+    }
+
+    /// A compact attention row (Needs You / Needs Review) that opens the task's
+    /// conversation in the detail sheet.
+    private func attentionRow(_ task: MustardTask, label: String? = nil) -> some View {
+        Button { console.sheetTask = task } label: {
+            HStack(spacing: 8) {
+                if let area = task.list?.area {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color(hex: area.colorHex)).frame(width: 7, height: 7)
+                }
+                Text(task.title).font(Theme.Fonts.body).foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(label ?? (task.stage == .needsInput ? "Answer" : "Review"))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(task.stage == .needsInput ? Theme.Palette.warnText : Theme.Palette.reviewText)
             }
         }
         .padding(.horizontal, 11).padding(.vertical, 9)
@@ -518,4 +567,3 @@ private struct ConsoleTaskDetail: View {
         .animation(Theme.Motion.expand, value: draftPanel.draft?.uid)
     }
 }
-

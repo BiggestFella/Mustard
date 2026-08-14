@@ -926,6 +926,24 @@ final class AgentTaskCoordinatorTests: XCTestCase {
         XCTAssertEqual(run.lastActivityAt, secondTurn)
     }
 
+    func test_reconcileInterruptedUnapprovedMeetingTaskReturnsToApproval() throws {
+        let runtime = ScriptedAgentRuntime()
+        let (coordinator, context) = try fixture(runtime: runtime)
+        let task = insertRoutedTask(in: context, title: "Unapproved meeting task", stage: .inProgress)
+        task.source = "meeting"
+        task.agentApprovalGranted = false
+        let run = AgentRun(task: task, workingDirectory: "/kb/DL", project: "DL-Knowledge-Base")
+        run.state = .running
+        task.agentRun = run
+        context.insert(run)
+        try context.save()
+
+        coordinator.reconcileInterruptedRuns(now: secondTurn)
+
+        XCTAssertEqual(task.stage, .needsApproval)
+        XCTAssertEqual(run.state, .interrupted)
+    }
+
     func test_reconcileInterruptedRunsReturnsTrueOnSuccess() throws {
         let runtime = ScriptedAgentRuntime()
         let (coordinator, context) = try fixture(runtime: runtime)

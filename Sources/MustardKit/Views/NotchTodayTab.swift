@@ -21,6 +21,10 @@ struct NotchTodayTab: View {
     }
 
     private func toggleDone(_ task: MustardTask) {
+        guard CodeHeroesDecisionPresentation.allowsLocalCompletion(for: task) else {
+            nav.pendingTask = task
+            return
+        }
         if task.stage == .done {
             task.stage = .planned
             task.completedAt = nil
@@ -127,14 +131,21 @@ private struct AgendaRow: View {
     @ViewBuilder private var statusIcon: some View {
         switch item.kind {
         case .task(let task):
-            Button {
-                onToggleDone(task)
-            } label: {
-                Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
+            if CodeHeroesDecisionPresentation.allowsLocalCompletion(for: task) {
+                Button {
+                    onToggleDone(task)
+                } label: {
+                    Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(item.isDone ? .white.opacity(0.3) : .white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Image(systemName: "lock.circle")
                     .font(.system(size: 12))
-                    .foregroundStyle(item.isDone ? .white.opacity(0.3) : .white.opacity(0.45))
+                    .foregroundStyle(Color(hex: "#9C8CFF").opacity(0.75))
+                    .help(CodeHeroesDecisionPresentation.actionExplanation)
             }
-            .buttonStyle(.plain)
         case .event:
             Image(systemName: "circle")
                 .font(.system(size: 12))

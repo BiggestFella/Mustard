@@ -105,6 +105,7 @@ struct ListContentView: View {
     }
 
     private func toggle(_ task: MustardTask) {
+        guard CodeHeroesDecisionPresentation.allowsLocalCompletion(for: task) else { return }
         if task.stage == .done {
             task.stage = .planned
             task.completedAt = nil

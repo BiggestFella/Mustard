@@ -76,8 +76,13 @@ struct MobileBoardView: View {
                     Text("· \(sub)").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
-            ForEach(tasks) { MobileBoardCard(task: $0, onOpen: { selected = $0 }, onDelete: { context.delete($0) }) }
+            ForEach(tasks) { MobileBoardCard(task: $0, onOpen: { selected = $0 }, onDelete: deleteTask) }
         }
+    }
+
+    private func deleteTask(_ task: MustardTask) {
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
     }
 }
 
@@ -142,7 +147,7 @@ private struct MobileBoardCard: View {
 
     private var gateButtons: some View {
         HStack(spacing: 8) {
-            Button(stage == .needsReview ? "✓ Accept" : (task.isGated ? "✓ Approve & run" : "✓ Approve")) {
+            Button(stage == .needsReview ? "✓ Accept" : (task.isGated || task.owner == .agent ? "✓ Approve & run" : "✓ Approve")) {
                 if let target = PersonalBoard.approveTarget(for: task) { PersonalBoard.move(task, to: target) }
             }
             .font(.caption.weight(.semibold)).foregroundStyle(.white)

@@ -97,13 +97,18 @@ public struct WeekView: View {
     /// ✦ Balance: flatten Mon–Fri load, then offer an exact Undo.
     private func balance() {
         let monFri = Array(days.prefix(5))
-        let plan = WeekPlanner.balance(allTasks, weekdays: monFri, calendar: cal)
+        let movableTasks = allTasks.filter {
+            CodeHeroesDecisionPresentation.allows(.schedule, for: $0)
+        }
+        let plan = WeekPlanner.balance(movableTasks, weekdays: monFri, calendar: cal)
         guard !plan.moves.isEmpty else {
             toast = BalanceToast(message: "Your week is already balanced", moves: [])
             return
         }
-        for m in plan.moves where allTasks.contains(where: { $0.uid == m.uid }) {
-            allTasks.first { $0.uid == m.uid }?.scheduledAt = m.to
+        for move in plan.moves {
+            guard let task = allTasks.first(where: { $0.uid == move.uid }),
+                  CodeHeroesDecisionPresentation.allows(.schedule, for: task) else { continue }
+            task.scheduledAt = move.to
         }
         let n = plan.moves.count
         let peak = WeekPlanner.capacityLabel(minutes: plan.peakMinutes)
@@ -114,8 +119,10 @@ public struct WeekView: View {
     }
 
     private func undoBalance(_ moves: [WeekPlanner.BalanceMove]) {
-        for m in moves {
-            allTasks.first { $0.uid == m.uid }?.scheduledAt = m.from
+        for move in moves {
+            guard let task = allTasks.first(where: { $0.uid == move.uid }),
+                  CodeHeroesDecisionPresentation.allows(.schedule, for: task) else { continue }
+            task.scheduledAt = move.from
         }
         toast = nil
     }
@@ -165,7 +172,9 @@ public struct WeekView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Theme.Palette.surface.opacity(0.4))
         .dropDestination(for: String.self) { uids, _ in
-            guard let uid = uids.first, let task = allTasks.first(where: { $0.uid == uid })
+            guard let uid = uids.first,
+                  let task = allTasks.first(where: { $0.uid == uid }),
+                  CodeHeroesDecisionPresentation.allows(.unschedule, for: task)
             else { return false }
             task.scheduledAt = nil
             task.isTimed = false
@@ -184,7 +193,8 @@ public struct WeekView: View {
             } else {
                 ForEach(tasks) { task in
                     WeekChip(task: task, overdue: accent != nil)
-                        .draggable(task.uid)
+                        .weekDraggable(task.uid,
+                                       enabled: CodeHeroesDecisionPresentation.allows(.drag, for: task))
                         .onTapGesture { selectedTask = task }
                         .contextMenu { menu(for: task) }
                 }
@@ -235,7 +245,8 @@ public struct WeekView: View {
                             WeekBlock(task: task,
                                       onOpen: { selectedTask = task },
                                       onToggle: { toggle(task) })
-                                .draggable(task.uid)
+                                .weekDraggable(task.uid,
+                                               enabled: CodeHeroesDecisionPresentation.allows(.drag, for: task))
                                 .contextMenu { menu(for: task) }
                         }
                     }
@@ -248,7 +259,9 @@ public struct WeekView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(isToday ? Theme.Palette.accent.opacity(0.05) : .clear)
         .dropDestination(for: String.self) { uids, _ in
-            guard let uid = uids.first, let task = allTasks.first(where: { $0.uid == uid })
+            guard let uid = uids.first,
+                  let task = allTasks.first(where: { $0.uid == uid }),
+                  CodeHeroesDecisionPresentation.allows(.schedule, for: task)
             else { return false }
             task.scheduledAt = WeekPlanner.scheduleDate(on: day, keepingTimeFrom: task.scheduledAt)
             PersonalBoard.normalizePlacement(task)
@@ -321,10 +334,11 @@ public struct WeekView: View {
                                   height: blockHeight(minutes: task.estimateMinutes),
                                   onOpen: { selectedTask = task },
                                   onToggle: { toggle(task) })
-                        .draggable(task.uid)
-                        .contextMenu { menu(for: task) }
-                        .frame(width: columnWidth(geo.size.width, p))
-                        .offset(x: columnX(geo.size.width, p), y: yOffset(for: task.scheduledAt ?? Date()))
+                    .weekDraggable(task.uid,
+                                   enabled: CodeHeroesDecisionPresentation.allows(.drag, for: task))
+                    .contextMenu { menu(for: task) }
+                    .frame(width: columnWidth(geo.size.width, p))
+                    .offset(x: columnX(geo.size.width, p), y: yOffset(for: task.scheduledAt ?? Date()))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -360,30 +374,52 @@ public struct WeekView: View {
     // MARK: - Mutations
 
     @ViewBuilder private func menu(for task: MustardTask) -> some View {
-        if task.owner == .me && task.delegation == nil && task.stage != .done {
-            Button { agent.delegate(task) } label: {
-                Label("Ask agent to do this", systemImage: "cpu")
-            }
-            Divider()
-        }
-        if task.stage == .done {
-            Button("Reopen") { task.stage = .planned; task.completedAt = nil }
+        if CodeHeroesDecisionPolicy.isProjection(task) {
+            Button("Open detail") { selectedTask = task }
         } else {
-            Button("Complete") { task.markDone() }
+            if task.owner == .me && task.delegation == nil && task.stage != .done {
+                Button { delegate(task) } label: {
+                    Label("Ask agent to do this", systemImage: "cpu")
+                }
+                Divider()
+            }
+            if task.stage == .done {
+                Button("Reopen") { toggle(task) }
+            } else {
+                Button("Complete") { toggle(task) }
+            }
+            Button("Open detail") { selectedTask = task }
+            Button("Unschedule") { unschedule(task) }
+            Divider()
+            Button("Delete", role: .destructive) { delete(task) }
         }
-        Button("Open detail") { selectedTask = task }
-        Button("Unschedule") { task.scheduledAt = nil; task.isTimed = false }
-        Divider()
-        Button("Delete", role: .destructive) { context.delete(task) }
     }
 
     private func toggle(_ task: MustardTask) {
+        guard CodeHeroesDecisionPresentation.allows(.toggleCompletion, for: task) else { return }
         if task.stage == .done {
             task.stage = .planned
             task.completedAt = nil
         } else {
             task.markDone()
         }
+    }
+
+    private func unschedule(_ task: MustardTask) {
+        guard CodeHeroesDecisionPresentation.allows(.unschedule, for: task) else { return }
+        task.scheduledAt = nil
+        task.isTimed = false
+    }
+
+    private func delete(_ task: MustardTask) {
+        guard CodeHeroesDecisionPresentation.allows(.delete, for: task) else { return }
+        let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
+        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
+    }
+
+    private func delegate(_ task: MustardTask) {
+        guard CodeHeroesDecisionPresentation.allows(.delegate, for: task) else { return }
+        agent.delegate(task)
     }
 }
 
@@ -397,7 +433,15 @@ struct WeekChip: View {
         HStack(spacing: 6) {
             Text(task.title).font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.textPrimary).lineLimit(2)
             Spacer(minLength: 0)
-            DelegationBadge(task: task)
+            if CodeHeroesDecisionPolicy.isProjection(task) {
+                Image(systemName: "lock.fill")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.agentText)
+                    .accessibilityLabel(CodeHeroesDecisionPresentation.badgeText)
+                    .help(CodeHeroesDecisionPresentation.readOnlyExplanation)
+            } else {
+                DelegationBadge(task: task)
+            }
             if overdue, let when = task.scheduledAt {
                 Text(when.formatted(.dateTime.day().month()))
                     .font(.system(size: 9)).foregroundStyle(Theme.Palette.warning)
@@ -475,11 +519,19 @@ struct AxisTaskBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
-                Button(action: onToggle) {
-                    Image(systemName: task.stage == .done ? "checkmark.circle.fill" : "circle")
-                        .font(Theme.Fonts.caption).foregroundStyle(tint)
+                if CodeHeroesDecisionPolicy.isProjection(task) {
+                    Image(systemName: "lock.fill")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(tint)
+                        .accessibilityLabel(CodeHeroesDecisionPresentation.badgeText)
+                        .help(CodeHeroesDecisionPresentation.readOnlyExplanation)
+                } else {
+                    Button(action: onToggle) {
+                        Image(systemName: task.stage == .done ? "checkmark.circle.fill" : "circle")
+                            .font(Theme.Fonts.caption).foregroundStyle(tint)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 if let when = task.scheduledAt {
                     Text(when.formatted(date: .omitted, time: .shortened))
                         .font(.system(size: 9, weight: .semibold)).foregroundStyle(tint)
@@ -500,21 +552,25 @@ struct AxisTaskBlock: View {
         .onTapGesture(perform: onOpen)
     }
 
-    private var resizeHandle: some View {
-        Capsule()
-            .fill(tint.opacity(0.4))
-            .frame(width: 24, height: 4)
-            .padding(.bottom, 2)
-            .contentShape(Rectangle().inset(by: -8))
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if dragStartEstimate == nil { dragStartEstimate = task.estimateMinutes }
-                        let delta = Int(value.translation.height / perMinute)
-                        task.estimateMinutes = WeekPlanner.snapDuration((dragStartEstimate ?? 30) + delta)
-                    }
-                    .onEnded { _ in dragStartEstimate = nil }
-            )
+    @ViewBuilder private var resizeHandle: some View {
+        if CodeHeroesDecisionPresentation.allows(.resizeEstimate, for: task) {
+            Capsule()
+                .fill(tint.opacity(0.4))
+                .frame(width: 24, height: 4)
+                .padding(.bottom, 2)
+                .contentShape(Rectangle().inset(by: -8))
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            guard CodeHeroesDecisionPresentation.allows(.resizeEstimate, for: task)
+                            else { return }
+                            if dragStartEstimate == nil { dragStartEstimate = task.estimateMinutes }
+                            let delta = Int(value.translation.height / perMinute)
+                            task.estimateMinutes = WeekPlanner.snapDuration((dragStartEstimate ?? 30) + delta)
+                        }
+                        .onEnded { _ in dragStartEstimate = nil }
+                )
+        }
     }
 }
 
@@ -528,11 +584,19 @@ struct WeekBlock: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Button(action: onToggle) {
-                Image(systemName: task.stage == .done ? "checkmark.circle.fill" : "circle")
-                    .font(Theme.Fonts.caption).foregroundStyle(tint)
+            if CodeHeroesDecisionPolicy.isProjection(task) {
+                Image(systemName: "lock.fill")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(tint)
+                    .accessibilityLabel(CodeHeroesDecisionPresentation.badgeText)
+                    .help(CodeHeroesDecisionPresentation.readOnlyExplanation)
+            } else {
+                Button(action: onToggle) {
+                    Image(systemName: task.stage == .done ? "checkmark.circle.fill" : "circle")
+                        .font(Theme.Fonts.caption).foregroundStyle(tint)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 if task.isTimed, let when = task.scheduledAt {
                     Text(when.formatted(date: .omitted, time: .shortened))
@@ -550,5 +614,16 @@ struct WeekBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
         .onTapGesture(perform: onOpen)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func weekDraggable(_ uid: String, enabled: Bool) -> some View {
+        if enabled {
+            draggable(uid)
+        } else {
+            self
+        }
     }
 }

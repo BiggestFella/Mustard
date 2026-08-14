@@ -70,7 +70,7 @@ final class RewritePromptTests: XCTestCase {
         // proves the files were registered as resources and can be loaded.
         for band in [PromptBand.macOS26, .macOS27] {
             let name = PromptCatalog.resourceName(feature: RewritePrompt.feature, band: band)
-            let url = Bundle.module.url(forResource: name, withExtension: "txt")
+            let url = RewriteWiring.resourceBundle.url(forResource: name, withExtension: "txt")
             XCTAssertNotNil(url, "\(name).txt must ship in the bundle")
             let text = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
             XCTAssertTrue(text.contains("Preserve meaning exactly"),

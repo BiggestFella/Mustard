@@ -108,13 +108,14 @@ public enum DayPlanner {
             .map { $0 }
     }
 
-    /// Move open tasks scheduled before `today` onto `today`, keeping their time-of-day.
+    /// Move open, locally mutable tasks scheduled before `today` onto `today`, keeping their time-of-day.
     public static func carryForward(
         _ tasks: [MustardTask], to today: Date, calendar: Calendar = .current
     ) {
         let startOfToday = calendar.startOfDay(for: today)
         for task in tasks {
-            guard task.stage.isOpen, let when = task.scheduledAt,
+            guard !CodeHeroesDecisionPolicy.isProjection(task),
+                  task.stage.isOpen, let when = task.scheduledAt,
                   when < startOfToday else { continue }
             let time = calendar.dateComponents([.hour, .minute], from: when)
             task.scheduledAt = calendar.date(
