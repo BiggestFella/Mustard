@@ -145,7 +145,7 @@ Capture is instant and offline-safe; the agent structures and routes it afterwar
 | Notch | `NotchSurface` | borderless status-bar `NSPanel` at the physical notch; idle rotates focus→next-meeting→waiting; hover expands to meetings + recs + capture |
 | Hover | `HoverPanel` | non-activating floating `NSPanel`; current focus + next-up tasks + waiting badge |
 | Voice pill | `VoiceCapturePillView` | non-activating top-centre `NSPanel` shown while ⌃⌥Space is held; live transcript, then added/cancelled flash |
-| Task detail | `TaskDetailSheet` | edit title/notes/status/owner/estimate/schedule, mark done, delete |
+| Task detail | `TaskDetailSheet` | read-first personal task (Edit → property grid); stage-adaptive footer; mark done, delete |
 
 `NotchController` and `HoverPanel` own `NSPanel`s configured non-activating
 (`.nonactivatingPanel`) so they never steal focus; `.canJoinAllSpaces`,
