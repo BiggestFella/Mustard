@@ -302,4 +302,30 @@ final class InlineFormatTests: XCTestCase {
     func test_isSingleBlockSelection_falseForEmptySelection() {
         XCTAssertFalse(InlineFormat.isSingleBlockSelection("hello", selection: NSRange(location: 2, length: 0)))
     }
+
+    /// Caret-only (arrow-key) moves are empty selections. The gate must
+    /// reject them without consulting the partition — so a caller can pass
+    /// `[]` and still get the right answer (BAK-254: no rescan on caret move).
+    func test_isSingleBlockSelection_emptySelection_shortCircuitsWithoutBlocks() {
+        XCTAssertFalse(InlineFormat.isSingleBlockSelection(
+            blocks: [], selection: NSRange(location: 2, length: 0)))
+    }
+
+    func test_isSingleBlockSelection_precomputedBlocks_matchesScanningAPI() {
+        let source = "para one\n\npara two"
+        let ns = source as NSString
+        let blocks = NoteDecoration.blocks(source)
+        let inside = ns.range(of: "one")
+        XCTAssertEqual(
+            InlineFormat.isSingleBlockSelection(blocks: blocks, selection: inside),
+            InlineFormat.isSingleBlockSelection(source, selection: inside)
+        )
+        let start = ns.range(of: "one").location
+        let end = ns.range(of: "two").location + 1
+        let spanning = NSRange(location: start, length: end - start)
+        XCTAssertEqual(
+            InlineFormat.isSingleBlockSelection(blocks: blocks, selection: spanning),
+            InlineFormat.isSingleBlockSelection(source, selection: spanning)
+        )
+    }
 }

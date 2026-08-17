@@ -472,6 +472,72 @@ final class NoteDecorationTests: XCTestCase {
         XCTAssertEqual(revealed, [blocks[1]])
     }
 
+    func test_revealedBlocks_precomputedBlocks_matchesScanningAPI() {
+        let source = "# H\n\n> q\n\npara **b**\n"
+        let blocks = NoteDecoration.blocks(source)
+        let caret = (source as NSString).range(of: "para").location
+        let focus = NSRange(location: caret, length: 0)
+        XCTAssertEqual(
+            NoteDecoration.revealedBlocks(blocks, focusedRange: focus),
+            NoteDecoration.revealedBlocks(source, focusedRange: focus)
+        )
+    }
+
+    func test_markerVisibility_precomputedBlocks_matchesScanningAPI() {
+        let source = "# H\n\npara **b**\n"
+        let blocks = NoteDecoration.blocks(source)
+        let caret = (source as NSString).range(of: "para").location
+        XCTAssertEqual(
+            NoteDecoration.markerVisibility(source, blocks: blocks, focusedRange: nil),
+            NoteDecoration.markerVisibility(source, focusedRange: nil)
+        )
+        XCTAssertEqual(
+            NoteDecoration.markerVisibility(source, blocks: blocks,
+                                            focusedRange: NSRange(location: caret, length: 0)),
+            NoteDecoration.markerVisibility(source, focusedRange: NSRange(location: caret, length: 0))
+        )
+    }
+
+    // MARK: - BlockCache (BAK-254 — partition is invariant across selection moves)
+
+    func test_blockCache_repeatedLookup_doesNotRescan() {
+        let source = "# H\n\npara **b**\n> q\n"
+        let cache = NoteDecoration.BlockCache()
+        let first = cache.blocks(for: source)
+        XCTAssertEqual(cache.computeCount, 1)
+        XCTAssertEqual(first, NoteDecoration.blocks(source))
+
+        let second = cache.blocks(for: source)
+        XCTAssertEqual(cache.computeCount, 1, "pure selection-move reuse must not rescan")
+        XCTAssertEqual(second, first)
+    }
+
+    func test_blockCache_invalidate_forcesRescan() {
+        let source = "# H\n\npara\n"
+        let cache = NoteDecoration.BlockCache()
+        _ = cache.blocks(for: source)
+        cache.invalidate()
+        let after = cache.blocks(for: source)
+        XCTAssertEqual(cache.computeCount, 2)
+        XCTAssertEqual(after, NoteDecoration.blocks(source))
+    }
+
+    func test_blockCache_differentSourceAfterInvalidate_matchesFreshScan() {
+        let cache = NoteDecoration.BlockCache()
+        _ = cache.blocks(for: "# H\n")
+        cache.invalidate()
+        let next = cache.blocks(for: "- [ ] task\n")
+        XCTAssertEqual(next, NoteDecoration.blocks("- [ ] task\n"))
+    }
+
+    func test_blockCache_emptySource_isEmptyAndReusable() {
+        let cache = NoteDecoration.BlockCache()
+        XCTAssertEqual(cache.blocks(for: ""), [])
+        XCTAssertEqual(cache.computeCount, 1)
+        XCTAssertEqual(cache.blocks(for: ""), [])
+        XCTAssertEqual(cache.computeCount, 1)
+    }
+
     func test_hideableMarkerRanges_headingBlock_isJustThePrefix() {
         let source = "# H\n"
         let block = NoteDecoration.blocks(source)[0]
@@ -640,5 +706,28 @@ final class NoteDecorationTests: XCTestCase {
         let blocks = NoteDecoration.blocks(source)
         XCTAssertTrue(blocks[0].isFence)
         XCTAssertNil(NoteDecoration.blockGlyph(source, of: blocks[0]))
+    }
+
+    /// BAK-254 item 2: checkbox rendering lives on `blockGlyph` (the view
+    /// paints `- [ ] ` `.clear` and draws a real checkbox over that column).
+    /// `spans()` still has no distinct bracket kind — only the `- ` list
+    /// marker — and those brackets must NOT enter `hideableSpans`. Nulling
+    /// them would collapse the column the glyph occupies.
+    func test_spans_checkboxLine_listMarkerIsBulletPrefixOnly_bracketsAreNotASpan() {
+        let source = "- [ ] task"
+        let spans = NoteDecoration.spans(source)
+        XCTAssertTrue(spans.contains(Span(range: NSRange(location: 0, length: 2), kind: .listMarker)))
+        XCTAssertFalse(spans.contains { span in
+            ("- [ ] task" as NSString).substring(with: span.range).contains(where: { $0 == "[" || $0 == "]" })
+        })
+    }
+
+    func test_hideableMarkerRanges_checkboxLine_empty_glyphsHoldTheColumn() {
+        let source = "- [ ] task"
+        let block = NoteDecoration.blocks(source)[0]
+        XCTAssertEqual(NoteDecoration.hideableMarkerRanges(source, in: block), [])
+        let result = NoteDecoration.blockGlyph(source, of: block)
+        XCTAssertEqual(result?.glyph, .checkbox(checked: false))
+        XCTAssertEqual(markerSlice(source, result!.markerRange), "- [ ] ")
     }
 }

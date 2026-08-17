@@ -87,7 +87,15 @@ public enum InlineFormat {
     /// the view layer).
     public static func isSingleBlockSelection(_ source: String, selection: NSRange) -> Bool {
         guard selection.length > 0 else { return false }
-        let blocks = NoteDecoration.blocks(source)
+        return isSingleBlockSelection(blocks: NoteDecoration.blocks(source), selection: selection)
+    }
+
+    /// Same gate as `isSingleBlockSelection(_:selection:)`, but reuses a
+    /// precomputed partition so a caret/selection move does not rescan the
+    /// document (BAK-254). An empty selection still short-circuits before
+    /// touching `blocks`, so a caret-only caller can pass `[]`.
+    public static func isSingleBlockSelection(blocks: [NoteDecoration.Block], selection: NSRange) -> Bool {
+        guard selection.length > 0 else { return false }
         guard let block = containingBlock(blocks, selection: selection) else { return false }
         return !block.isFrontmatter
     }
