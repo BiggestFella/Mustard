@@ -90,6 +90,8 @@ public struct TaskDetailSheet: View {
                                     // Moving into an agent lane is a hand-off — gate it.
                                     if PersonalBoard.isAgentLane(newStage), !gateHandOff() { return }
                                     task.stage = newStage
+                                    // A scheduled date and Inbox cannot coexist (BAK-246).
+                                    PersonalBoard.normalizePlacement(task)
                                 }
                             )) {
                                 ForEach(TaskStage.allCases) { Text($0.label).tag($0) }
@@ -567,8 +569,9 @@ public struct TaskDetailSheet: View {
         if let tomorrow = cal.date(byAdding: .day, value: 1, to: .now) {
             task.scheduledAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
         }
+        // Untimed 9:00 is the "planned for the day" convention (quick capture, ritual).
         task.isTimed = false
-        task.stage = .scheduled
+        PersonalBoard.normalizePlacement(task)
     }
 
     // Links referenced by the task (BAK-91) — e.g. a Shortcut story / Jira issue carried

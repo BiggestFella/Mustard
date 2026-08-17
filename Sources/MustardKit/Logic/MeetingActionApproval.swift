@@ -3,7 +3,8 @@ import SwiftData
 
 /// Approval-gated conversion of a meeting proposal into a task (meeting
 /// recorder Task 8, BAK-300). Every proposed action item requires Leon's
-/// explicit approve; approval creates exactly one LOCAL Inbox task — never an
+/// explicit approve; approval creates exactly one LOCAL task — Inbox by
+/// default, or Planned/Scheduled when a date is set (BAK-246) — never an
 /// outward action, never agent ownership.
 public enum MeetingActionApproval {
     /// Approve, applying any reviewed edits. Idempotent by proposal uid: a

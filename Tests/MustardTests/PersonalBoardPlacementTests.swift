@@ -32,6 +32,16 @@ final class PersonalBoardPlacementTests: XCTestCase {
         XCTAssertEqual(t.stage, .inbox, "untriaged, unscheduled tasks belong in Inbox")
     }
 
+    func test_dueAtWithoutScheduledAt_staysInbox() {
+        // Board card 🗓 chip renders `scheduledAt`, not `dueAt`. A deadline-only
+        // inbox card is still untriaged — meeting import stamps `dueAt` this way.
+        let t = MustardTask(title: "x")
+        t.stage = .inbox
+        t.dueAt = Date(timeIntervalSince1970: 1)
+        PersonalBoard.normalizePlacement(t)
+        XCTAssertEqual(t.stage, .inbox, "a due date is not a schedule; Inbox stays")
+    }
+
     func test_scheduledNonInbox_stageUntouched() {
         // Past the inbox — agent lanes, in-progress, done — keep their stage even
         // when scheduled; the invariant only rescues from Inbox.
@@ -51,6 +61,31 @@ final class PersonalBoardPlacementTests: XCTestCase {
         let once = t.stage
         PersonalBoard.normalizePlacement(t)
         XCTAssertEqual(t.stage, once)
+    }
+
+    // MARK: move() re-places a scheduled drop onto Inbox (board drag)
+
+    func test_moveToInbox_scheduledUntimed_bouncesToPlanned() {
+        let t = MustardTask(title: "x", scheduledAt: Date(timeIntervalSince1970: 1))
+        t.stage = .planned
+        t.isTimed = false
+        PersonalBoard.move(t, to: .inbox)
+        XCTAssertEqual(t.stage, .planned)
+    }
+
+    func test_moveToInbox_scheduledTimed_bouncesToScheduled() {
+        let t = MustardTask(title: "x", scheduledAt: Date(timeIntervalSince1970: 1))
+        t.stage = .planned
+        t.isTimed = true
+        PersonalBoard.move(t, to: .inbox)
+        XCTAssertEqual(t.stage, .scheduled)
+    }
+
+    func test_moveToInbox_unscheduled_staysInbox() {
+        let t = MustardTask(title: "x")
+        t.stage = .planned
+        PersonalBoard.move(t, to: .inbox)
+        XCTAssertEqual(t.stage, .inbox)
     }
 
     // MARK: normalizeScheduledPlacement (store migration)
@@ -84,5 +119,24 @@ final class PersonalBoardPlacementTests: XCTestCase {
         XCTAssertEqual(strandedTimed.stage, .scheduled)
         XCTAssertEqual(untriaged.stage, .inbox)
         XCTAssertEqual(doneScheduled.stage, .done)
+    }
+
+    func test_migration_dueAtOnlyInbox_untouched() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: Area.self, TaskList.self, MustardTask.self, Recommendation.self,
+            AgentRun.self, AgentMessage.self, CalendarEvent.self,
+            configurations: config
+        )
+        let ctx = ModelContext(container)
+        let deadline = MustardTask(title: "due only")
+        deadline.stage = .inbox
+        deadline.dueAt = Date(timeIntervalSince1970: 1)
+        ctx.insert(deadline)
+
+        BoardMigration.normalizeScheduledPlacement(ctx)
+
+        XCTAssertEqual(deadline.stage, .inbox)
+        XCTAssertNil(deadline.scheduledAt)
     }
 }

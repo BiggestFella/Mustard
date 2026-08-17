@@ -64,6 +64,8 @@ public enum PersonalBoard {
     }
 
     /// Apply a column move by stage: set stage, keep completedAt consistent with done.
+    /// Scheduled tasks cannot remain in Inbox (BAK-246), so a drop onto `.inbox`
+    /// is re-placed by `normalizePlacement` when `scheduledAt` is set.
     public static func move(_ task: MustardTask, to stage: TaskStage, now: Date = .now) {
         if stage == .done { task.markDone(now: now) }
         else { task.stage = stage; task.completedAt = nil }
@@ -71,6 +73,7 @@ public enum PersonalBoard {
             if stage == .queued { task.agentApprovalGranted = true }
             if stage == .forAgent || stage == .needsApproval { task.agentApprovalGranted = false }
         }
+        normalizePlacement(task)
     }
 
     /// Target stage when the human approves a gate (BAK-100). Agent-owned

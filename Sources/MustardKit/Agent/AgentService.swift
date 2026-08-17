@@ -593,6 +593,10 @@ public final class AgentService {
             task.stage = stage
         }
         if let scheduledAt { task.scheduledAt = scheduledAt }
+        // Defense in depth: a scheduled date must never leave the task in Inbox
+        // (BAK-246). No-op when `stage` is already past the inbox, which is the
+        // `.scheduled` / `.planned` decision path.
+        PersonalBoard.normalizePlacement(task)
         rec.task = task
         task.delegation = rec
         if isNew {
