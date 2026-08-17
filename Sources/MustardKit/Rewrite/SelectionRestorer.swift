@@ -44,7 +44,7 @@ extension SelectionRestorer {
     @MainActor
     public static func live(reader: AccessibilityFocusReader = .live()) -> SelectionRestorer {
         SelectionRestorer(
-            stillFocused: { reader.isStillFocused($0) },
+            stillFocused: { reader.isStillFocused($0, roles: RewriteRoles.textual) },
             setSelectedRange: { _, range in
                 let systemWide = AXUIElementCreateSystemWide()
                 var focusedRef: CFTypeRef?

@@ -20,6 +20,14 @@ final class GateTransitionTests: XCTestCase {
         XCTAssertEqual(PersonalBoard.approveTarget(for: t), .needsReview)
     }
 
+    func test_approveTarget_needsApproval_unknownActionType_toQueued() {
+        let t = MustardTask(title: "Mystery outward thing")
+        t.stage = .needsApproval
+        t.actionTypeRaw = "draft_emial"
+        XCTAssertTrue(t.isGated)
+        XCTAssertEqual(PersonalBoard.approveTarget(for: t), .queued)
+    }
+
     func test_approveTarget_needsApproval_noActionType_toNeedsReview() {
         let t = MustardTask(title: "Bare task")
         t.stage = .needsApproval // no actionType → not gated
@@ -42,6 +50,15 @@ final class GateTransitionTests: XCTestCase {
         XCTAssertTrue(t.agentApprovalGranted)
 
         PersonalBoard.move(t, to: .needsApproval)
+        XCTAssertFalse(t.agentApprovalGranted)
+    }
+
+    func test_moveToQueued_doesNotGrantRecordingApprovalBit() {
+        let t = MustardTask(title: "From a recording", owner: .agent)
+        t.source = "meeting-recording"
+        t.stage = .needsApproval
+
+        PersonalBoard.move(t, to: .queued)
         XCTAssertFalse(t.agentApprovalGranted)
     }
 

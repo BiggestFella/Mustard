@@ -6,7 +6,6 @@ import SwiftData
 /// chips, original source, the editable draft, comment, and the outcome actions.
 /// Lifted from the old inline `RecommendationRow` drawer (always expanded, standalone).
 struct RecommendationDetailView: View {
-    @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
     @Environment(HotKeyBindingsStore.self) private var hotKeys
     let rec: Recommendation
@@ -15,7 +14,6 @@ struct RecommendationDetailView: View {
 
     private var confidenceSegments: Int { Int((rec.confidence * 5).rounded(.down)) }
     private var confidenceColor: Color { Theme.confidenceColor(rec.confidence) }
-    private var draftOrBody: String { rec.draft.isEmpty ? rec.body : rec.draft }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -133,7 +131,7 @@ struct RecommendationDetailView: View {
                     .controlSize(.small)
                     .help("File this to your knowledge base log, then clear it.")
                 Spacer()
-                Button("Dismiss", role: .destructive) { rec.decision = .denied }
+                Button("Dismiss", role: .destructive) { Task { await agent.decide(rec, .denied) } }
                     .controlSize(.small)
                     .help("You've seen it — remove it. Nothing is stored.")
             } else {
@@ -150,25 +148,12 @@ struct RecommendationDetailView: View {
                     Button("Tomorrow") { agent.snooze(rec, until: SnoozeTargets.tomorrow9()) }
                 }
                 .controlSize(.small).fixedSize()
-                Button("Schedule") {
-                    rec.decision = .scheduled
-                    let task = MustardTask(title: rec.title); task.notes = draftOrBody
-                    let cal = Calendar.current
-                    if let tomorrow = cal.date(byAdding: .day, value: 1, to: .now) {
-                        task.scheduledAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
-                        PersonalBoard.normalizePlacement(task)
-                    }
-                    context.insert(task)
-                }
-                .controlSize(.small)
-                Button("I'll do it") {
-                    rec.decision = .selfExecute
-                    let task = MustardTask(title: rec.title); task.notes = draftOrBody
-                    context.insert(task)
-                }
-                .controlSize(.small)
+                Button("Schedule") { Task { await agent.decide(rec, .scheduled) } }
+                    .controlSize(.small)
+                Button("I'll do it") { Task { await agent.decide(rec, .selfExecute) } }
+                    .controlSize(.small)
                 Spacer()
-                Button("Reject", role: .destructive) { rec.decision = .denied }
+                Button("Reject", role: .destructive) { Task { await agent.decide(rec, .denied) } }
                     .controlSize(.small)
             }
         }

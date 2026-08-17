@@ -33,7 +33,17 @@ public enum RecommendationAction: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Known sweep token, or `nil` when the model invented something we don't
+    /// understand. Callers that execute or auto-approve must use this — never
+    /// `from`, which is a display fallback.
+    public static func parse(_ raw: String) -> RecommendationAction? {
+        RecommendationAction(rawValue: raw)
+    }
+
+    /// Display fallback. Unknown tokens render as "Update vault" so a stale
+    /// card still has a label; they must **not** execute as a vault note.
+    /// Trust and `decide` fail closed via `parse` / `TrustPolicy.isGated`.
     public static func from(_ raw: String) -> RecommendationAction {
-        RecommendationAction(rawValue: raw) ?? .vaultNote
+        parse(raw) ?? .vaultNote
     }
 }

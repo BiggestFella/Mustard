@@ -40,14 +40,16 @@ public enum TaskPriority: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// Voice-capture cleanup lifecycle (F25, ADR-0011). Stored on
+/// Voice-capture drafting lifecycle (F25, ADR-0011 addendum). Stored on
 /// `MustardTask.captureStateRaw`; nil there means "not a voice capture".
+/// On-device drafting (`VoiceTaskDraftGenerator`) replaced the Claude cleanup
+/// queue — `.failed` is unused in production (a generator miss leaves `.raw`).
 public enum CaptureState: String, Codable, CaseIterable {
-    /// Captured, awaiting the agent cleanup pass.
+    /// Captured, awaiting on-device title/notes structuring.
     case raw
-    /// Cleanup applied (title/description/schedule structured).
+    /// Draft applied (title/description/schedule structured).
     case cleaned
-    /// Cleanup exhausted its retries — the task stays usable with its raw title.
+    /// Leftover from the retired Claude cleanup queue. Do not assign.
     case failed
 }
 

@@ -85,12 +85,12 @@ public struct MustardBoardCard: View {
         }
     }
 
-    // MARK: 🎙 Voice-capture pill (F25) — raw = cleanup pending, failed = gave up
+    // MARK: 🎙 Voice-capture pill (F25) — raw = drafting pending
 
     private func capturePill(_ state: CaptureState) -> some View {
         HStack(spacing: 3) {
             Image(systemName: "mic.fill").font(.system(size: 8))
-            Text(state == .raw ? "Raw" : "Cleanup failed")
+            Text(state == .raw ? "Voice" : "Draft failed")
                 .font(.system(size: 10, weight: .semibold))
         }
         .foregroundStyle(state == .raw ? Theme.Palette.textSecondary : Theme.Palette.warning)
@@ -99,8 +99,8 @@ public struct MustardBoardCard: View {
         .background(Theme.Palette.surface, in: Capsule())
         .overlay(Capsule().stroke(Theme.Palette.divider, lineWidth: 0.5))
         .help(state == .raw
-              ? "Voice capture — the agent will tidy the title and details shortly"
-              : "Voice cleanup gave up — the raw transcript is kept as the title")
+              ? "Voice capture — on-device drafting will structure the title and details"
+              : "On-device drafting couldn't structure this — the transcript is kept as the title")
     }
 
     // MARK: ✦ Proposed pill (agent-surfaced inbox task)

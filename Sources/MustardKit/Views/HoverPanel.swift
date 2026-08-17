@@ -63,8 +63,7 @@ public struct HoverPanelView: View {
     }
 
     private var waitingCount: Int {
-        RecommendationQueue.pending(recommendations, now: .now).count
-            + tasks.filter { $0.stage == .needsReview }.count   // board review (ADR-0010)
+        AgentInbox.waitingCount(recommendations: recommendations, tasks: tasks)
     }
 
     private var upcoming: [MustardTask] {
@@ -101,6 +100,7 @@ public struct HoverPanelView: View {
                     Text("\(waitingCount)")
                         .font(Theme.Fonts.meta)
                         .foregroundStyle(Theme.Palette.agent)
+                        .accessibilityLabel("\(waitingCount) waiting on you")
                 }
             }
             if expanded {

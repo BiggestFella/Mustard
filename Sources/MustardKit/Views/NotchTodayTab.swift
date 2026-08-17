@@ -26,8 +26,7 @@ struct NotchTodayTab: View {
             return
         }
         if task.stage == .done {
-            task.stage = .planned
-            task.completedAt = nil
+            TaskCompletion.reopen(task)
         } else {
             TaskCompletion.complete(task, in: context)
         }

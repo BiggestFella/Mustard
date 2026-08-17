@@ -103,9 +103,16 @@ public struct AccessibilityFocusReader: FocusedTextReading {
     /// revoked permission, dead app, focus moved — fails closed to false, so
     /// the transcript is never inserted into the wrong place.
     public func isStillFocused(_ target: FocusedTextTarget) -> Bool {
+        isStillFocused(target, roles: Self.textualRoles)
+    }
+
+    /// Same revalidation under a caller-supplied role policy. Rewrite passes
+    /// `RewriteRoles.textual` so Gmail/Slack (`AXWebArea`) can accept a rewrite
+    /// after a successful snapshot; dictation keeps the narrower set.
+    public func isStillFocused(_ target: FocusedTextTarget, roles: Set<String>) -> Bool {
         guard isTrusted(),
               let probe = try? probe(),
-              let role = probe.role, Self.textualRoles.contains(role) else {
+              let role = probe.role, roles.contains(role) else {
             return false
         }
         return probe.pid == target.applicationPID

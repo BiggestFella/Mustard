@@ -37,4 +37,33 @@ final class TaskCompletionTests: XCTestCase {
         XCTAssertEqual(spawn?.status, .inbox)
         XCTAssertNil(spawn?.completedAt)
     }
+
+    func test_toggle_completeThenReopen_doesNotSpawnTwice() throws {
+        let ctx = try makeContext()
+        let t = MustardTask(title: "standup")
+        t.recurrence = .daily
+        t.dueAt = at("2026-06-12T00:00:00Z")
+        ctx.insert(t)
+
+        TaskCompletion.toggle(t, in: ctx, now: at("2026-06-12T09:00:00Z"))
+        XCTAssertEqual(t.stage, .done)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MustardTask>()).count, 2)
+
+        TaskCompletion.toggle(t, in: ctx, now: at("2026-06-12T10:00:00Z"))
+        XCTAssertEqual(t.stage, .planned)
+        XCTAssertNil(t.completedAt)
+        XCTAssertEqual(t.status, .planned)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MustardTask>()).count, 2)
+    }
+
+    func test_complete_fromWeekPath_recurringStillSpawns() throws {
+        // Regression: Week/Lists used to call markDone() and skip RecurrenceEngine.
+        let ctx = try makeContext()
+        let t = MustardTask(title: "weekly review")
+        t.recurrence = .weekly
+        t.dueAt = at("2026-06-12T00:00:00Z")
+        ctx.insert(t)
+        TaskCompletion.complete(t, in: ctx, now: at("2026-06-12T09:00:00Z"))
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MustardTask>()).count, 2)
+    }
 }

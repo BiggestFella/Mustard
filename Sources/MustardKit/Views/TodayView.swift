@@ -5,9 +5,10 @@ public struct TodayView: View {
     @Environment(\.modelContext) private var context
     @Query private var allTasks: [MustardTask]
     @Query private var recommendations: [Recommendation]
+    @Query private var events: [CalendarEvent]
     @State private var selectedTask: MustardTask?
     @State private var nudgeDismissed = false
-    private let today = Date.now
+    @State private var today = Date.now
     /// Navigate to the Agent console (the header "✦ Plan with agent" entry).
     private let onPlan: () -> Void
 
@@ -38,10 +39,10 @@ public struct TodayView: View {
     private var nudgeCount: Int { AgentInbox.waitingCount(recommendations: recommendations, tasks: allTasks) }
 
     /// The forward-flowing spine: today (always shown) plus upcoming days that carry
-    /// items. Events are empty until Google OAuth is wired; the rail then lights up with
-    /// no further view work. FOCUS-pinned tasks are excluded from today (BAK-247).
+    /// items. Meetings come from `CalendarEvent` (live Google Calendar when connected).
+    /// FOCUS-pinned tasks are excluded from today (BAK-247).
     private var spine: [SpineDay] {
-        TimelineSpine.build(tasks: allTasks, events: [], reference: today)
+        TimelineSpine.build(tasks: allTasks, events: events, reference: today)
     }
     /// Today's item count is used for the empty-state guard and the summary line.
     private var todayItems: [AgendaItem] { spine.first(where: { $0.label == .today })?.items ?? [] }
@@ -103,8 +104,13 @@ public struct TodayView: View {
         }
         .background(Theme.Palette.bg)
         .onAppear {
+            today = .now
             DayPlanner.carryForward(allTasks, to: today)
             consumeRitualRequest()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            today = .now
+            DayPlanner.carryForward(allTasks, to: today)
         }
         .onChange(of: ritualOpenRequested) { consumeRitualRequest() }
         .taskDetailDrawer(item: $selectedTask)
@@ -313,12 +319,7 @@ public struct TodayView: View {
 
     private func toggle(_ task: MustardTask) {
         guard CodeHeroesDecisionPresentation.allowsLocalCompletion(for: task) else { return }
-        if task.stage == .done {
-            task.stage = .planned
-            task.completedAt = nil
-        } else {
-            TaskCompletion.complete(task, in: context)
-        }
+        TaskCompletion.toggle(task, in: context)
     }
 }
 

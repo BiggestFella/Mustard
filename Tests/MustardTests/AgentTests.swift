@@ -409,6 +409,24 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(task.stage, .planned)
     }
 
+    func test_decide_unknownAction_staysPending_andDoesNotPromote() async throws {
+        let ctx = try makeContext()
+        var called = false
+        let service = AgentService(context: ctx, claude: { _, _ in
+            called = true
+            return ClaudeResult(ok: true, text: "x")
+        })
+        let rec = Recommendation(title: "Mystery", actionType: "draft_emial", vaultPath: "/v")
+        ctx.insert(rec)
+
+        await service.decide(rec, .approved)
+
+        XCTAssertFalse(called)
+        XCTAssertEqual(rec.decision, .pending)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MustardTask>()).count, 0)
+        XCTAssertNotNil(service.lastHint)
+    }
+
     // MARK: - delegate
 
     func test_delegate_handsTaskToAgent_atForAgent_andQueuesRunWithDelegationMessage() throws {
