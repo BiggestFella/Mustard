@@ -7,12 +7,12 @@ final class AgentBridgeServiceTests: XCTestCase {
         var written: [AgentWorkOrder] = []
         var cancelled: [String] = []
         var archived: [String] = []
-        var live: Set<String> = []
-        var liveResults: Set<String> = []
+        var live: BridgeLiveUIDs = .listed([])
+        var liveResults: BridgeLiveUIDs = .listed([])
         var results: [(AgentResult, String)] = []
         var quarantineCalls = 0
-        func liveOutboxUIDs(workingDir: String) -> Set<String> { live }
-        func liveResultUIDs(workingDir: String) -> Set<String> { liveResults }
+        func liveOutboxUIDs(workingDir: String) -> BridgeLiveUIDs { live }
+        func liveResultUIDs(workingDir: String) -> BridgeLiveUIDs { liveResults }
         func writeWorkOrder(_ order: AgentWorkOrder, workingDir: String) throws { written.append(order) }
         func cancelWorkOrder(uid: String, workingDir: String) throws { cancelled.append(uid) }
         func readResults(workingDir: String) -> [(result: AgentResult, path: String)] { results.map { ($0.0, $0.1) } }
@@ -118,10 +118,60 @@ final class AgentBridgeServiceTests: XCTestCase {
         run.requiresConnectedWorker = true
         t.agentRun = run
         ctx.insert(area); ctx.insert(list); ctx.insert(t); ctx.insert(run)
-        io.live = []                 // worker already archived the outbox
-        io.liveResults = ["u1"]      // result written, not yet ingested
+        io.live = .listed([])                 // worker already archived the outbox
+        io.liveResults = .listed(["u1"])      // result written, not yet ingested
         svc.exportWorkOrders(workingDir: "/kb/DL", area: "Digital Licence", project: "DL")
         XCTAssertTrue(io.written.isEmpty, "must not re-issue a duplicate while a result is pending ingest")
+    }
+
+    // BAK-94: a listing error on results/ must skip the whole export tick — treating
+    // it as empty would re-issue while a live result may still be sitting there.
+    @MainActor
+    func test_export_skipsTick_whenLiveResultListingUnknown() throws {
+        let io = StubIO(); let (svc, ctx) = try service(io)
+        let area = Area(name: "Digital Licence")
+        let list = TaskList(name: "DL", area: area)
+        let t = MustardTask(title: "ship"); t.uid = "u1"; t.stage = .queued; t.actionType = .ticket
+        t.list = list
+        let run = AgentRun(task: t)
+        run.requiresConnectedWorker = true
+        t.agentRun = run
+        ctx.insert(area); ctx.insert(list); ctx.insert(t); ctx.insert(run)
+        io.liveResults = .unknown
+        svc.exportWorkOrders(workingDir: "/kb/DL", area: "Digital Licence", project: "DL")
+        XCTAssertTrue(io.written.isEmpty, "must not export when live results cannot be listed")
+        XCTAssertTrue(io.cancelled.isEmpty, "must not cancel from a partial listing either")
+        XCTAssertEqual(svc.lastError, "Could not list the agent bridge; skipping export this tick")
+    }
+
+    @MainActor
+    func test_export_skipsTick_whenLiveOutboxListingUnknown() throws {
+        let io = StubIO(); let (svc, ctx) = try service(io)
+        let area = Area(name: "Digital Licence")
+        let list = TaskList(name: "DL", area: area)
+        let t = MustardTask(title: "ship"); t.uid = "u1"; t.stage = .queued; t.actionType = .ticket
+        t.list = list
+        let run = AgentRun(task: t)
+        run.requiresConnectedWorker = true
+        t.agentRun = run
+        ctx.insert(area); ctx.insert(list); ctx.insert(t); ctx.insert(run)
+        io.live = .unknown
+        svc.exportWorkOrders(workingDir: "/kb/DL", area: "Digital Licence", project: "DL")
+        XCTAssertTrue(io.written.isEmpty, "must not export when live outbox cannot be listed")
+        XCTAssertTrue(io.cancelled.isEmpty)
+        XCTAssertEqual(svc.lastError, "Could not list the agent bridge; skipping export this tick")
+    }
+
+    @MainActor
+    func test_exportAreaLessWork_skipsTick_whenLiveResultListingUnknown() throws {
+        let io = StubIO(); let (svc, ctx) = try service(io)
+        let t = MustardTask(title: "Email Bree"); t.uid = "v1"; t.stage = .queued; t.actionType = .draftEmail
+        let run = AgentRun(task: t); run.requiresConnectedWorker = true; t.agentRun = run
+        ctx.insert(t); ctx.insert(run)
+        io.liveResults = .unknown
+        svc.exportAreaLessWork(workingDir: "/kb/ch-work", project: "Code Heroes")
+        XCTAssertTrue(io.written.isEmpty)
+        XCTAssertEqual(svc.lastError, "Could not list the agent bridge; skipping export this tick")
     }
 
     @MainActor

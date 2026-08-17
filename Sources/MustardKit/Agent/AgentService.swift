@@ -370,10 +370,11 @@ public final class AgentService {
         // This dir handles tasks whose area maps here; the caller passes the dir/area/project.
         let target = BridgeExport.RouteTarget(workingDir: workingDir, project: project)
         let mine = all.filter { ($0.list?.area?.name ?? "") == area }
+        guard let live = listedBridgeUIDs(workingDir: workingDir) else { return }
         let plan = BridgeExport.plan(
             tasks: mine, route: { _ in target },
-            liveOutboxUIDs: [workingDir: bridge.liveOutboxUIDs(workingDir: workingDir)],
-            liveResultUIDs: [workingDir: bridge.liveResultUIDs(workingDir: workingDir)], now: .now)
+            liveOutboxUIDs: [workingDir: live.outbox],
+            liveResultUIDs: [workingDir: live.results], now: .now)
         for w in plan.writes { try? bridge.writeWorkOrder(w.order, workingDir: workingDir) }
         for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
     }
@@ -392,12 +393,26 @@ public final class AgentService {
         let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
         let target = BridgeExport.RouteTarget(workingDir: workingDir, project: project)
         let orphans = all.filter { $0.list?.area == nil }
+        guard let live = listedBridgeUIDs(workingDir: workingDir) else { return }
         let plan = BridgeExport.plan(
             tasks: orphans, route: { _ in target },
-            liveOutboxUIDs: [workingDir: bridge.liveOutboxUIDs(workingDir: workingDir)],
-            liveResultUIDs: [workingDir: bridge.liveResultUIDs(workingDir: workingDir)], now: .now)
+            liveOutboxUIDs: [workingDir: live.outbox],
+            liveResultUIDs: [workingDir: live.results], now: .now)
         for w in plan.writes { try? bridge.writeWorkOrder(w.order, workingDir: workingDir) }
         for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
+    }
+
+    /// BAK-94: if outbox/ or results/ cannot be listed, skip the whole export tick
+    /// (writes *and* cancels). An empty set here would re-issue a live order.
+    private func listedBridgeUIDs(workingDir: String) -> (outbox: Set<String>, results: Set<String>)? {
+        let outbox = bridge.liveOutboxUIDs(workingDir: workingDir)
+        let results = bridge.liveResultUIDs(workingDir: workingDir)
+        guard case .listed(let outboxUIDs) = outbox,
+              case .listed(let resultUIDs) = results else {
+            lastError = "Could not list the agent bridge; skipping export this tick"
+            return nil
+        }
+        return (outboxUIDs, resultUIDs)
     }
 
     /// Ingest `_agent/results/` for one KB working dir: apply each (guarded) and archive it.
