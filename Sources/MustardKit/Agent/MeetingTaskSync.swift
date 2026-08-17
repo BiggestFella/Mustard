@@ -42,7 +42,7 @@ public struct ImportDigest: Equatable {
 @MainActor
 public final class MeetingTaskSync {
     /// vault-root folder → Mustard Area name. `nonisolated` so pure helpers
-    /// (e.g. `AreaRouter`) can read this immutable map without main-actor isolation.
+    /// (e.g. `AreaMapping`) can read this immutable map without main-actor isolation.
     /// Vault directory name → area. Both the real on-disk names and the short
     /// codes are listed: the vault root Leon points Mustard at is the parent
     /// `Codeheroes work`, whose children are the `*-Knowledge-Base` directories.
