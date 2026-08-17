@@ -530,6 +530,18 @@ final class NoteDecorationTests: XCTestCase {
         XCTAssertEqual(next, NoteDecoration.blocks("- [ ] task\n"))
     }
 
+    /// The test-stack (and any programmatic string replace) can swap the
+    /// document without an explicit invalidate. A different source must
+    /// miss, not return the previous snapshot.
+    func test_blockCache_differentSourceWithoutInvalidate_rescans() {
+        let cache = NoteDecoration.BlockCache()
+        XCTAssertEqual(cache.blocks(for: ""), [])
+        XCTAssertEqual(cache.computeCount, 1)
+        let next = cache.blocks(for: "# H\n\npara **b**\n")
+        XCTAssertEqual(cache.computeCount, 2)
+        XCTAssertEqual(next, NoteDecoration.blocks("# H\n\npara **b**\n"))
+    }
+
     func test_blockCache_emptySource_isEmptyAndReusable() {
         let cache = NoteDecoration.BlockCache()
         XCTAssertEqual(cache.blocks(for: ""), [])

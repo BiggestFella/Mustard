@@ -100,7 +100,8 @@ public enum NoteDecoration {
     /// recomputes. `MarkdownTextView` holds one of these so caret-move paths
     /// never re-scan the document (BAK-254).
     public final class BlockCache {
-        private var cached: [Block]?
+        private var cachedSource: String?
+        private var cached: [Block] = []
         /// How many times `NoteDecoration.blocks` has actually run. Tests
         /// assert this stays put across repeated lookups of the same snapshot.
         private(set) var computeCount = 0
@@ -108,15 +109,16 @@ public enum NoteDecoration {
         public init() {}
 
         public func blocks(for source: String) -> [Block] {
-            if let cached { return cached }
+            if cachedSource == source { return cached }
             computeCount += 1
-            let result = NoteDecoration.blocks(source)
-            cached = result
-            return result
+            cached = NoteDecoration.blocks(source)
+            cachedSource = source
+            return cached
         }
 
         public func invalidate() {
-            cached = nil
+            cachedSource = nil
+            cached = []
         }
     }
 
