@@ -517,6 +517,62 @@ public final class AgentService {
         rec.comment = text
     }
 
+    /// Store guidance and re-propose this recommendation against it (BAK-51).
+    public func commentAndRevise(_ rec: Recommendation, _ text: String) async {
+        comment(rec, text)
+        await reviseWithComment(rec)
+    }
+
+    /// Re-propose this recommendation using its stored comment as guidance.
+    /// Updates the same card in place and leaves it pending — the comment was
+    /// human guidance, so the revision stays for another triage pass (no trust
+    /// auto-approve). Empty / whitespace comments are a no-op.
+    public func reviseWithComment(_ rec: Recommendation) async {
+        let guidance = rec.comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !guidance.isEmpty, rec.decision == .pending else { return }
+        guard !isSweeping else { return }
+        isSweeping = true
+        lastError = nil
+        defer { isSweeping = false }
+
+        guard !rec.vaultPath.isEmpty else {
+            lastError = "This recommendation has no vault to re-run against"
+            return
+        }
+
+        guard let result = await runClaude(
+            VaultSweep.reviseProposalPrompt(
+                title: rec.title, body: rec.body, action: rec.action,
+                draft: rec.draft, reasoning: rec.reasoning,
+                sourceContext: rec.sourceContext, comment: guidance
+            ),
+            workingDirectory: rec.vaultPath,
+            owner: "recommendation revision"
+        ) else { return }
+
+        guard result.ok else {
+            lastError = "Re-run failed: \(result.text)"
+            return
+        }
+
+        switch VaultSweep.parseOutcome(result.text) {
+        case .unparseable:
+            lastError = "Re-run returned output Mustard couldn't parse"
+        case .proposals(let proposals):
+            guard let proposal = proposals.first else {
+                lastError = "Re-run returned no parseable recommendation"
+                return
+            }
+            rec.title = proposal.title
+            rec.body = proposal.body
+            rec.proposedActionType = proposal.actionType
+            rec.confidence = proposal.confidence
+            rec.reasoning = proposal.reasoning
+            rec.draft = proposal.draft
+            rec.executionState = .idle
+        }
+    }
+
     /// Keep an FYI: append it to the project's curated rolling log and clear it from the
     /// queue. No claude run, no OutputCard — filing is a direct local write.
     public func keep(_ rec: Recommendation) {

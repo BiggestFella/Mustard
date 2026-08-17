@@ -171,6 +171,35 @@ final class VaultSweepPromptTests: XCTestCase {
         XCTAssertEqual(proposal?.actionType, "vault_note")
         XCTAssertEqual(proposal?.title, "Locate error screens")
     }
+
+    func test_reviseProposalPrompt_includesCommentAsGuidanceAndCurrentDraft() {
+        let p = VaultSweep.reviseProposalPrompt(
+            title: "Reply to Kamil",
+            body: "He asked for the figures.",
+            action: .draftEmail,
+            draft: "Hi Kamil, here are the Q2 figures…",
+            reasoning: "asked by EOD",
+            sourceContext: "Inbox · Kamil",
+            comment: "keep it under 100 words"
+        )
+        XCTAssertTrue(p.contains("keep it under 100 words"))
+        XCTAssertTrue(p.contains("Hi Kamil, here are the Q2 figures…"))
+        XCTAssertTrue(p.contains("Reply to Kamil"))
+        XCTAssertTrue(p.contains("draft_email"))
+        XCTAssertTrue(p.contains("asked by EOD"))
+        XCTAssertTrue(p.contains("Inbox · Kamil"))
+        XCTAssertTrue(p.contains("JSON array"))
+        XCTAssertTrue(p.lowercased().contains("guid"))
+        XCTAssertFalse(p.lowercased().contains("do not send"), "revision proposes; it does not execute")
+    }
+
+    func test_reviseProposalPrompt_parsesBackThroughVaultSweepParse() {
+        let modelOutput = #"[{"title":"Shorter reply","body":"Tighten the figures note.","action_type":"draft_email","confidence":0.7,"reasoning":"comment asked for brevity","draft":"Hi Kamil — Q2 figures attached."}]"#
+        let proposal = VaultSweep.parse(modelOutput).first
+        XCTAssertEqual(proposal?.title, "Shorter reply")
+        XCTAssertEqual(proposal?.actionType, "draft_email")
+        XCTAssertEqual(proposal?.draft, "Hi Kamil — Q2 figures attached.")
+    }
 }
 
 
@@ -753,6 +782,186 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(rec.comment, "make it shorter")
         XCTAssertEqual(rec.snoozedUntil, until)
         XCTAssertEqual(rec.decision, .pending)
+    }
+
+    func test_reviseWithComment_sendsGuidanceAndAppliesNewProposal() async throws {
+        let ctx = try makeContext()
+        var captured = ""
+        let service = AgentService(context: ctx, claude: { prompt, cwd in
+            captured = prompt
+            XCTAssertEqual(cwd, "/v")
+            return ClaudeResult(ok: true, text: #"[{"title":"Shorter note","body":"Trimmed.","action_type":"create_task","confidence":0.74,"reasoning":"comment asked for brevity","draft":"Keep it under 100 words."}]"#)
+        })
+        let rec = Recommendation(
+            title: "Long note", body: "A long body", actionType: "vault_note",
+            vaultPath: "/v", confidence: 0.6, reasoning: "stale", draft: "A very long draft"
+        )
+        rec.source = "gmail"
+        rec.project = "DL"
+        rec.sourceItemID = "thread-1"
+        rec.originalSource = "From: Kamil"
+        ctx.insert(rec)
+        service.comment(rec, "keep it under 100 words")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertTrue(captured.contains("keep it under 100 words"))
+        XCTAssertTrue(captured.contains("A very long draft"))
+        XCTAssertEqual(rec.title, "Shorter note")
+        XCTAssertEqual(rec.body, "Trimmed.")
+        XCTAssertEqual(rec.proposedActionType, "create_task")
+        XCTAssertEqual(rec.confidence, 0.74, accuracy: 0.001)
+        XCTAssertEqual(rec.reasoning, "comment asked for brevity")
+        XCTAssertEqual(rec.draft, "Keep it under 100 words.")
+        XCTAssertEqual(rec.comment, "keep it under 100 words", "guidance stays on the card")
+        XCTAssertEqual(rec.decision, .pending)
+        XCTAssertEqual(rec.source, "gmail")
+        XCTAssertEqual(rec.project, "DL")
+        XCTAssertEqual(rec.sourceItemID, "thread-1")
+        XCTAssertEqual(rec.originalSource, "From: Kamil")
+        XCTAssertNil(service.lastError)
+    }
+
+    func test_commentAndRevise_storesThenReproposes() async throws {
+        let ctx = try makeContext()
+        var captured = ""
+        let service = AgentService(context: ctx, claude: { prompt, _ in
+            captured = prompt
+            return ClaudeResult(ok: true, text: #"[{"title":"Revised","body":"b","action_type":"vault_note","confidence":0.6,"reasoning":"r","draft":"d"}]"#)
+        })
+        let rec = Recommendation(title: "Old", actionType: "vault_note", vaultPath: "/v")
+        ctx.insert(rec)
+
+        await service.commentAndRevise(rec, "focus on the SDK notes")
+
+        XCTAssertEqual(rec.comment, "focus on the SDK notes")
+        XCTAssertTrue(captured.contains("focus on the SDK notes"))
+        XCTAssertEqual(rec.title, "Revised")
+        XCTAssertEqual(rec.decision, .pending)
+    }
+
+    func test_reviseWithComment_emptyOrWhitespace_doesNotCallClaude() async throws {
+        let ctx = try makeContext()
+        var called = false
+        let service = AgentService(context: ctx, claude: { _, _ in
+            called = true
+            return ClaudeResult(ok: true, text: "[]")
+        })
+        let rec = Recommendation(title: "x", vaultPath: "/v")
+        ctx.insert(rec)
+
+        await service.reviseWithComment(rec)
+        service.comment(rec, "   ")
+        await service.reviseWithComment(rec)
+
+        XCTAssertFalse(called)
+        XCTAssertEqual(rec.title, "x")
+        XCTAssertNil(service.lastError)
+    }
+
+    func test_reviseWithComment_emptyVaultPath_setsError_doesNotCallClaude() async throws {
+        let ctx = try makeContext()
+        var called = false
+        let service = AgentService(context: ctx, claude: { _, _ in
+            called = true
+            return ClaudeResult(ok: true, text: "[]")
+        })
+        let rec = Recommendation(title: "x")
+        ctx.insert(rec)
+        service.comment(rec, "make it shorter")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertFalse(called)
+        XCTAssertEqual(service.lastError, "This recommendation has no vault to re-run against")
+        XCTAssertEqual(rec.title, "x")
+    }
+
+    func test_reviseWithComment_nonPending_isNoOp() async throws {
+        let ctx = try makeContext()
+        var called = false
+        let service = AgentService(context: ctx, claude: { _, _ in
+            called = true
+            return ClaudeResult(ok: true, text: "[]")
+        })
+        let rec = Recommendation(title: "x", vaultPath: "/v")
+        rec.decision = .denied
+        ctx.insert(rec)
+        service.comment(rec, "make it shorter")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertFalse(called)
+        XCTAssertEqual(rec.title, "x")
+    }
+
+    func test_reviseWithComment_unparseable_setsError_leavesCardUnchanged() async throws {
+        let ctx = try makeContext()
+        let service = AgentService(context: ctx, claude: { _, _ in
+            ClaudeResult(ok: true, text: "I rewrote it in prose.")
+        })
+        let rec = Recommendation(title: "Keep me", body: "body", actionType: "vault_note",
+                                 vaultPath: "/v", draft: "original draft")
+        ctx.insert(rec)
+        service.comment(rec, "make it shorter")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertEqual(service.lastError, "Re-run returned output Mustard couldn't parse")
+        XCTAssertEqual(rec.title, "Keep me")
+        XCTAssertEqual(rec.draft, "original draft")
+        XCTAssertEqual(rec.decision, .pending)
+    }
+
+    func test_reviseWithComment_emptyArray_setsError_leavesCardUnchanged() async throws {
+        let ctx = try makeContext()
+        let service = AgentService(context: ctx, claude: { _, _ in
+            ClaudeResult(ok: true, text: "[]")
+        })
+        let rec = Recommendation(title: "Keep me", vaultPath: "/v")
+        ctx.insert(rec)
+        service.comment(rec, "make it shorter")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertEqual(service.lastError, "Re-run returned no parseable recommendation")
+        XCTAssertEqual(rec.title, "Keep me")
+    }
+
+    func test_reviseWithComment_claudeFailure_setsError_leavesCardUnchanged() async throws {
+        let ctx = try makeContext()
+        let service = AgentService(context: ctx, claude: { _, _ in
+            ClaudeResult(ok: false, text: "401")
+        })
+        let rec = Recommendation(title: "Keep me", vaultPath: "/v")
+        ctx.insert(rec)
+        service.comment(rec, "make it shorter")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertEqual(service.lastError, "Re-run failed: 401")
+        XCTAssertEqual(rec.title, "Keep me")
+        XCTAssertEqual(rec.decision, .pending)
+    }
+
+    func test_reviseWithComment_doesNotApplyTrust() async throws {
+        UserDefaults.standard.set(TrustLevel.trusted.rawValue, forKey: "trustLevel")
+        defer { UserDefaults.standard.removeObject(forKey: "trustLevel") }
+        let ctx = try makeContext()
+        var called = false
+        let service = AgentService(context: ctx, claude: { _, _ in
+            called = true
+            return ClaudeResult(ok: true, text: #"[{"title":"Auto?","body":"b","action_type":"vault_note","confidence":0.95,"reasoning":"r","draft":"d"}]"#)
+        })
+        let rec = Recommendation(title: "Note", actionType: "vault_note", vaultPath: "/v", confidence: 0.9)
+        ctx.insert(rec)
+        service.comment(rec, "tighten the draft")
+
+        await service.reviseWithComment(rec)
+
+        XCTAssertTrue(called)
+        XCTAssertEqual(rec.decision, .pending, "a commented revision stays for review")
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MustardTask>()).count, 0)
     }
 
     // MARK: - keep (FYI filing)
