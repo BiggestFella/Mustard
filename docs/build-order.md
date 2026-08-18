@@ -60,7 +60,7 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
       mac-independence spec.)*
 - [x] **F19 You → agent delegation** (was I1 ⭐) — "Ask agent to do this" (detail
       sheet + Today/Board/Week context menu) → classify `claude -p` routed by client
-      Area (`AreaRouter`) → linked `Recommendation` (`MustardTask.delegation`); trust
+      Area (`AreaMapping`) → linked `Recommendation` (`MustardTask.delegation`); trust
       gates run-now (Trusted+) vs queue (`TrustPolicy.shouldAutoRunDelegation`); Accept
       → task done + output appended to Notes; agent may decline; `DelegationPhase`
       status badge. Plan: `docs/plans/2026-06-22-you-agent-delegation.md`.

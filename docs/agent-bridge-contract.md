@@ -19,7 +19,8 @@ work, and writes `results/` is **Phase 3** — it implements the session side of
 
 ## Folder protocol
 
-Under each KB working directory (routed by `AreaRouter` from the task's area):
+Under each KB working directory (each enabled `SourceConfig.workingDirectory`;
+area via `AreaMapping.areaName(forProject:)`):
 
 ```
 <KB>/_agent/
