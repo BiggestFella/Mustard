@@ -278,9 +278,10 @@ struct MarkdownTextView: NSViewRepresentable {
             let length = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(selected.location, length), length: 0))
             context.coordinator.isProgrammaticUpdate = false
-            context.coordinator.applyDecorations(scopedTo: nil)
             // A new document invalidates every cached block range from the OLD
-            // string — force a full recompute rather than diffing against them.
+            // string — drop the partition snapshot, then recompute.
+            context.coordinator.invalidateBlockCache()
+            context.coordinator.applyDecorations(scopedTo: nil)
             context.coordinator.refreshMarkerVisibility()
             // A programmatic replace means the OLD selection's toolbar (if any)
             // is now anchored to a document that no longer exists here — and so
@@ -334,6 +335,11 @@ struct MarkdownTextView: NSViewRepresentable {
         /// (editor has no focus at all) hides every marker in the document.
         private var hasFocus = false
 
+        /// BAK-254: the block partition is invariant across pure selection
+        /// moves. Invalidate only when the source text changes so arrow-key
+        /// / shift-select navigation never re-scans the document.
+        private let blockCache = NoteDecoration.BlockCache()
+
         /// Large-note fallback (spec "never block typing"): above this many UTF-16
         /// units decoration is skipped entirely — plain editable text. 200k units
         /// ≈ a 200 KB ASCII note, far past anything hand-written; per-keystroke
@@ -356,6 +362,9 @@ struct MarkdownTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isProgrammaticUpdate, let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            // Source changed — the cached partition is stale. Recompute once
+            // below (caretBlock) and reuse for decorations + marker visibility.
+            invalidateBlockCache()
             // Invalidation strategy (plan Task 4): a synchronous pass over ONLY the
             // block under the caret keeps keystroke latency flat; the debounced
             // full pass below catches edits that change block TOPOLOGY (typing a
@@ -381,13 +390,23 @@ struct MarkdownTextView: NSViewRepresentable {
             clearHover()
         }
 
-        /// The partition block containing the caret in the NEW string (recomputing
-        /// `NoteDecoration.blocks` is a single cheap line scan).
+        /// The partition block containing the caret in the NEW string.
         private func caretBlock(in textView: NSTextView) -> NoteDecoration.Block? {
-            let source = textView.string
-            let blocks = NoteDecoration.blocks(source)
+            let blocks = currentBlocks(textView.string)
             let caret = textView.selectedRange().location
             return blocks.first { NSLocationInRange(caret, $0.range) } ?? blocks.last
+        }
+
+        func invalidateBlockCache() {
+            blockCache.invalidate()
+        }
+
+        /// Cached `NoteDecoration.blocks` snapshot. First call after
+        /// `invalidateBlockCache()` (or first load) scans; every later call
+        /// with the same snapshot — caret moves, format-bar refresh, layout
+        /// publish — is O(1).
+        private func currentBlocks(_ source: String) -> [NoteDecoration.Block] {
+            blockCache.blocks(for: source)
         }
 
         private func scheduleFullPass() {
@@ -428,7 +447,7 @@ struct MarkdownTextView: NSViewRepresentable {
             }
             loggedFallback = false
 
-            let targets = block.map { [$0] } ?? NoteDecoration.blocks(source)
+            let targets = block.map { [$0] } ?? currentBlocks(source)
             isProgrammaticUpdate = true
             storage.beginEditing()
             for target in targets {
@@ -597,7 +616,8 @@ struct MarkdownTextView: NSViewRepresentable {
             // (markdown-as-truth) and the caret can traverse them to edit, they
             // just never draw. Hiding therefore depends only on the text, so this
             // runs on text change / load, never on caret movement.
-            let newHidden = NoteDecoration.markerVisibility(source, focusedRange: nil)
+            let newHidden = NoteDecoration.markerVisibility(source, blocks: currentBlocks(source),
+                                                            focusedRange: nil)
                 .hidden
                 .filter { $0.length > 0 && $0.upperBound <= ns.length }
 
@@ -710,7 +730,7 @@ struct MarkdownTextView: NSViewRepresentable {
             guard NSPointInRect(containerPoint, fragment) else { return false }
             let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
 
-            let blocks = NoteDecoration.blocks(source)
+            let blocks = currentBlocks(source)
             guard let block = blocks.first(where: { NSLocationInRange(charIndex, $0.range) }),
                   let (markerRange, glyph) = NoteDecoration.blockGlyph(source, of: block),
                   case .checkbox = glyph,
@@ -859,8 +879,8 @@ struct MarkdownTextView: NSViewRepresentable {
             // policy (Leon, 2026-07-12) hiding no longer depends on where the
             // caret is, only on the text, so a pure selection move can't change
             // it — refreshing happens on text change / load / doc-replace instead.
-            // (This also removes the per-caret-move O(doc) rescan flagged in
-            // BAK-254.) The format bar still tracks the selection.
+            // The format bar still tracks the selection, but reads the cached
+            // partition (BAK-254) rather than re-scanning `blocks(source)`.
             refreshFormatBar()
 
             // Close-only paths: never open on a pure selection move (allowOpen false).
@@ -968,7 +988,7 @@ struct MarkdownTextView: NSViewRepresentable {
         /// the block's first character, which is always a line start).
         func openSlashMenu(atBlock index: Int) {
             guard let textView else { return }
-            let moveable = NoteDecoration.blocks(textView.string).filter { !$0.isFrontmatter }
+            let moveable = currentBlocks(textView.string).filter { !$0.isFrontmatter }
             guard index >= 0, index < moveable.count else { return }
             let location = moveable[index].range.location
             textView.window?.makeFirstResponder(textView)
@@ -1073,7 +1093,8 @@ struct MarkdownTextView: NSViewRepresentable {
             guard let textView else { return }
             let selection = textView.selectedRange()
             guard hasFocus, !isPerformingEdit, !isProgrammaticUpdate,
-                  InlineFormat.isSingleBlockSelection(textView.string, selection: selection)
+                  InlineFormat.isSingleBlockSelection(blocks: currentBlocks(textView.string),
+                                                      selection: selection)
             else {
                 if parent.formatBar.wrappedValue != nil { parent.formatBar.wrappedValue = nil }
                 return
@@ -1130,7 +1151,7 @@ struct MarkdownTextView: NSViewRepresentable {
         /// last read `MarkdownBlockRect`s) rather than acting on the wrong block.
         private func moveableBlock(at index: Int) -> NoteDecoration.Block? {
             guard let textView else { return nil }
-            let moveable = NoteDecoration.blocks(textView.string).filter { !$0.isFrontmatter }
+            let moveable = currentBlocks(textView.string).filter { !$0.isFrontmatter }
             guard index >= 0, index < moveable.count else { return nil }
             return moveable[index]
         }
@@ -1271,7 +1292,7 @@ struct MarkdownTextView: NSViewRepresentable {
             var rects: [MarkdownBlockRect] = []
             // Large-note fallback: no decoration → no handles; typing still works.
             if (source as NSString).length <= Self.plainTextFallbackLimit {
-                let moveable = NoteDecoration.blocks(source).filter { !$0.isFrontmatter }
+                let moveable = currentBlocks(source).filter { !$0.isFrontmatter }
                 for (index, block) in moveable.enumerated() {
                     guard block.range.upperBound <= (source as NSString).length else { continue }
                     let glyphRange = layoutManager.glyphRange(forCharacterRange: block.range,

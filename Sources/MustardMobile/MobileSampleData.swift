@@ -39,6 +39,8 @@ enum MobileSampleData {
         _ = task("Team standup", stage: .scheduled, list: adminList, at: today(9, 30), est: 15)
         let release = task("Draft DLA 5.2 release notes", stage: .inProgress, list: dlaList,
                            at: today(10, 30), est: 90, priority: .high, tags: ["release", "docs"])
+        // Starred so the iOS Today FOCUS band is visible in Simulator (BAK-247).
+        release.focusOnDay = cal.startOfDay(for: .now)
         release.subtasks = [MustardTask(title: "Pull changelog"), MustardTask(title: "Review with Kamil")]
         release.subtasks?.forEach { $0.parent = release; context.insert($0) }
         _ = task("Reply to Thales SDK thread", stage: .scheduled, list: dlaList, at: today(14), est: 30, priority: .urgent)
