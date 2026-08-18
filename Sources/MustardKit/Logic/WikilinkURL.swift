@@ -1,9 +1,9 @@
 import Foundation
 
 /// The `mustard-note://` link scheme — ONE encoding shared by every surface that
-/// renders tappable wikilinks (MarkdownPreviewView's AttributedString links and
-/// MarkdownTextView's NSTextStorage `.link` attributes). Extracted from
-/// MarkdownPreviewView (Craft 2a) so a click decodes identically everywhere.
+/// renders tappable wikilinks (MarkdownBlocksView's AttributedString links and
+/// MarkdownTextView's NSTextStorage `.link` attributes). Extracted from the
+/// old preview (Craft 2a) so a click decodes identically everywhere.
 ///
 /// The raw target rides in a QUERY ITEM rather than the host/path, because
 /// host/path round-tripping mangles spaces, case, and slashes (URL normalises the

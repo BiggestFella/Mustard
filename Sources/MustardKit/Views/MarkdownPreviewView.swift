@@ -1,26 +1,5 @@
 import SwiftUI
 
-/// Calm light-markdown preview for the Notes editor (BAK-150). A thin scroll +
-/// measure wrapper around the shared `MarkdownBlocksView` block renderer below —
-/// the rendering itself is reusable (task-output review re-uses it, Craft pass
-/// Phase 1). Syntax highlighting is deliberately out of scope (Phase C); this is
-/// a reader, not an editor.
-struct MarkdownPreviewView: View {
-    /// Frontmatter-stripped note content. Named `content` (not `body`) to avoid
-    /// colliding with SwiftUI's required `var body`.
-    let content: String
-    let resolve: (String) -> NoteRef?
-    let onWikilinkTap: (String) -> Void
-
-    var body: some View {
-        ScrollView {
-            MarkdownBlocksView(content: content, resolve: resolve, onWikilinkTap: onWikilinkTap)
-                .padding(28)
-        }
-        .background(Theme.Palette.bg)
-    }
-}
-
 /// Non-scrolling markdown block stack — renders the parsed blocks through the pure
 /// `MarkdownBlocks.parse`, isolating `[[wikilinks]]` as tappable link runs.
 /// Extracted from the preview so other surfaces can render agent markdown inline;

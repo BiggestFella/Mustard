@@ -100,6 +100,14 @@ public enum SlashMenu {
         }
     }
 
+    /// IME composition (marked text) must not open, refresh, or commit the
+    /// slash menu — replacing the trigger while the input session is live
+    /// corrupts the marked range. The coordinator passes
+    /// `textView.hasMarkedText()`.
+    public static func allowsInteraction(hasMarkedText: Bool) -> Bool {
+        !hasMarkedText
+    }
+
     /// Non-nil (the query typed so far) when the caret sits in an active trigger:
     /// the line up to the caret must be exactly "/" + query, query containing no
     /// whitespace. "a /x" (mid-line slash) or "/x y" (query ended) is not a trigger —
