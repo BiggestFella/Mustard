@@ -69,7 +69,7 @@ public enum PersonalBoard {
     public static func move(_ task: MustardTask, to stage: TaskStage, now: Date = .now) {
         if stage == .done { task.markDone(now: now) }
         else { task.stage = stage; task.completedAt = nil }
-        if task.source == "meeting" {
+        if MeetingTaskSource.requiresAgentApproval(task.source) {
             if stage == .queued { task.agentApprovalGranted = true }
             if stage == .forAgent || stage == .needsApproval { task.agentApprovalGranted = false }
         }

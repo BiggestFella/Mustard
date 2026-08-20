@@ -650,7 +650,13 @@ public final class AgentService {
             promote(rec, to: .planned, owner: .me)
             return
         case .approved:
-            break
+            // A typo'd action_type must not execute as a vault note (the display
+            // fallback). Revert to pending and ask for a re-bucket.
+            if RecommendationAction.parse(rec.proposedActionType) == nil {
+                rec.decision = .pending
+                lastHint = "Unknown action “\(rec.proposedActionType)” — re-bucket it before approving."
+                return
+            }
         default:
             return
         }

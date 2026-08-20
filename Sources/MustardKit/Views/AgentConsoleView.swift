@@ -96,7 +96,8 @@ public struct AgentConsoleView: View {
             case .approveAndRun: Task { await agent.decide(rec, .approved) }
             }
         case .ignore:
-            console.selected?.decision = .denied
+            guard let rec = console.selected else { return }
+            Task { await agent.decide(rec, .denied) }
         case .snooze:
             guard let rec = console.selected else { return }
             agent.snooze(rec, until: TriageSnoozePreset.current().target())

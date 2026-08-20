@@ -350,7 +350,7 @@ public final class AgentTaskCoordinator {
                 run.completedAt = now
                 content = "Recovered an interrupted run. Completion uncertain — check whether the external artifact exists before requesting a retry."
             } else if let task, task.owner == .agent, task.stage == .inProgress,
-                      task.source == "meeting", !task.agentApprovalGranted {
+                      MeetingTaskSource.requiresAgentApproval(task.source), !task.agentApprovalGranted {
                 task.stage = .needsApproval
                 run.completedAt = nil
                 content = "Recovered an unapproved meeting task. Review it before allowing the agent to resume."
@@ -916,7 +916,7 @@ public final class AgentTaskCoordinator {
     ) -> Bool {
         let taskBefore = taskSnapshot(task)
         let runBefore = run.map(runSnapshot)
-        if task.source == "meeting" { task.agentApprovalGranted = false }
+        if MeetingTaskSource.requiresAgentApproval(task.source) { task.agentApprovalGranted = false }
         task.owner = .me
         task.stage = .planned
         var message: AgentMessage?
