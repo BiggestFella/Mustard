@@ -15,7 +15,12 @@ Models). Select the beta per-shell with
 swift test          # full suite: models, Logic, agent loop, parsers, voice capture
 ./build-app.sh      # builds build/Mustard.app (signed, double-clickable)
 open build/Mustard.app
+./build-ios.sh      # iOS companion for the Simulator (needs `brew install xcodegen`)
 ```
+
+`swift build`/`swift test` cover the macOS app only — the iOS companion is a
+separate xcodegen target (`project.yml`) that shares MustardKit, so run
+`./build-ios.sh` before pushing a change to shared code. CI runs it too.
 
 ## What works (v0)
 

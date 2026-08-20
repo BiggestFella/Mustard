@@ -25,7 +25,7 @@ import Speech
 /// format already matches the analyzer's: an identity conversion still routes
 /// through the converter rather than forwarding the caller's buffer, so the
 /// analyzer can never be handed audio somebody else might recycle.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 final class AnalyzerInputResampler {
     /// The format `SpeechAnalyzer.bestAvailableAudioFormat` chose.
     let analyzerFormat: AVAudioFormat
@@ -179,7 +179,7 @@ final class AnalyzerInputResampler {
 /// than a papering-over: `convert(to:error:withInputFrom:)` invokes the block
 /// synchronously on the calling thread before it returns, so the box is never
 /// touched from two threads, and each box is scoped to a single `drain` call.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 private final class InputFeed: @unchecked Sendable {
     private var pending: AVAudioPCMBuffer?
     /// `nil` input means the caller is flushing, so exhaustion is end of

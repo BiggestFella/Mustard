@@ -412,7 +412,7 @@ extension SystemDictationCoordinator {
         return SystemDictationCoordinator(
             snapshotFocus: { try reader.snapshot() },
             speech: .liveMicrophone {
-                guard #available(macOS 27.0, *) else {
+                guard #available(macOS 27.0, iOS 27.0, *) else {
                     throw VoiceSessionError.notReady(
                         .unavailable("Dictation needs macOS 27"))
                 }

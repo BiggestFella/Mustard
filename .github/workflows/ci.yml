@@ -37,3 +37,29 @@ jobs:
         run: swift build
       - name: Test
         run: swift test
+
+  build-ios:
+    name: Build (iOS Simulator)
+    # `swift build`/`swift test` cover the macOS app only, so the iOS companion
+    # target rotted unnoticed for weeks: by 2026-08-20 `./build-ios.sh` failed on
+    # pristine main (a macOS-only thumbnail helper, an asset catalog with no app
+    # icon, and Voice/ APIs annotated for macOS but not iOS). This job is the
+    # guard — the companion shares MustardKit, so anything reaching for an
+    # AppKit/Carbon/Process symbol outside a platform guard now fails here.
+    # Same fork gate as above: this runs on Leon's Mac.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, mustard]
+    steps:
+      - uses: actions/checkout@v4
+      # Deliberately no DEVELOPER_DIR: the companion builds against the runner's
+      # selected Xcode. Homebrew is not on the runner's default PATH.
+      - name: Show toolchain
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          xcodebuild -version
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen --version
+      - name: Build for the iOS Simulator
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          ./build-ios.sh

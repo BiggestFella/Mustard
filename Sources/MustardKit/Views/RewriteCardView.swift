@@ -6,7 +6,7 @@ import SwiftUI
 ///
 /// Keyboard handling lives on the card because the panel is non-activating —
 /// Mustard never comes forward, so these key presses are the only input path.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public struct RewriteCardView: View {
     private let coordinator: RewriteCoordinator
     /// Routes the accessibility refusal to the existing Voice Setup surface.

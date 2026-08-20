@@ -92,7 +92,7 @@ public enum LocalModelPolicy {
 
 /// The shared generation seam every voice feature consumes. Gated on
 /// macOS 26 because `Generable` (guided generation) is.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public protocol OnDeviceGenerating: Sendable {
     func capabilities(locale: Locale) async -> Result<LocalModelCapabilities, LocalModelFailure>
     func generate<Output: Generable & Sendable>(
@@ -103,7 +103,7 @@ public protocol OnDeviceGenerating: Sendable {
 /// One live model conversation. `OnDeviceLanguageService` owns instances of
 /// this seam; tests inject stubs, the live conformance wraps
 /// `LanguageModelSession`.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public protocol LocalModelSessioning: Sendable {
     func prewarm(promptPrefix: String?)
     func respond<Output: Generable & Sendable>(
@@ -117,7 +117,7 @@ public protocol LocalModelSessioning: Sendable {
 /// its instructions), prewarns it only when asked — `prepareForLikelyUse()`
 /// is idempotent — and releases it when idle, so the model's memory cost is
 /// bounded and never paid at launch.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public actor OnDeviceLanguageService: OnDeviceGenerating {
     public typealias Probe = @Sendable (Locale) async -> LocalModelProbe
     public typealias SessionFactory = @Sendable (String?) -> any LocalModelSessioning
@@ -223,7 +223,7 @@ public actor OnDeviceLanguageService: OnDeviceGenerating {
 // MARK: - Live wiring
 
 /// Wraps a real `LanguageModelSession` behind the sessioning seam.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 struct LiveLocalModelSession: LocalModelSessioning {
     let session: LanguageModelSession
 
@@ -238,7 +238,7 @@ struct LiveLocalModelSession: LocalModelSessioning {
     }
 }
 
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 extension OnDeviceLanguageService {
     /// The production service: probes `SystemLanguageModel.default` and
     /// builds real guided-generation sessions.

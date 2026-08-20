@@ -45,8 +45,8 @@ public enum PromptCatalog {
 
     /// The band for the running OS, per Apple's `#available` guidance.
     public static var currentBand: PromptBand {
-        if #available(macOS 27.0, *) { return .macOS27 }
-        if #available(macOS 26.4, *) { return .macOS26_4 }
+        if #available(macOS 27.0, iOS 27.0, *) { return .macOS27 }
+        if #available(macOS 26.4, iOS 26.4, *) { return .macOS26_4 }
         return .macOS26
     }
 

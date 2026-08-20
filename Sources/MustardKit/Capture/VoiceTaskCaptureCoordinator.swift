@@ -7,13 +7,6 @@ import AVFoundation
 import MustardShims
 import os
 
-/// Voice-capture diagnostics. `.notice` so it persists without enabling
-/// debug logging: stream it with
-/// `log stream --predicate 'subsystem == "com.cavehole.mustard"'`.
-/// The live speech path can only be observed on real hardware, so a capture
-/// leaves a trail rather than requiring a rebuild to investigate.
-let voiceLog = Logger(subsystem: "com.cavehole.mustard", category: "voice")
-
 /// What the coordinator needs from the quick-edit card (Capture Task 4
 /// implements the real panel; tests inject a stub). The editor owns per-field
 /// revision counters — the coordinator snapshots them when a drafting request
@@ -235,7 +228,7 @@ public final class VoiceTaskCaptureCoordinator {
             context: context,
             speech: .liveMicrophone(
                 makeSession: {
-                    guard #available(macOS 27.0, *) else {
+                    guard #available(macOS 27.0, iOS 27.0, *) else {
                         throw VoiceSessionError.notReady(
                             .unavailable("Voice capture needs macOS 27"))
                     }

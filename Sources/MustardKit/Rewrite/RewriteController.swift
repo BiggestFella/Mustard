@@ -11,7 +11,7 @@ import SwiftUI
 /// Every decision still lives in the pure units (`RewriteGate`,
 /// `SelectionLadder`, `RewriteCoordinator`); this file is wiring and window
 /// management only.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 @MainActor
 public final class RewriteController {
     public let coordinator: RewriteCoordinator

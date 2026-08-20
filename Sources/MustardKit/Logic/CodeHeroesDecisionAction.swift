@@ -311,6 +311,12 @@ public struct ProductionCodeHeroesDecisionActionRunner: CodeHeroesDecisionAction
         request: CodeHeroesDecisionActionRequest,
         settings: CodeHeroesQueueSettings
     ) -> CodeHeroesDecisionActionResult {
+        #if !os(macOS)
+        // The adapter shells out to Ruby and `Process` is macOS-only. The iOS
+        // companion reads the same decision data but never applies a response,
+        // so it takes the same "adapter unavailable" path as a missing script.
+        return .init(requestID: request.requestID, status: "blocked", message: "Code Heroes response adapter runs on macOS only.", clusterID: request.clusterID, decisionIDs: request.decisionIDs, mustardRunID: request.mustardRunID)
+        #else
         let root = URL(fileURLWithPath: settings.repositoryRoot).standardizedFileURL.resolvingSymlinksInPath()
         let script = root.appendingPathComponent("tools/phase6b/decision_response.rb")
         let registry = root.appendingPathComponent("automation/registry/projects.json")
@@ -348,6 +354,7 @@ public struct ProductionCodeHeroesDecisionActionRunner: CodeHeroesDecisionAction
         } catch {
             return .init(requestID: request.requestID, status: "failed", message: error.localizedDescription, clusterID: request.clusterID, decisionIDs: request.decisionIDs, mustardRunID: request.mustardRunID)
         }
+        #endif
     }
 
     private static func isWithinRoot(_ candidate: URL, root: URL) -> Bool {
