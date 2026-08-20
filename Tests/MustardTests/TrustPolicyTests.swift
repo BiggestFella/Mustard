@@ -10,6 +10,12 @@ final class TrustPolicyTests: XCTestCase {
         XCTAssertFalse(TrustPolicy.isGated(actionType: "create_task"))
     }
 
+    func test_unknownActionType_isGated_neverAutoApproves() {
+        XCTAssertTrue(TrustPolicy.isGated(actionType: "draft_emial"))
+        XCTAssertTrue(TrustPolicy.isGated(actionType: "send_whatsapp"))
+        XCTAssertFalse(TrustPolicy.shouldAutoApprove(actionType: "draft_emial", trust: .autonomous, confidence: 1.0))
+    }
+
     func test_lowConfidence_neverAutoRuns_evenTrusted() {
         XCTAssertFalse(TrustPolicy.shouldAutoApprove(actionType: "vault_note", trust: .trusted, confidence: 0.4))
         XCTAssertTrue(TrustPolicy.shouldAutoApprove(actionType: "vault_note", trust: .trusted, confidence: 0.8))

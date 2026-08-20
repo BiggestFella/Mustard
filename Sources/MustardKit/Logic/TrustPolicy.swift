@@ -31,14 +31,14 @@ public enum TrustLevel: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Plain-English explanation shown under the Trust control (verbatim from the
-    /// 2026 handoff — BAK-112).
+    /// Plain-English explanation shown under the Trust control. Trusted/Autonomous
+    /// copy matches ADR-0010: completed work always lands in Needs Review.
     public var blurb: String {
         switch self {
         case .manual: "You approve everything. The agent only proposes — nothing runs on its own."
         case .supervised: "Non-gated work runs automatically; you review every output before it counts. Email, Slack and tickets stay gated."
-        case .trusted: "The agent runs non-gated work and auto-accepts the output. Gated actions still wait for you."
-        case .autonomous: "Maximum autonomy. Only the always-gated actions (email, Slack, tickets) ever pause for you."
+        case .trusted: "The agent runs non-gated work on its own. Every result still lands in Needs Review. Email, Slack and tickets stay gated."
+        case .autonomous: "Maximum autonomy on non-gated work. Always-gated actions (email, Slack, tickets) still wait for you, and completed work still goes to Needs Review."
         }
     }
 }
@@ -54,7 +54,10 @@ public enum TrustPolicy {
     public static let autoConfidenceThreshold = 0.7
 
     public static func isGated(actionType: String) -> Bool {
-        RecommendationAction.from(actionType).isGated
+        // Unknown / typo tokens fail closed: a sweep that emits `draft_emial`
+        // must not auto-approve as a vault note.
+        guard let action = RecommendationAction.parse(actionType) else { return true }
+        return action.isGated
     }
 
     /// May this recommendation execute without a manual Approve?

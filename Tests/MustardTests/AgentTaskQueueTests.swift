@@ -67,6 +67,15 @@ final class AgentTaskQueueTests: XCTestCase {
         XCTAssertTrue(AgentTaskQueue.nextRunnable([meeting]) === meeting)
     }
 
+    func test_nextRunnableAcceptsUnapprovedRecordingTasks() {
+        // Recorder proposals are already approved locally; the ledger Do/Don't
+        // gate must not strand a later hand-off of source == "meeting-recording".
+        let recording = makeTask(uid: "recording", stage: .queued)
+        recording.source = "meeting-recording"
+
+        XCTAssertTrue(AgentTaskQueue.nextRunnable([recording]) === recording)
+    }
+
     func test_nextRunnableSkipsConnectedWorkerRunAndKeepsNoRunTaskRunnable() {
         let connectedWorker = makeTask(
             uid: "connected-worker",

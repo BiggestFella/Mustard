@@ -397,12 +397,7 @@ public struct WeekView: View {
 
     private func toggle(_ task: MustardTask) {
         guard CodeHeroesDecisionPresentation.allows(.toggleCompletion, for: task) else { return }
-        if task.stage == .done {
-            task.stage = .planned
-            task.completedAt = nil
-        } else {
-            task.markDone()
-        }
+        TaskCompletion.toggle(task, in: context)
     }
 
     private func unschedule(_ task: MustardTask) {

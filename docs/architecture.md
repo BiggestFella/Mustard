@@ -2,17 +2,21 @@
 
 Deep reference for how Mustard is put together. For the quick orientation see
 [`CLAUDE.md`](../CLAUDE.md); for decisions and their rationale see [`adr/`](adr/).
+A 2026-08-17 deep review (findings + first-wave fixes) lives in
+[`docs/reviews/2026-08-17-deep-code-review.md`](reviews/2026-08-17-deep-code-review.md).
 
 ## 1. Shape
 
-- **Native SwiftUI**, macOS 14+, Swift 6 toolchain.
+- **Native SwiftUI**, macOS 26+, Swift 6 toolchain (language mode 5).
 - **Swift Package** (not an `.xcodeproj` yet — ADR-0002):
   - `MustardKit` (library): all models, logic, agent, calendar, views.
   - `Mustard` (executable): `@main` app, window/scene, floating panel + notch
     controllers, the scheduled-sweep loop.
   - `MustardTests`: XCTest target.
+  - `MustardMobile`: iOS sample target (separate; CI is macOS SPM today).
 - **SwiftData** for persistence; **CloudKit-shaped schema** so iCloud sync is a
-  later capability flip, not a migration (ADR-0001).
+  later capability flip, not a migration (ADR-0001). The schema is still
+  unversioned — additive fields lightweight-migrate; removals would brick launch.
 - The **agent** is a single worker bound to this Mac, shelling out to the `claude`
   CLI under Leon's subscription (ADR-0003).
 
@@ -20,9 +24,11 @@ Deep reference for how Mustard is put together. For the quick orientation see
 
 ```
 Views   ─────────────▶ depend on Logic + Agent + Capture + Models
-Agent   ─────────────▶ depend on Logic + Models   (AgentService, ClaudeRunner, VaultSweep, CaptureCleanup)
-Capture ─────────────▶ depend on Logic + Models   (push-to-talk: hotkey, SFSpeech, controller — macOS-only)
-Calendar ────────────▶ depend on Models           (GoogleOAuth, GoogleCalendarParser)
+Agent   ─────────────▶ depend on Logic + Models   (AgentService, ClaudeRunner, VaultSweep, AgentTaskCoordinator)
+Capture ─────────────▶ depend on Logic + Models   (push-to-talk: hotkey, SpeechAnalyzer, coordinator — macOS-only)
+Voice / Dictation / Meeting / Rewrite / Clipboard
+                    ─▶ depend on Logic + Models   (on-device Apple stack)
+Calendar ────────────▶ depend on Models           (GoogleOAuth, GoogleCalendarService, parser)
 Logic   ─────────────▶ depend on Models only      (pure, fully unit-tested)
 Models  ─────────────▶ SwiftData @Model + enums
 ```
@@ -33,23 +39,28 @@ in pure parsers**, so it is testable without SwiftUI or a network. Views are thi
 ## 3. Data model (SwiftData)
 
 CloudKit rules observed everywhere: every relationship optional, every stored
-property has a default or is optional, **no `@Attribute(.unique)`**.
+property has a default or is optional, **no `@Attribute(.unique)`**. Several
+relationships still lack inverses (`blockedByTask`, `MeetingRecord.calendarEvent`,
+`MeetingActionProposal.createdTask`) — those block a CloudKit flip; see the review.
 
 | Model | Purpose | Notable fields |
 |-------|---------|----------------|
 | `Area` | top-level grouping | name, colorHex, → lists |
 | `TaskList` | list within an area | name, → area, → tasks |
-| `MustardTask` | a task (mine or agent's) | `uid` (drag id), title, notes, `statusRaw`/`ownerRaw` (typed accessors), `scheduledAt`, `estimateMinutes`, `completedAt`; voice capture (F25): `captureStateRaw` (`raw`/`cleaned`/`failed`), `captureTranscript` (verbatim), `captureAttempts`, `captureNextAttemptAt` |
-| `Recommendation` | an agent proposal (pre-execution) | title, body, `proposedActionType`, `confidence`, `reasoning`, `draft`, `source`/`sourceContext`/`sourceURL`, `comment`, `snoozedUntil`, `decisionRaw`, `executionStateRaw`, → outputs |
-| `OutputCard` | legacy recommendation-execution output (pre-ADR-0010) | content, kind, `reviewRaw`, → recommendation |
+| `MustardTask` | a task (mine or agent's) | `uid` (drag id), title, notes, `stageRaw`/`ownerRaw` (typed accessors; `statusRaw` is a launch-backfill leftover), `scheduledAt`, `estimateMinutes`, `completedAt`; voice: `captureStateRaw` (`raw`/`cleaned`), `captureTranscript` |
+| `Recommendation` | an agent proposal (pre-execution) | title, body, `proposedActionType`, `confidence`, `reasoning`, `draft`, `source`/`sourceContext`/`sourceURL`, `comment`, `snoozedUntil`, `decisionRaw`, `executionStateRaw`, → task |
 | `AgentRun` | one delegated-task conversation | `provider`, `state`, `providerSessionID`, `requiresConnectedWorker`, `nextAttemptAt`, `autoRetryCount`, → task, → messages |
 | `AgentMessage` | one ordered turn in a run | `sequence`, `role`, `kind`, `content`, `links`, → run |
 | `AgentDraft` | a file-backed draft the agent produced | `kind`, `title`, `relativePath` (under `_agent/drafts/`), → run. Body lives in the vault file, not the store |
 | `CalendarEvent` | a Google Calendar meeting | externalId, calendarId, title, start, end, isAllDay, joinURL, location |
+| `NoteIndexEntry` | vault note mirror for search/backlinks | project, relativePath, title, tags, contentSnapshot |
+| `MeetingRecord` / segments / proposals | meeting recorder | uid, audio paths, digest, evidence-backed proposals |
+| `ClipItem` / `ClipCollection` | notch clipboard shelf | uid, payload/imageData, pinnedToShelf |
 
-> **F24 note:** delegated agent tasks now carry an `AgentRun`/`AgentMessage` conversation and
-> land in the board's **Needs Review** column (ADR-0010). `OutputCard` remains only for the
-> legacy recommendation-execution path; delegated work does not create one.
+> **ADR-0010:** delegated agent tasks carry an `AgentRun`/`AgentMessage` conversation
+> and land in the board's **Needs Review** column. There is no `OutputCard` type —
+> it was removed. Vault-note execution still uses `Recommendation.executionState`;
+> review of delegated work is the board column, not a card on the recommendation.
 
 Enums are stored as `…Raw` strings with computed typed accessors — primitives
 persist cleanly in SwiftData/CloudKit while call sites stay type-safe. `SourceID`
@@ -66,102 +77,97 @@ manual "Sweep" ────────────┴▶ AgentService.sweep(vau
                                  │
                     applyTrust(level)  ── confidence × trust × !gated ──▶ auto-approve
                                  │
-        user triage in AgentConsole / Notch ──▶ decide(.approved)
+        user triage in AgentConsole / Notch ──▶ AgentService.decide
                                  ▼
-                    execute(rec): claude -p (VaultSweep.executePrompt) in vault cwd
-                                 ▼
-                    OutputCard (summary|error)  ── auto-accept if Trusted+confident
-                                 ▼
-                    Review queue: Accept · Revise (re-execute) · Discard
+              ┌─ vault_note  → headless claude → mark Done (or stay queued on failure)
+              ├─ create_task → me / Inbox
+              └─ gated (email/Slack/ticket) → agent / Queued
+                    → AgentTaskCoordinator (serial local slot)
+                    → Needs You (question) | Needs Review (always — no silent accept)
+                    → requires_connected_worker → BridgeExport → drain-agent-queue
 ```
 
 - `ClaudeRunner.run: ClaudeRun` spawns `Process`: scrubbed env (drops
   `ANTHROPIC_*`/`CLAUDE*`), stdin = `/dev/null`, parses `{result, is_error}` JSON,
   flags rate-limits. Overridable via `MUSTARD_CLAUDE_BIN` for tests.
-- `AgentService` is `@MainActor @Observable`, serial (`isExecuting` guard) — one
-  `claude` at a time, subscription-friendly.
-- `TrustPolicy` (pure): `shouldAutoApprove/​Accept(actionType:trust:confidence:)`,
-  `isGated`, `autoConfidenceThreshold = 0.7`.
+- `AgentService` is `@MainActor @Observable`, serial via `AgentExecutionGate` —
+  one `claude` at a time, subscription-friendly. Delegated work is picked up by
+  `AgentTaskCoordinator` on a 2s tick.
+- `TrustPolicy` (pure): `shouldAutoApprove(actionType:trust:confidence:)`,
+  `isGated` (unknown tokens fail closed), `autoConfidenceThreshold = 0.7`.
+  `shouldAutoAccept` is retained for tests but **not called** — ADR-0010 sends
+  every completed delegated task to Needs Review.
 
 ## 4b. Voice capture (F25/F26 — ADR-0011)
 
 Push-to-talk quick capture: hold a global hotkey anywhere, speak, release → a task.
-Capture is instant and offline-safe; the agent structures and routes it afterwards.
+Everything — transcription **and** structuring — runs on-device. There is no
+claude call and no automatic delegation from a voice task.
 
 ```
-⌃⌥Space (PushToTalkHotKey, Carbon) ─ press ─▶ SpeechTranscriber (on-device SFSpeech)
+⌃⌥Space (PushToTalkHotKey, Carbon) ─ press ─▶ AppleSpeechSession (SpeechAnalyzer)
                                     ─ release ─▶ VoiceCapture.outcome (pure)
                                                    │  commit (≥300ms hold, non-empty)
                                                    ▼
                               MustardTask(source:"voice", captureState:.raw, transcript kept) → Inbox
-                                                   │  scheduler tick, gate free
+                                                   │
+                    VoiceTaskDraftGenerator (Foundation Models, revision-gated merge)
                                                    ▼
-                    CaptureCleanupQueue.due (≤5, oldest, backoff) ─▶ claude -p (CaptureCleanup.prompt)
-                                                   ▼
-              tier 1 (auto-applied): title · description · schedule (normalizePlacement) · known area
-              tier 2 (proposed, gated): a voice Recommendation linked to the SAME task → triage deck
+                              title/notes/area/schedule applied only if the user hasn't edited
+                              those fields; success → .cleaned; failure leaves .raw
 ```
 
 - **Capture (no LLM, no network).** `PushToTalkHotKey` uses `RegisterEventHotKey`
   (press *and* release, no Accessibility/Input-Monitoring grant needed).
-  `SpeechTranscriber` streams partials from `SFSpeechRecognizer` over an
-  `AVAudioEngine` mic tap (`requiresOnDeviceRecognition` where supported — audio
-  stays local). `VoiceCaptureController` sequences hotkey → a non-activating pill
-  (`VoiceCapturePillView`, HoverPanel pattern) → insert. All decisions are in the
-  pure, tested `VoiceCapture` (min-hold cancel, transcript normalization).
-- **Cleanup queue (tier 1).** `CaptureCleanupQueue` (pure) picks ≤5 due raw captures
-  oldest-first and walks a 60/300/900s backoff → `.failed`; `CaptureCleanup` (pure)
-  builds the date-grounded batched prompt and parses per-uid results.
-  `AgentService.cleanupCaptures` applies title/description/schedule/known-area in place
-  and marks the capture `cleaned` — reversible, non-destructive (verbatim transcript
-  retained). Runs only when the shared `AgentExecutionGate` is free.
-- **Routing (tier 2).** An agent-shaped capture also emits a pending `Recommendation`
-  (`source = "voice"`, action limited to draft_email/draft_slack/ticket_write/vault_note,
-  `rec.task` = the captured task) into the existing triage deck. It never sets
-  `owner = .agent` itself — approval promotes the same task through the ordinary
-  gating/trust/bridge path, so always-gated email stays gated and nothing auto-executes
-  off a transcript.
-- **Reaching the connected worker (F26).** Voice captures often infer no client area,
-  which the area-keyed bridge would strand (BAK-90). `AgentTaskQueue.route` and
-  `AgentService.exportAreaLessWork` take an injected **default route** (the meeting
-  vault, "Codeheroes work", under `Code Heroes`) that rescues *area-less* hand-offs
-  only; a task that has an area but no matching enabled source still surfaces the config
-  gap, and manual `delegate()`'s "give it a client area" nudge is unchanged. The
-  connected worker (`drain-agent-queue`, out of repo) still owns the real Gmail draft.
+  `AppleSpeechSession` streams partials from SpeechAnalyzer / SpeechTranscriber
+  over an `AVAudioEngine` mic tap. `VoiceTaskCaptureCoordinator` sequences
+  hotkey → a non-activating pill (`VoiceCapturePillView`) → insert. Decisions
+  live in pure `VoiceCapture` and `VoiceTaskDrafting`.
+- **On-device drafting** replaced the Claude `CaptureCleanupQueue`. The generator
+  may only pick areas from the supplied list and never invents URLs/people/dates.
+- **Out of scope:** automatic delegation from a voice task. Manual "Ask agent"
+  still goes through the ordinary area gate; F26's default route rescues
+  *programmatic* area-less hand-offs only (`AgentTaskQueue.route` +
+  `AgentService.exportAreaLessWork`).
 - **Build note.** `build-app.sh`'s Info.plist carries `NSMicrophoneUsageDescription` +
-  `NSSpeechRecognitionUsageDescription` (hard-required or macOS kills the app on first
-  mic touch). The hotkey/mic/speech/pill layer is macOS-runtime-only, verified by eye;
-  everything with a decision is pure and unit-tested.
+  `NSSpeechRecognitionUsageDescription`. The hotkey/mic/speech/pill layer is
+  macOS-runtime-only; everything with a decision is pure and unit-tested.
+  Live SpeechAnalyzer needs macOS 27; on macOS 26 capture reports itself
+  unavailable in the pill instead of failing silently.
 
 ## 5. Surfaces
 
 | Surface | File | Behaviour |
 |---------|------|-----------|
-| Main window | `RootView` | calm sidebar → Today · Board · Week · Agent; ⌘K command bar overlay |
-| Today | `TodayView` + `TimelineRow` | scheduled timeline, capture, complete, carry-forward, tap → detail |
-| Board | `BoardView` | Kanban by status, drag-drop, per-column add, tap → detail |
+| Main window | `RootView` | calm sidebar → Today · Board · Week · Notes · Agent; ⌘K command bar overlay |
+| Today | `TodayView` + `TimelineSpineView` | scheduled timeline (tasks **and** calendar events), capture, complete, carry-forward, tap → detail |
+| Board | `BoardView` | Kanban by stage, drag-drop, per-column add, tap → detail |
 | Week | `WeekView` | Mon–Sun grid + unscheduled rail, drag to (un)schedule, meetings interleaved |
-| Agent | `AgentConsoleView` | source picker, Sweep, Auto-interval, Trust menu, rich Recommendation drawer, Review queue |
-| Notch | `NotchSurface` | borderless status-bar `NSPanel` at the physical notch; idle rotates focus→next-meeting→waiting; hover expands to meetings + recs + capture |
+| Notes | `NotesView` + `NoteEditorView` | vault-backed Craft editor, wikilinks, backlinks |
+| Agent | `AgentConsoleView` | source picker, Sweep, Trust menu, recommendation detail, gate attention, single-key triage |
+| Settings | `SettingsHome` | sources, calendar connect, rebindable hotkeys |
+| Notch | `NotchSurface` | tabbed command shelf (Today · Agent · Meetings · Clips · Shelf · collections); hover peeks, click/⌘⇧N pins |
 | Hover | `HoverPanel` | non-activating floating `NSPanel`; current focus + next-up tasks + waiting badge |
-| Voice pill | `VoiceCapturePillView` | non-activating top-centre `NSPanel` shown while ⌃⌥Space is held; live transcript, then added/cancelled flash |
+| Voice pill | `VoiceCapturePillView` | non-activating top-centre `NSPanel` shown while ⌃⌥Space is held |
 | Task detail | `TaskDetailSheet` | read-first personal task (Edit → property grid); stage-adaptive footer; mark done, delete |
 
 `NotchController` and `HoverPanel` own `NSPanel`s configured non-activating
 (`.nonactivatingPanel`) so they never steal focus; `.canJoinAllSpaces`,
 floating/status-bar level.
 
-## 6. Calendar (data layer done; live fetch pending)
+## 6. Calendar (live fetch built; connect blocked on client id)
 
 - `GoogleOAuth`: PKCE (`verifier`/`challenge`, RFC 7636), `authorizationURL`,
   `parseTokenResponse` — all pure/tested. Flow = OAuth 2.0 desktop client + PKCE +
   loopback redirect.
 - `GoogleCalendarParser.parseEvents`: Google `events.list` JSON → `[ParsedEvent]`,
   handling timed vs all-day, Meet links, cancelled-event skipping — pure/tested.
-- **Not yet built:** the live `GoogleAuthSession` (loopback + `ASWebAuthenticationSession`)
-  and `GoogleCalendarService` (connect/refresh/fetch → upsert `CalendarEvent`) +
-  Settings UI. Blocked on Leon's OAuth client id. Meetings already render on the
-  Week grid and notch from `CalendarEvent` rows.
+- **Built:** `GoogleAuthSession` (loopback + `ASWebAuthenticationSession`),
+  `GoogleCalendarService` (connect/refresh/fetch → upsert `CalendarEvent`),
+  Keychain token store, Settings UI. `MustardApp` pumps fetch from the 60s loop.
+  **Blocked on:** Leon's Google Cloud OAuth client id (Desktop app). Until
+  connected, `CalendarEvent` rows (if any) still render on Today, Week, and the
+  notch.
 
 ## 7. Known constraints
 
@@ -171,3 +177,5 @@ floating/status-bar level.
 - Voice capture needs Microphone + Speech-Recognition permission (prompted at first
   launch); the hotkey/mic path only runs in a real signed build, not `swift test`.
 - CloudKit + iOS require migrating SPM → Xcode project for entitlements (ADR-0004).
+- Store open is `fatalError` on schema mismatch; introduce `VersionedSchema`
+  before the next breaking model change.

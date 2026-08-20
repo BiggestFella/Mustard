@@ -29,7 +29,10 @@ struct CommandBarView: View {
                     .font(Theme.Fonts.body)
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .focused($focused)
-                    .onSubmit { execute(items[min(selected, items.count - 1)]) }
+                    .onSubmit {
+                        guard !items.isEmpty else { return }
+                        execute(items[min(selected, items.count - 1)])
+                    }
             }
             .padding(14)
 

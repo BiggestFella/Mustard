@@ -15,9 +15,46 @@ final class FileBridgeIOTests: XCTestCase {
             body: "b", area: "Digital Licence", project: "DL", sourceContext: "", links: [],
             createdAt: Date(timeIntervalSince1970: 1))
         try io.writeWorkOrder(o, workingDir: dir)
-        XCTAssertEqual(io.liveOutboxUIDs(workingDir: dir), ["u1"])
+        XCTAssertEqual(io.liveOutboxUIDs(workingDir: dir), .listed(["u1"]))
         try io.cancelWorkOrder(uid: "u1", workingDir: dir)
-        XCTAssertTrue(io.liveOutboxUIDs(workingDir: dir).isEmpty)
+        XCTAssertEqual(io.liveOutboxUIDs(workingDir: dir), .listed([]))
+    }
+
+    // BAK-94: a missing results/ dir is safe empty — first export may issue.
+    func test_liveResultUIDs_absentDir_isListedEmpty() {
+        XCTAssertEqual(FileBridgeIO().liveResultUIDs(workingDir: dir), .listed([]))
+    }
+
+    func test_liveOutboxUIDs_absentDir_isListedEmpty() {
+        XCTAssertEqual(FileBridgeIO().liveOutboxUIDs(workingDir: dir), .listed([]))
+    }
+
+    func test_liveResultUIDs_listsTopLevelJson_excludesDone() throws {
+        let io = FileBridgeIO()
+        let resultsDir = dir + "/" + BridgeFolders.results
+        let doneDir = dir + "/" + BridgeFolders.resultsDone
+        try FileManager.default.createDirectory(atPath: doneDir, withIntermediateDirectories: true)
+        try #"{"uid":"live","mode":"execute","status":"done"}"#
+            .write(toFile: resultsDir + "/live.json", atomically: true, encoding: .utf8)
+        try #"{"uid":"archived","mode":"execute","status":"done"}"#
+            .write(toFile: doneDir + "/archived.json", atomically: true, encoding: .utf8)
+        XCTAssertEqual(io.liveResultUIDs(workingDir: dir), .listed(["live"]))
+    }
+
+    // BAK-94: listing error on an existing path (here: `results` is a file, not a
+    // directory) must be `.unknown`, never an empty set that would re-issue.
+    func test_liveResultUIDs_listingErrorOnExistingPath_isUnknown() throws {
+        let agentDir = dir + "/_agent"
+        try FileManager.default.createDirectory(atPath: agentDir, withIntermediateDirectories: true)
+        try "not-a-directory".write(toFile: dir + "/" + BridgeFolders.results, atomically: true, encoding: .utf8)
+        XCTAssertEqual(FileBridgeIO().liveResultUIDs(workingDir: dir), .unknown)
+    }
+
+    func test_liveOutboxUIDs_listingErrorOnExistingPath_isUnknown() throws {
+        let agentDir = dir + "/_agent"
+        try FileManager.default.createDirectory(atPath: agentDir, withIntermediateDirectories: true)
+        try "not-a-directory".write(toFile: dir + "/" + BridgeFolders.outbox, atomically: true, encoding: .utf8)
+        XCTAssertEqual(FileBridgeIO().liveOutboxUIDs(workingDir: dir), .unknown)
     }
 
     // BAK-84: a malformed result file is dropped by readResults but was re-scanned

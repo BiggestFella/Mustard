@@ -160,6 +160,45 @@ public enum VaultSweep {
         """
     }
 
+    /// Re-propose ONE recommendation using the user's comment as guidance.
+    /// Does not execute the action — output shape matches `parse` (a 1-element
+    /// JSON array) so the revision can be applied onto the same card.
+    public static func reviseProposalPrompt(
+        title: String, body: String, action: RecommendationAction,
+        draft: String = "", reasoning: String = "",
+        sourceContext: String = "", comment: String
+    ) -> String {
+        let starting = draft.isEmpty ? body : draft
+        var parts: [String] = []
+        parts.append("""
+        You previously proposed this recommendation for the knowledge base in the current directory.
+        Revise it using the user's comment as guidance. Do not execute the action — propose an updated recommendation only.
+
+        Current title: \(title)
+        Current action_type: \(action.rawValue)
+        Current body: \(body.isEmpty ? "(none)" : body)
+        Current reasoning: \(reasoning.isEmpty ? "(none)" : reasoning)
+        Current draft:
+        \(starting.isEmpty ? "(none)" : starting)
+        """)
+        if !sourceContext.isEmpty {
+            parts.append("Context: \(sourceContext)")
+        }
+        parts.append("""
+        User comment (guidance — follow this):
+        \(comment)
+
+        Choose ONE action_type: vault_note, create_task, draft_email, draft_slack, ticket_write, fyi, or ignore.
+        Keep the same underlying item unless the comment asks you to change course.
+
+        Respond with ONLY a JSON array containing exactly ONE object, no prose, in this exact shape:
+        [{"title": "short imperative title", "body": "1-2 sentences: what and why",
+          "action_type": "vault_note", "confidence": 0.0-1.0, "reasoning": "one sentence",
+          "draft": "your revised proposed deliverable"}]
+        """)
+        return parts.joined(separator: "\n\n")
+    }
+
     /// Per-action instruction. Gated actions (email/Slack/ticket) stay draft-only —
     /// execution produces text for review, it never sends or files anything.
     private static func directive(for action: RecommendationAction) -> String {

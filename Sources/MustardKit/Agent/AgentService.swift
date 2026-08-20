@@ -370,10 +370,11 @@ public final class AgentService {
         // This dir handles tasks whose area maps here; the caller passes the dir/area/project.
         let target = BridgeExport.RouteTarget(workingDir: workingDir, project: project)
         let mine = all.filter { ($0.list?.area?.name ?? "") == area }
+        guard let live = listedBridgeUIDs(workingDir: workingDir) else { return }
         let plan = BridgeExport.plan(
             tasks: mine, route: { _ in target },
-            liveOutboxUIDs: [workingDir: bridge.liveOutboxUIDs(workingDir: workingDir)],
-            liveResultUIDs: [workingDir: bridge.liveResultUIDs(workingDir: workingDir)], now: .now)
+            liveOutboxUIDs: [workingDir: live.outbox],
+            liveResultUIDs: [workingDir: live.results], now: .now)
         for w in plan.writes { try? bridge.writeWorkOrder(w.order, workingDir: workingDir) }
         for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
     }
@@ -392,12 +393,26 @@ public final class AgentService {
         let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
         let target = BridgeExport.RouteTarget(workingDir: workingDir, project: project)
         let orphans = all.filter { $0.list?.area == nil }
+        guard let live = listedBridgeUIDs(workingDir: workingDir) else { return }
         let plan = BridgeExport.plan(
             tasks: orphans, route: { _ in target },
-            liveOutboxUIDs: [workingDir: bridge.liveOutboxUIDs(workingDir: workingDir)],
-            liveResultUIDs: [workingDir: bridge.liveResultUIDs(workingDir: workingDir)], now: .now)
+            liveOutboxUIDs: [workingDir: live.outbox],
+            liveResultUIDs: [workingDir: live.results], now: .now)
         for w in plan.writes { try? bridge.writeWorkOrder(w.order, workingDir: workingDir) }
         for c in plan.cancels { try? bridge.cancelWorkOrder(uid: c.uid, workingDir: workingDir) }
+    }
+
+    /// BAK-94: if outbox/ or results/ cannot be listed, skip the whole export tick
+    /// (writes *and* cancels). An empty set here would re-issue a live order.
+    private func listedBridgeUIDs(workingDir: String) -> (outbox: Set<String>, results: Set<String>)? {
+        let outbox = bridge.liveOutboxUIDs(workingDir: workingDir)
+        let results = bridge.liveResultUIDs(workingDir: workingDir)
+        guard case .listed(let outboxUIDs) = outbox,
+              case .listed(let resultUIDs) = results else {
+            lastError = "Could not list the agent bridge; skipping export this tick"
+            return nil
+        }
+        return (outboxUIDs, resultUIDs)
     }
 
     /// Ingest `_agent/results/` for one KB working dir: apply each (guarded) and archive it.
@@ -517,6 +532,62 @@ public final class AgentService {
         rec.comment = text
     }
 
+    /// Store guidance and re-propose this recommendation against it (BAK-51).
+    public func commentAndRevise(_ rec: Recommendation, _ text: String) async {
+        comment(rec, text)
+        await reviseWithComment(rec)
+    }
+
+    /// Re-propose this recommendation using its stored comment as guidance.
+    /// Updates the same card in place and leaves it pending — the comment was
+    /// human guidance, so the revision stays for another triage pass (no trust
+    /// auto-approve). Empty / whitespace comments are a no-op.
+    public func reviseWithComment(_ rec: Recommendation) async {
+        let guidance = rec.comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !guidance.isEmpty, rec.decision == .pending else { return }
+        guard !isSweeping else { return }
+        isSweeping = true
+        lastError = nil
+        defer { isSweeping = false }
+
+        guard !rec.vaultPath.isEmpty else {
+            lastError = "This recommendation has no vault to re-run against"
+            return
+        }
+
+        guard let result = await runClaude(
+            VaultSweep.reviseProposalPrompt(
+                title: rec.title, body: rec.body, action: rec.action,
+                draft: rec.draft, reasoning: rec.reasoning,
+                sourceContext: rec.sourceContext, comment: guidance
+            ),
+            workingDirectory: rec.vaultPath,
+            owner: "recommendation revision"
+        ) else { return }
+
+        guard result.ok else {
+            lastError = "Re-run failed: \(result.text)"
+            return
+        }
+
+        switch VaultSweep.parseOutcome(result.text) {
+        case .unparseable:
+            lastError = "Re-run returned output Mustard couldn't parse"
+        case .proposals(let proposals):
+            guard let proposal = proposals.first else {
+                lastError = "Re-run returned no parseable recommendation"
+                return
+            }
+            rec.title = proposal.title
+            rec.body = proposal.body
+            rec.proposedActionType = proposal.actionType
+            rec.confidence = proposal.confidence
+            rec.reasoning = proposal.reasoning
+            rec.draft = proposal.draft
+            rec.executionState = .idle
+        }
+    }
+
     /// Keep an FYI: append it to the project's curated rolling log and clear it from the
     /// queue. No claude run, no OutputCard — filing is a direct local write.
     public func keep(_ rec: Recommendation) {
@@ -593,6 +664,10 @@ public final class AgentService {
             task.stage = stage
         }
         if let scheduledAt { task.scheduledAt = scheduledAt }
+        // Defense in depth: a scheduled date must never leave the task in Inbox
+        // (BAK-246). No-op when `stage` is already past the inbox, which is the
+        // `.scheduled` / `.planned` decision path.
+        PersonalBoard.normalizePlacement(task)
         rec.task = task
         task.delegation = rec
         if isNew {
@@ -631,7 +706,13 @@ public final class AgentService {
             promote(rec, to: .planned, owner: .me)
             return
         case .approved:
-            break
+            // A typo'd action_type must not execute as a vault note (the display
+            // fallback). Revert to pending and ask for a re-bucket.
+            if RecommendationAction.parse(rec.proposedActionType) == nil {
+                rec.decision = .pending
+                lastHint = "Unknown action “\(rec.proposedActionType)” — re-bucket it before approving."
+                return
+            }
         default:
             return
         }

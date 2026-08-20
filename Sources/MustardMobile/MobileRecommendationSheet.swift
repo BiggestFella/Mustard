@@ -4,7 +4,7 @@ import SwiftData
 /// Mobile triage-detail bottom sheet (BAK-115): the *recommendation* half of the shared
 /// task/rec sheets (the task half shipped as MobileTaskSheet in BAK-113). Mirrors the
 /// desktop RecommendationDetailView — provenance, action + confidence, WHY, re-bucket
-/// chips, original source, editable draft, comment — with a compact mobile footer that
+/// chips, original source, editable draft, comment + re-run — with a compact mobile footer that
 /// dispatches the tested AgentService triage decisions. On iOS the agent's execution is
 /// a Mac-only no-op (ADR-0003), so "Approve & run" records the decision + stages the
 /// action; nothing is sent from the phone. Presented by the Triage tab (BAK-119 deck).
@@ -144,11 +144,48 @@ struct MobileRecommendationSheet: View {
         if commenting {
             TextField("Feedback to the agent…", text: $commentText)
                 .textFieldStyle(.roundedBorder).font(.subheadline)
-                .onSubmit { agent.comment(rec, commentText); commenting = false }
+                .onSubmit { saveComment() }
+            commentActions
         } else if !rec.comment.isEmpty {
             (Text("Comment · ").foregroundStyle(.tertiary) + Text(rec.comment).foregroundStyle(.secondary))
                 .font(.caption)
+            commentActions
         }
+        if let error = agent.lastError, error.hasPrefix("Re-run") || error.contains("no vault to re-run") {
+            Text(error).font(.caption2).foregroundStyle(Theme.Palette.error)
+        }
+    }
+
+    private var canRevise: Bool {
+        let text = commenting ? commentText : rec.comment
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && rec.decision == .pending
+    }
+
+    private var commentActions: some View {
+        HStack(spacing: 8) {
+            if commenting {
+                Button("Save comment") { saveComment() }
+                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Button(agent.isSweeping ? "Revising…" : "Re-run with comment") {
+                Task { await rerunWithComment() }
+            }
+            .tint(agentPurple)
+            .disabled(!canRevise || agent.isSweeping || agent.isExecuting)
+        }
+        .font(.caption)
+    }
+
+    private func saveComment() {
+        agent.comment(rec, commentText)
+        commenting = false
+    }
+
+    private func rerunWithComment() async {
+        let text = commenting ? commentText : rec.comment
+        commenting = false
+        await agent.commentAndRevise(rec, text)
     }
 
     private func section(_ label: String, _ text: String) -> some View {
@@ -179,6 +216,12 @@ struct MobileRecommendationSheet: View {
                     Button("Schedule") { Task { await agent.decide(rec, .scheduled); dismiss() } }
                     Button("I'll do it myself") { Task { await agent.decide(rec, .selfExecute); dismiss() } }
                     Button(commenting ? "Cancel comment" : "Comment") { commentText = rec.comment; commenting.toggle() }
+                    if canRevise {
+                        Button(agent.isSweeping ? "Revising…" : "Re-run with comment") {
+                            Task { await rerunWithComment() }
+                        }
+                        .disabled(agent.isSweeping || agent.isExecuting)
+                    }
                 }
                 Button(rec.action.isGated ? "Approve & run" : "Approve") {
                     Task { await agent.decide(rec, .approved); dismiss() }

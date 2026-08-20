@@ -94,6 +94,34 @@ public enum NoteDecoration {
         return blocks
     }
 
+    /// Memoizes one `blocks(_:)` snapshot. The partition is invariant across
+    /// pure selection moves (arrow keys, clicks, shift-select); call
+    /// `invalidate()` when the source text changes so the next `blocks(for:)`
+    /// recomputes. `MarkdownTextView` holds one of these so caret-move paths
+    /// never re-scan the document (BAK-254).
+    public final class BlockCache {
+        private var cachedSource: String?
+        private var cached: [Block] = []
+        /// How many times `NoteDecoration.blocks` has actually run. Tests
+        /// assert this stays put across repeated lookups of the same snapshot.
+        private(set) var computeCount = 0
+
+        public init() {}
+
+        public func blocks(for source: String) -> [Block] {
+            if cachedSource == source { return cached }
+            computeCount += 1
+            cached = NoteDecoration.blocks(source)
+            cachedSource = source
+            return cached
+        }
+
+        public func invalidate() {
+            cachedSource = nil
+            cached = []
+        }
+    }
+
     // MARK: - BlockKind classification (Phase 0 / BAK-249)
 
     /// Classifies one `Block` as the shared `BlockKind` enum (see that type's doc
@@ -562,7 +590,13 @@ public enum NoteDecoration {
     /// `focusedBlockIndices` for the exact boundary/selection rules, and
     /// `hideableSpans` for exactly which syntax is in scope.
     public static func markerVisibility(_ source: String, focusedRange: NSRange?) -> MarkerVisibility {
-        let all = blocks(source)
+        markerVisibility(source, blocks: blocks(source), focusedRange: focusedRange)
+    }
+
+    /// Same decision as `markerVisibility(_:focusedRange:)`, but reuses a
+    /// precomputed partition (the caret-move / cached-snapshot path).
+    public static func markerVisibility(_ source: String, blocks all: [Block],
+                                        focusedRange: NSRange?) -> MarkerVisibility {
         guard !all.isEmpty else { return MarkerVisibility(hidden: [], revealed: []) }
         let focused: Set<Int> = focusedRange.map { focusedBlockIndices(all, focusedRange: $0) } ?? []
 
@@ -587,8 +621,12 @@ public enum NoteDecoration {
     /// (`MarkdownTextView`'s incremental selection-change path).
     public static func revealedBlocks(_ source: String, focusedRange: NSRange?) -> [Block] {
         guard let focusedRange else { return [] }
-        let all = blocks(source)
-        return focusedBlockIndices(all, focusedRange: focusedRange).sorted().map { all[$0] }
+        return revealedBlocks(blocks(source), focusedRange: focusedRange)
+    }
+
+    /// Same as `revealedBlocks(_:focusedRange:)` over a precomputed partition.
+    public static func revealedBlocks(_ all: [Block], focusedRange: NSRange) -> [Block] {
+        focusedBlockIndices(all, focusedRange: focusedRange).sorted().map { all[$0] }
     }
 
     /// The hideable marker ranges within exactly one block — the per-block slice
@@ -642,10 +680,13 @@ public enum NoteDecoration {
     ///     where the line used to be.
     ///   - wikilink brackets — links are their own considered surface (pills /
     ///     subpage cards), not this phase's scope.
-    /// Checkbox bracket syntax ("- [ ]"/"- [x]") isn't handled here either: it
-    /// has no distinct span today (plain paragraph text inside a bullet line,
-    /// per `spans(_:in:)`/`isTodoLine`), so there is nothing for this function
-    /// to classify — nothing changes for it in either direction.
+    ///   - checkbox brackets ("- [ ]"/"- [x]") — `spans()` still has no
+    ///     distinct bracket kind (a todo line's `.listMarker` is only the
+    ///     "- "/"* " prefix). Rendering lives on `blockGlyph`, which covers
+    ///     the full "- [ ] " range so the view can paint those characters
+    ///     `.clear` and draw a real checkbox in the column they hold. Nulling
+    ///     them here would collapse that column and break hit-testing
+    ///     (BAK-254: do not invent a hideable span for this).
     private static func hideableSpans(_ source: String, in block: Block) -> [Span] {
         let all = spans(source, in: block)
         guard !all.isEmpty else { return [] }

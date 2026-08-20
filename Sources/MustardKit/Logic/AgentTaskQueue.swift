@@ -17,9 +17,9 @@ public enum AgentTaskQueue {
                 $0.owner == .agent
                     && ($0.stage == .forAgent || $0.stage == .queued)
                     && !$0.isBlocked
-                    // Meeting work is a special safety lane: it must carry the
-                    // persisted human approval bit before any Claude turn can start.
-                    && !($0.source.hasPrefix("meeting") && !$0.agentApprovalGranted)
+                    // Ledger-imported meeting work must carry the persisted Do/Don't
+                    // bit. Recording-originated tasks are already locally approved.
+                    && !(MeetingTaskSource.requiresAgentApproval($0.source) && !$0.agentApprovalGranted)
                     && $0.agentRun?.requiresConnectedWorker != true
                     // Honour a scheduled backoff — a run waiting for its next attempt time
                     // is not yet runnable (AgentRetryPolicy).

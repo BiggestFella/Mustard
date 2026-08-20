@@ -106,6 +106,7 @@ final class MeetingActionApprovalTests: XCTestCase {
 
         XCTAssertEqual(task.title, "Ship v2 on Friday")
         XCTAssertEqual(task.scheduledAt, due)
+        XCTAssertEqual(task.stage, .planned, "scheduledAt + untimed must leave Inbox (BAK-246)")
         XCTAssertEqual(task.list?.area?.name, "Code Heroes")
     }
 }

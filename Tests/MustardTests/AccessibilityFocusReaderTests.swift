@@ -185,4 +185,14 @@ final class AccessibilityFocusReaderTests: XCTestCase {
 
         XCTAssertFalse(reader.isStillFocused(target))
     }
+
+    func test_isStillFocused_webArea_falseUnderDictationRoles_trueUnderRewriteRoles() throws {
+        let reader = reader { self.probe(role: "AXWebArea", windowTitle: "Gmail") }
+        let target = try reader.snapshot(roles: RewriteRoles.textual)
+
+        XCTAssertFalse(reader.isStillFocused(target),
+                       "dictation's default roles must not treat a web area as still focused")
+        XCTAssertTrue(reader.isStillFocused(target, roles: RewriteRoles.textual),
+                      "rewrite must accept the same Gmail/Slack web area it snapshotted")
+    }
 }

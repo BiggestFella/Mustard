@@ -3,10 +3,10 @@ import SwiftData
 
 /// The triage workspace for one recommendation — shown in the Agent console's
 /// master-detail right pane. Provenance, action + confidence, reasoning, re-bucket
-/// chips, original source, the editable draft, comment, and the outcome actions.
-/// Lifted from the old inline `RecommendationRow` drawer (always expanded, standalone).
+/// chips, original source, the editable draft, comment + re-run, and the outcome
+/// actions. Lifted from the old inline `RecommendationRow` drawer (always expanded,
+/// standalone).
 struct RecommendationDetailView: View {
-    @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
     @Environment(HotKeyBindingsStore.self) private var hotKeys
     let rec: Recommendation
@@ -15,7 +15,6 @@ struct RecommendationDetailView: View {
 
     private var confidenceSegments: Int { Int((rec.confidence * 5).rounded(.down)) }
     private var confidenceColor: Color { Theme.confidenceColor(rec.confidence) }
-    private var draftOrBody: String { rec.draft.isEmpty ? rec.body : rec.draft }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -117,11 +116,18 @@ struct RecommendationDetailView: View {
         if commenting {
             TextField("Feedback to the agent…", text: $commentText)
                 .textFieldStyle(.roundedBorder).font(Theme.Fonts.meta)
-                .onSubmit { agent.comment(rec, commentText); commenting = false }
+                .onSubmit { saveComment() }
+            commentActions
         } else if !rec.comment.isEmpty {
             (Text("Comment · ").foregroundStyle(Theme.Palette.textTertiary)
                 + Text(rec.comment).foregroundStyle(Theme.Palette.textSecondary))
                 .font(Theme.Fonts.meta)
+            commentActions
+        }
+        if let error = agent.lastError, error.hasPrefix("Re-run") || error.contains("no vault to re-run") {
+            Text(error)
+                .font(Theme.Fonts.caption)
+                .foregroundStyle(Theme.Palette.error)
         }
     }
 
@@ -133,7 +139,7 @@ struct RecommendationDetailView: View {
                     .controlSize(.small)
                     .help("File this to your knowledge base log, then clear it.")
                 Spacer()
-                Button("Dismiss", role: .destructive) { rec.decision = .denied }
+                Button("Dismiss", role: .destructive) { Task { await agent.decide(rec, .denied) } }
                     .controlSize(.small)
                     .help("You've seen it — remove it. Nothing is stored.")
             } else {
@@ -144,34 +150,56 @@ struct RecommendationDetailView: View {
                     .controlSize(.small).disabled(agent.isExecuting)
                 Button("Comment") { commenting.toggle(); commentText = rec.comment }
                     .controlSize(.small)
+                    .help("Leave guidance for the agent, then re-run to revise this proposal.")
                 Menu("Snooze") {
                     Button("1 hour") { agent.snooze(rec, until: .now.addingTimeInterval(3600)) }
                     Button("This evening") { agent.snooze(rec, until: SnoozeTargets.evening()) }
                     Button("Tomorrow") { agent.snooze(rec, until: SnoozeTargets.tomorrow9()) }
                 }
                 .controlSize(.small).fixedSize()
-                Button("Schedule") {
-                    rec.decision = .scheduled
-                    let task = MustardTask(title: rec.title); task.notes = draftOrBody
-                    let cal = Calendar.current
-                    if let tomorrow = cal.date(byAdding: .day, value: 1, to: .now) {
-                        task.scheduledAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
-                        PersonalBoard.normalizePlacement(task)
-                    }
-                    context.insert(task)
-                }
-                .controlSize(.small)
-                Button("I'll do it") {
-                    rec.decision = .selfExecute
-                    let task = MustardTask(title: rec.title); task.notes = draftOrBody
-                    context.insert(task)
-                }
-                .controlSize(.small)
+                Button("Schedule") { Task { await agent.decide(rec, .scheduled) } }
+                    .controlSize(.small)
+                Button("I'll do it") { Task { await agent.decide(rec, .selfExecute) } }
+                    .controlSize(.small)
                 Spacer()
-                Button("Reject", role: .destructive) { rec.decision = .denied }
+                Button("Reject", role: .destructive) { Task { await agent.decide(rec, .denied) } }
                     .controlSize(.small)
             }
         }
+    }
+
+    private var canRevise: Bool {
+        let text = commenting ? commentText : rec.comment
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && rec.decision == .pending
+    }
+
+    private var commentActions: some View {
+        HStack(spacing: 8) {
+            if commenting {
+                Button("Save comment") { saveComment() }
+                    .controlSize(.small)
+                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Button(agent.isSweeping ? "Revising…" : "Re-run with comment") {
+                Task { await rerunWithComment() }
+            }
+            .controlSize(.small)
+            .tint(Theme.Palette.agent)
+            .disabled(!canRevise || agent.isSweeping || agent.isExecuting)
+            .help("Ask the agent to re-propose this using your comment as guidance.")
+        }
+    }
+
+    private func saveComment() {
+        agent.comment(rec, commentText)
+        commenting = false
+    }
+
+    private func rerunWithComment() async {
+        let text = commenting ? commentText : rec.comment
+        commenting = false
+        await agent.commentAndRevise(rec, text)
     }
 
 }
