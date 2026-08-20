@@ -2,6 +2,46 @@
 
 Append-only ledger of merges and holds. Each entry carries a ready `git revert` line.
 
+## 2026-08-20 — MERGED · Open-PR backlog cleared: five Cursor-agent PRs landed (PRs #137, #131, #138, #139, #134)
+
+- **Trigger:** Leon asked which of the five open PRs were good to go and invited the merge.
+  All five were Cursor cloud-agent PRs whose authors could not run the macOS toolchain, so
+  each sat "awaiting a Mac run" — the classic parked-work failure mode.
+- **How verified:** #137's and #139's CI runs postdated main's last move; #138's and #131's
+  were stale (Aug 17, before the BAK-246 board fix and AreaRouter removal), so each merge
+  candidate was rebuilt and re-tested locally against the moving main before its squash:
+  main+#131 → 2002 tests, main+#138 → 2013, main+#139 → 2023, main+#134 → 2035 — all
+  `swift test` exit 0, 0 failures, 3 skipped; `swift build` exit 0 each time.
+- **What landed, in merge order:**
+  - **#137** bridge fail-closed `liveResultUIDs`/`liveOutboxUIDs` (BAK-94): listing errors on
+    an existing `results/` dir now return `.unknown` and skip the export tick instead of
+    re-issuing work orders (double-exec hole). Revert: `git revert 9baffb0`
+  - **#131** deep-review first wave: unknown `action_type` fails closed; Schedule / I'll do
+    it / Reject / console X all route through `AgentService.decide`; Week/Lists complete via
+    `TaskCompletion.toggle` so recurrence spawns; Today shows `CalendarEvent`s; hover badge
+    counts Needs You; rewrite Accept revalidates `AXWebArea`. Plus the written review at
+    `docs/reviews/2026-08-17-deep-code-review.md`. Revert: `git revert f25b01f`
+  - **#138** re-run a recommendation with its comment as guidance (BAK-51 remainder):
+    revised proposal lands on the same pending card, never auto-applies trust.
+    Revert: `git revert 524e21f`
+  - **#139** Craft-editor follow-ups (BAK-242): EOL-aware block reorder, ⌘S-during-switch
+    race closed, slash menu stands down during IME, create-failure alert, per-keystroke
+    stat removed. Was a Draft only because the Linux agent couldn't run tests — un-drafted
+    after the local green run. Revert: `git revert a5a0f9d`
+  - **#134** read-first personal task detail (BAK-244): was DIRTY against main; conflicts
+    were main's BAK-246 `normalizePlacement` insertions vs the sheet rewrite — resolved by
+    re-applying both calls inside the rewrite (stage-picker set + scheduleTomorrow), plus a
+    one-line architecture.md row. Revert: `git revert 1a2be29`
+- **Known debt surfaced (pre-existing, not caused by these merges):** `./build-ios.sh`
+  fails on pristine main (AppIcon asset catalog; `ClipThumbnail` out of scope in
+  `ClipStore.swift` — the mobile project lags the 2026-08-12 notch-shelf files). CI never
+  builds iOS, so it rotted silently. Follow-up task chip filed.
+- **⚠ Leon eye-check OUTSTANDING (in chat, also on each PR):** #131's five console/board
+  checks; #138 comment → Re-run on a pending rec; #139 notes-editor items (CRLF reorder,
+  ⌘S race, IME slash menu); #134 read-first task drawer on desktop + iOS.
+- **Outward actions:** five squash-merges to main, one push to the #134 PR branch to
+  resolve its conflicts. No release, no remote deletion, no secrets.
+
 ## 2026-08-14 — MERGED · Meeting-task flood: approval gate, then durable identity + 7-day gate (PRs #129, #130)
 
 - **Trigger:** Leon reported the board's Needs Review column taking "a ridiculous amount"
