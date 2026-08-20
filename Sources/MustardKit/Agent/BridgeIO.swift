@@ -2,10 +2,14 @@ import Foundation
 
 /// File operations the bridge needs; injected so the service is testable with a stub.
 public protocol BridgeIO {
-    func liveOutboxUIDs(workingDir: String) -> Set<String>
+    /// Live (non-archived) outbox uids. `.unknown` means the dir existed but listing
+    /// failed — callers must skip export this tick (BAK-94), not treat it as empty.
+    func liveOutboxUIDs(workingDir: String) -> BridgeLiveUIDs
     /// uids with a live (non-archived) result file under `results/` — i.e. the worker
     /// has finished but Mustard hasn't ingested yet. Used to suppress duplicate orders.
-    func liveResultUIDs(workingDir: String) -> Set<String>
+    /// `.unknown` on a listing error (dir present, IO/permission failed); never fail-open
+    /// to empty — that re-issues and double-execs (BAK-92 / BAK-94).
+    func liveResultUIDs(workingDir: String) -> BridgeLiveUIDs
     func writeWorkOrder(_ order: AgentWorkOrder, workingDir: String) throws
     func cancelWorkOrder(uid: String, workingDir: String) throws
     func readResults(workingDir: String) -> [(result: AgentResult, path: String)]
@@ -20,18 +24,25 @@ public struct FileBridgeIO: BridgeIO {
     public init() {}
     private var fm: FileManager { .default }
 
-    public func liveOutboxUIDs(workingDir: String) -> Set<String> {
-        let p = workingDir + "/" + BridgeFolders.outbox
-        guard let files = try? fm.contentsOfDirectory(atPath: p) else { return [] }
-        return Set(files.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) })
+    public func liveOutboxUIDs(workingDir: String) -> BridgeLiveUIDs {
+        liveJSONUIDs(in: BridgeFolders.outbox, workingDir: workingDir)
     }
 
-    public func liveResultUIDs(workingDir: String) -> Set<String> {
+    public func liveResultUIDs(workingDir: String) -> BridgeLiveUIDs {
         // Non-recursive: lists `results/` top-level only, so archived `results/done/`
         // files (and the `done` subdirectory itself) are excluded by the .json filter.
-        let p = workingDir + "/" + BridgeFolders.results
-        guard let files = try? fm.contentsOfDirectory(atPath: p) else { return [] }
-        return Set(files.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) })
+        liveJSONUIDs(in: BridgeFolders.results, workingDir: workingDir)
+    }
+
+    /// Absent path → `.listed([])`. Listing error on an existing path → `.unknown` (BAK-94).
+    private func liveJSONUIDs(in relativeFolder: String, workingDir: String) -> BridgeLiveUIDs {
+        let path = workingDir + "/" + relativeFolder
+        do {
+            let names = try fm.contentsOfDirectory(atPath: path)
+            return BridgeListing.liveJSONUIDs(from: .success(names), pathExists: true)
+        } catch {
+            return BridgeListing.liveJSONUIDs(from: .failure(error), pathExists: fm.fileExists(atPath: path))
+        }
     }
 
     public func writeWorkOrder(_ order: AgentWorkOrder, workingDir: String) throws {
@@ -47,6 +58,8 @@ public struct FileBridgeIO: BridgeIO {
 
     public func readResults(workingDir: String) -> [(result: AgentResult, path: String)] {
         let p = workingDir + "/" + BridgeFolders.results
+        // Empty-on-error here is fail-closed for ingest (skip this tick; files stay).
+        // Unlike liveResultUIDs, it cannot re-issue a work order (BAK-94).
         guard let files = try? fm.contentsOfDirectory(atPath: p) else { return [] }
         return files.filter { $0.hasSuffix(".json") }.sorted().compactMap { name in
             let path = p + "/" + name
