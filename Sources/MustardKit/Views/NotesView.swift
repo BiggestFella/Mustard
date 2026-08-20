@@ -30,6 +30,9 @@ public struct NotesView: View {
     /// offer (Task 9). Non-nil presents the alert; the target is created in the
     /// currently-open note's project.
     @State private var pendingWikilinkTarget: String?
+    /// Vault write failed for "+" or create-from-dangling — drives the error
+    /// alert so a failed create is no longer a silent no-op.
+    @State private var noteCreateFailed = false
     /// A note handed in from outside (the ⌘⇧F search palette) for this surface to
     /// select — consumed then cleared, mirroring RootView's notch-task handoff.
     @Binding private var pendingOpen: NoteRef?
@@ -76,6 +79,11 @@ public struct NotesView: View {
         }
         .sheet(item: $creating) { target in
             createNoteSheet(target)
+        }
+        .alert("Couldn't create the note", isPresented: $noteCreateFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The file couldn't be written to the vault. Check the project folder is writable and try again.")
         }
         .sheet(item: $renaming) { target in
             // Reuses the NewNoteSheet shape with the current title prefilled —
@@ -291,8 +299,8 @@ public struct NotesView: View {
 
     /// Shared write→reindex→select primitive for both the "+" sheet (BAK-153) and
     /// create-from-unresolved-link (BAK-152). Selecting flushes any open note's
-    /// save-on-switch (desired) and opens the new one. A failed write no longer
-    /// navigates anywhere — staying put is calmer than opening a missing state.
+    /// save-on-switch (desired) and opens the new one. A failed write stays put
+    /// (calmer than opening a missing state) and surfaces `noteCreateFailed`.
     private func createNote(title: String, project: String, workingDirectory: String) {
         guard let rel = writeNote(title: title, project: project,
                                   workingDirectory: workingDirectory) else { return }
@@ -303,12 +311,18 @@ public struct NotesView: View {
     /// menu's Sub-page command creates a note mid-typing, and navigating away from
     /// the note being edited would yank the caret out from under the user. The
     /// "+"-sheet and create-from-link flows layer selection back on via
-    /// `createNote`. Returns the created relativePath, nil when the write fails.
+    /// `createNote`. Returns the created relativePath, nil when the write fails
+    /// (and flips `noteCreateFailed` so the host can alert).
     private func writeNote(title: String, project: String, workingDirectory: String) -> String? {
         let io = FileVaultIO(rootPath: workingDirectory)
         let rel = NoteCreation.relativePath(title: title, existing: io.notePaths())
         // write() creates the notes/ folder if absent (FileVaultIO, Task 1).
-        do { try io.write(rel, NoteCreation.stub(title: title)) } catch { return nil }
+        do {
+            try io.write(rel, NoteCreation.stub(title: title))
+        } catch {
+            noteCreateFailed = true
+            return nil
+        }
         noteIndex.reindex(project: project, workingDirectory: workingDirectory)
         return rel
     }

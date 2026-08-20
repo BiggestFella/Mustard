@@ -90,6 +90,10 @@ final class SlashMenuTests: XCTestCase {
         XCTAssertNil(SlashMenu.activeQuery(linePrefix: " /he"))
         XCTAssertNil(SlashMenu.activeQuery(linePrefix: "\t/he"))
     }
+    func test_allowsInteraction_standsDownDuringMarkedText() {
+        XCTAssertTrue(SlashMenu.allowsInteraction(hasMarkedText: false))
+        XCTAssertFalse(SlashMenu.allowsInteraction(hasMarkedText: true))
+    }
 
     // MARK: - Insertions (byte-exact — the menu's only source-producing output)
 
