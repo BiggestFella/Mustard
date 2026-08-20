@@ -60,9 +60,23 @@ final class BlockReorderTests: XCTestCase {
         assertLineMultisetPreserved(source, moved)
     }
     func test_move_lastBlockWithoutNewline_gainsSeparator_noLineLost() {
-        let moved = BlockReorder.move("first\n\ntail no newline", from: 1, to: 0)
-        XCTAssertEqual(moved, "tail no newline\n\nfirst\n")
-        assertLineMultisetPreserved("first\n\ntail no newline", moved)
+        // Source has no trailing terminator — the result keeps that EOF style
+        // (self-inverse) while still inserting a separator so "tail" and
+        // "first" cannot fuse.
+        let source = "first\n\ntail no newline"
+        let moved = BlockReorder.move(source, from: 1, to: 0)
+        XCTAssertEqual(moved, "tail no newline\n\nfirst")
+        assertLineMultisetPreserved(source, moved)
+    }
+    func test_move_unterminatedLast_roundTrip_isSelfInverse() {
+        let source = "first\n\ntail no newline"
+        let moved = BlockReorder.move(source, from: 1, to: 0)
+        XCTAssertEqual(BlockReorder.move(moved, from: 0, to: 1), source)
+    }
+    func test_move_terminatedDocument_roundTrip_isSelfInverse() {
+        let source = "# H\n\nfirst\n\nsecond\n"
+        let moved = BlockReorder.move(source, from: 2, to: 1)
+        XCTAssertEqual(BlockReorder.move(moved, from: 1, to: 2), source)
     }
     func test_move_quoteBlock_toFront_separatorsStayPositional() {
         let source = "para\n\n> quoted\n\ntail\n"
@@ -78,16 +92,40 @@ final class BlockReorderTests: XCTestCase {
     }
     func test_move_ruleToEnd_midDocumentNoTerminatorBlock_gainsNewline() {
         // "two" had no trailing newline; landing mid-document it gains "\n" so it
-        // can't fuse with the rule line.
+        // can't fuse with the rule line. Source EOF is unterminated, so the
+        // result does not grow a trailing newline on "---".
         let source = "one\n\n---\n\ntwo"
         let moved = BlockReorder.move(source, from: 1, to: 2)
-        XCTAssertEqual(moved, "one\n\ntwo\n\n---\n")
+        XCTAssertEqual(moved, "one\n\ntwo\n\n---")
         assertLineMultisetPreserved(source, moved)
     }
     func test_move_crlf_blocks_preserveCRLFBytes() {
         let source = "# H\r\n\r\npara\r\n"
         XCTAssertEqual(BlockReorder.move(source, from: 1, to: 0),
                        "para\r\n\r\n# H\r\n")
+    }
+    func test_move_crlf_unterminatedLastBlock_gainsCRLF_notBareLF() {
+        let source = "first\r\n\r\ntail no newline"
+        let moved = BlockReorder.move(source, from: 1, to: 0)
+        // Exact bytes: the added terminator is "\r\n", not a lone "\n", and
+        // the unterminated EOF style is preserved so the reverse move restores
+        // the source.
+        XCTAssertEqual(moved, "tail no newline\r\n\r\nfirst")
+        XCTAssertEqual(Array(moved.utf16), Array("tail no newline\r\n\r\nfirst".utf16))
+        assertLineMultisetPreserved(source, moved)
+        XCTAssertEqual(BlockReorder.move(moved, from: 0, to: 1), source)
+    }
+    func test_lineEnding_detectsCRLF_CR_andLF() {
+        XCTAssertEqual(BlockReorder.lineEnding(of: "a\r\nb"), "\r\n")
+        XCTAssertEqual(BlockReorder.lineEnding(of: "a\rb"), "\r")
+        XCTAssertEqual(BlockReorder.lineEnding(of: "a\nb"), "\n")
+        XCTAssertEqual(BlockReorder.lineEnding(of: "no-newlines"), "\n")
+    }
+    func test_strippingTrailingTerminator_dropsOneEndingOnly() {
+        XCTAssertEqual(BlockReorder.strippingTrailingTerminator("ab\n", ending: "\n"), "ab")
+        XCTAssertEqual(BlockReorder.strippingTrailingTerminator("ab\r\n", ending: "\r\n"), "ab")
+        XCTAssertEqual(BlockReorder.strippingTrailingTerminator("ab", ending: "\n"), "ab")
+        XCTAssertEqual(BlockReorder.strippingTrailingTerminator("ab\n\n", ending: "\n"), "ab\n")
     }
 
     // MARK: - Invariant battery

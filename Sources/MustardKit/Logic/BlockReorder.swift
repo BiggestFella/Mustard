@@ -19,9 +19,11 @@ public enum BlockReorder {
     /// document position — the blank-line rhythm of the note is a property of the
     /// document, not of the paragraph being dragged. The single byte-level
     /// adjustment on top: content that lacks a line terminator (only ever the
-    /// original final block) gains "\n" when it lands anywhere but last, so lines
-    /// never fuse. Both behaviours are byte-pinned in BlockReorderTests; content
-    /// lines are never touched.
+    /// original final block) gains the document's own line ending when it lands
+    /// anywhere but last, so lines never fuse. If the source itself had no
+    /// trailing terminator, one matching ending is stripped from the result so
+    /// a move-and-back is byte-identical (self-inverse). Both behaviours are
+    /// byte-pinned in BlockReorderTests; content lines are never touched.
     public static func move(_ source: String, from: Int, to: Int) -> String {
         let ns = source as NSString
         let all = NoteDecoration.blocks(source)
@@ -41,22 +43,61 @@ public enum BlockReorder {
         let moved = contents.remove(at: from)
         contents.insert(moved, at: to)
 
+        let ending = lineEnding(of: source)
         var result = frontmatter.map { ns.substring(with: $0.range) } ?? ""
         for index in 0..<contents.count {
             var piece = contents[index]
             // Terminator hygiene: a non-final content without its own line ending
-            // (the original EOF block moved off the end) gains "\n" so it can't
-            // fuse with the next block's first line. Check the last unicode
-            // scalar, not a Character suffix: "\r\n" is a single grapheme
-            // cluster, so `hasSuffix("\n")` is false for CRLF-terminated
-            // content and would bolt a spurious lone "\n" onto CRLF blocks.
-            if index < contents.count - 1, !piece.isEmpty,
-               piece.unicodeScalars.last != "\n", piece.unicodeScalars.last != "\r" {
-                piece += "\n"
+            // (the original EOF block moved off the end) gains the document's
+            // EOL so it can't fuse with the next block's first line. Check the
+            // last unicode scalar, not a Character suffix: "\r\n" is a single
+            // grapheme cluster, so `hasSuffix("\n")` is false for CRLF-
+            // terminated content and would bolt a spurious lone "\n" onto
+            // CRLF blocks. The added terminator matches the document (CRLF
+            // docs gain "\r\n", not a bare LF).
+            if index < contents.count - 1, !piece.isEmpty, !endsWithTerminator(piece) {
+                piece += ending
             }
             result += piece + tails[index]
         }
+        // Preserve the source's EOF style: an unterminated document stays
+        // unterminated, so moving the last block out and back is self-inverse.
+        if !endsWithTerminator(source) {
+            result = strippingTrailingTerminator(result, ending: ending)
+        }
         return result
+    }
+
+    /// Dominant line ending of `source`. A `\r\n` pair wins if present (a
+    /// Windows document that also has a lone LF is still a CRLF document);
+    /// else CR; else LF. Empty / no-newline sources default to LF — the
+    /// added terminator is only applied when a block actually moves off EOF.
+    /// Internal so BlockReorderTests can pin the detector without re-deriving
+    /// it from move fixtures.
+    static func lineEnding(of source: String) -> String {
+        let ns = source as NSString
+        if ns.range(of: "\r\n").location != NSNotFound { return "\r\n" }
+        if ns.range(of: "\r").location != NSNotFound { return "\r" }
+        return "\n"
+    }
+
+    /// Last unicode scalar is `\n` or `\r` — covers LF, CR, and CRLF (whose
+    /// last scalar is `\n`). Empty strings are unterminated.
+    static func endsWithTerminator(_ s: String) -> Bool {
+        guard let last = s.unicodeScalars.last else { return false }
+        return last == "\n" || last == "\r"
+    }
+
+    /// Drops one `ending` from the end of `s` when present. Uses NSString
+    /// UTF-16 ranges so a two-unit `"\r\n"` strips as a pair, not as the
+    /// single `"\r\n"` grapheme `String.dropLast` would take.
+    static func strippingTrailingTerminator(_ s: String, ending: String) -> String {
+        let ns = s as NSString
+        let end = ending as NSString
+        guard ns.length >= end.length else { return s }
+        let tail = NSRange(location: ns.length - end.length, length: end.length)
+        guard ns.substring(with: tail) == ending else { return s }
+        return ns.substring(to: tail.location)
     }
 
     /// Splits a block slice into (content, maximal trailing run of blank lines).

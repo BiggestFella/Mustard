@@ -32,6 +32,14 @@ struct NoteEditorView: View {
     @State private var text = ""
     @State private var diskText = ""      // content at load — the dirty-check baseline
     @State private var loadFailed = false
+    /// The note that `text` / `diskText` currently belong to. Nil while a
+    /// reload is in flight (the one-runloop gap after `onChange(of: ref)`
+    /// and before `.task` finishes) so ⌘S cannot persist the old buffer
+    /// over the new file.
+    @State private var contentRef: NoteRef?
+    /// Disk mtime for the metadata line — restatted on load / successful
+    /// save of the on-screen note, never on every body evaluation.
+    @State private var cachedModified: Date?
     /// Slash-menu presentation (2b): written by the text view's coordinator via
     /// the binding, rendered here as a caret-anchored overlay.
     @State private var slashMenu: SlashMenuState?
@@ -115,6 +123,8 @@ struct NoteEditorView: View {
         // that would otherwise be dropped when switching notes.
         .onChange(of: ref) { oldRef, _ in
             save(to: oldRef, content: text, ifDifferentFrom: diskText)
+            contentRef = nil       // buffer is in-flight; refuse ⌘S until .task reloads
+            cachedModified = nil   // restat belongs to the incoming note
             slashMenu = nil    // a half-typed trigger must not survive a note switch
             formatBar = nil    // a stale selection toolbar must not survive a note switch
             hoverLink = nil    // a preview of the OLD note's link must not survive either
@@ -139,11 +149,14 @@ struct NoteEditorView: View {
                 text = loaded
                 diskText = loaded
                 loadFailed = false
+                cachedModified = io.modificationDate(ref.relativePath)
             } else {
                 text = ""
                 diskText = ""
                 loadFailed = true
+                cachedModified = nil
             }
+            contentRef = ref
         }
     }
 
@@ -187,7 +200,7 @@ struct NoteEditorView: View {
 
                 Button("Save") { save() }
                     .keyboardShortcut("s", modifiers: .command)
-                    .disabled(!isDirty)
+                    .disabled(!isDirty || contentRef != ref)
             }
 
             Text(metadataLine)
@@ -200,11 +213,14 @@ struct NoteEditorView: View {
     }
 
     /// "project · edited today · 214 words" — the ambient clock/zone is fine in
-    /// the VIEW; only NoteMetadata's tests pin time.
+    /// the VIEW; only NoteMetadata's tests pin time. Word count stays live
+    /// (it's a string walk of @State `text`); the file stat is the cached
+    /// mtime filled by `.task(id: ref)` / a successful save, not a per-
+    /// keystroke syscall.
     private var metadataLine: String {
         NoteMetadata.line(
             project: ref.project,
-            modified: FileVaultIO(rootPath: ref.workingDirectory).modificationDate(ref.relativePath),
+            modified: cachedModified,
             wordCount: NoteMetadata.wordCount(text),
             now: .now,
             calendar: .current
@@ -366,14 +382,18 @@ struct NoteEditorView: View {
     /// this method owns only the IO those decisions drive.
     private func save(to ref: NoteRef, content: String, ifDifferentFrom baseline: String) {
         let plan = NoteSaveFlow.plan(content: content, baseline: baseline,
-                                     savedRef: ref, currentRef: self.ref)
+                                     savedRef: ref, currentRef: self.ref,
+                                     contentRef: contentRef)
         guard plan.shouldWrite else { return }
         let io = FileVaultIO(rootPath: ref.workingDirectory)
         // Snapshot is belt-and-braces — a failed snapshot must not block the save.
         if let prior = io.read(ref.relativePath) { try? io.snapshot(ref.relativePath, prior) }
         // Failed write must stay dirty — the dot is the only honesty signal.
         do { try io.write(ref.relativePath, content) } catch { return }
-        if plan.shouldAdvanceBaseline { diskText = content }
+        if plan.shouldAdvanceBaseline {
+            diskText = content
+            cachedModified = io.modificationDate(ref.relativePath)
+        }
         noteIndex.reindex(project: ref.project, workingDirectory: ref.workingDirectory)
     }
 }

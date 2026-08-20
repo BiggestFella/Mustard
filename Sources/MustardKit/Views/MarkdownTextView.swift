@@ -830,6 +830,12 @@ struct MarkdownTextView: NSViewRepresentable {
             guard let textView else { return }
             let wasOpen = parent.slashMenu.wrappedValue != nil
             guard allowOpen || wasOpen else { return }
+            // IME: never open or keep the menu while marked text is live —
+            // a splice would steal the composition. Close if it was open.
+            guard SlashMenu.allowsInteraction(hasMarkedText: textView.hasMarkedText()) else {
+                if wasOpen { parent.slashMenu.wrappedValue = nil }
+                return
+            }
 
             let selection = textView.selectedRange()
             let ns = textView.string as NSString
@@ -895,6 +901,10 @@ struct MarkdownTextView: NSViewRepresentable {
         /// branch running first is priority in name only.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if var menu = parent.slashMenu.wrappedValue {
+                // Marked-text Return/arrows belong to the IME, not the menu.
+                guard SlashMenu.allowsInteraction(hasMarkedText: textView.hasMarkedText()) else {
+                    return false
+                }
                 let items = SlashMenu.items(query: menu.query)
                 guard !items.isEmpty else { return false }
 
@@ -963,6 +973,7 @@ struct MarkdownTextView: NSViewRepresentable {
         /// dirty dot, exactly like typing.
         func performSlashCommand(_ command: SlashCommand) {
             guard let textView, let menu = parent.slashMenu.wrappedValue else { return }
+            guard SlashMenu.allowsInteraction(hasMarkedText: textView.hasMarkedText()) else { return }
 
             // Sub-page inserts a DANGLING [[Untitled]] link — no file is created
             // here. The deep-review panel showed why: creating the file before an
