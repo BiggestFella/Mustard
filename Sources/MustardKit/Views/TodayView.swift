@@ -62,7 +62,7 @@ public struct TodayView: View {
                     now: today,
                     onToggleDone: { toggle($0) },
                     onOpen: { selectedTask = $0 }
-                )
+                )  // task items = TimelineRow (BAK-245); events stay on the spine
                 if todayItems.isEmpty && focusTasks.isEmpty {
                     // Warm empty state (Craft pass Phase 1) — points at the capture
                     // field directly below it. Guards on FOCUS too so a day whose only

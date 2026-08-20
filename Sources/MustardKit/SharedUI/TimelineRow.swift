@@ -7,23 +7,8 @@ import SwiftUI
 struct DelegationBadge: View {
     let task: MustardTask
 
-    /// Short stage label for an agent-owned task; nil = no badge (e.g. done).
-    private var stageLabel: String? {
-        guard task.owner == .agent else { return nil }
-        switch task.stage {
-        case .forAgent: return "For agent"
-        case .needsApproval: return "Approve"
-        case .queued: return "Queued"
-        case .inProgress: return "Working…"
-        case .needsInput: return "Needs you"
-        case .needsReview: return "Review"
-        case .done: return nil
-        default: return "Agent"
-        }
-    }
-
     var body: some View {
-        if let label = stageLabel {
+        if let label = TaskRowPresentation.agentStageLabel(owner: task.owner, stage: task.stage) {
             Label(label, systemImage: "cpu")
                 .font(Theme.Fonts.meta)
                 .foregroundStyle(Theme.Palette.agent)
@@ -32,31 +17,43 @@ struct DelegationBadge: View {
 }
 
 /// A task rendered as a condensed version of the detail card (BAK-245, approved
-/// 2026-07-09): circle checkbox · bold title with an inline HIGH/URGENT flag · a
-/// wrapping strip of pill chips (time · due · estimate · area · agent stage ·
-/// subtask progress). Shared by Today and the list views; hovering warms the row
-/// into a panel to signal the tap target that opens the detail sheet.
+/// 2026-07-09): circle checkbox · bold title (~15.5pt semibold) with an inline
+/// HIGH/URGENT flag · a wrapping strip of pill chips (time · due · estimate ·
+/// area · agent stage · subtask progress). Time is a chip — there is no left
+/// gutter. Shared by Today, Week, lists, and the iOS companion; hovering warms
+/// the row into a panel to signal the tap target that opens the BAK-244 sheet.
 public struct TimelineRow: View {
     @Environment(AgentService.self) private var agent
     @State private var hovering = false
     let task: MustardTask
     let density: TaskRowDensity
+    let showsDelegateMenu: Bool
+    let titleLineLimit: Int?
     var onToggleDone: () -> Void
     var onOpen: () -> Void
 
-    public init(task: MustardTask, density: TaskRowDensity = .condensed,
-                onToggleDone: @escaping () -> Void, onOpen: @escaping () -> Void = {}) {
+    public init(
+        task: MustardTask,
+        density: TaskRowDensity = .condensed,
+        showsDelegateMenu: Bool = true,
+        titleLineLimit: Int? = nil,
+        onToggleDone: @escaping () -> Void,
+        onOpen: @escaping () -> Void = {}
+    ) {
         self.task = task
         self.density = density
+        self.showsDelegateMenu = showsDelegateMenu
+        self.titleLineLimit = titleLineLimit
         self.onToggleDone = onToggleDone
         self.onOpen = onOpen
     }
 
     private var isDone: Bool { task.stage == .done }
+    private var allowsCompletion: Bool { !CodeHeroesDecisionPolicy.isProjection(task) }
 
     public var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            if CodeHeroesDecisionPresentation.allowsLocalCompletion(for: task) {
+            if allowsCompletion {
                 Button(action: onToggleDone) {
                     Image(systemName: isDone ? "largecircle.fill.circle" : "circle")
                         .foregroundStyle(isDone ? Theme.Palette.done
@@ -81,6 +78,7 @@ public struct TimelineRow: View {
                         .font(.system(size: density.titleSize, weight: isDone ? .regular : .semibold))
                         .foregroundStyle(isDone ? Theme.Palette.textSecondary : Theme.Palette.textPrimary)
                         .strikethrough(isDone, color: Theme.Palette.textTertiary)
+                        .lineLimit(titleLineLimit)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if TaskChipRow.hasChips(task) {
@@ -97,12 +95,32 @@ public struct TimelineRow: View {
         .onTapGesture(perform: onOpen)
         .onHover { hovering = $0 }
         .animation(Theme.Motion.settle, value: hovering)
-        .contextMenu {
-            if task.owner == .me && task.delegation == nil && task.stage != .done {
-                Button { agent.delegate(task) } label: {
+        .modifier(DelegateMenuModifier(
+            enabled: showsDelegateMenu
+                && task.owner == .me
+                && task.delegation == nil
+                && task.stage != .done,
+            delegate: { agent.delegate(task) }
+        ))
+    }
+}
+
+/// Attaches the "Ask agent" menu only when the row owns that action — Week
+/// supplies a richer menu of its own, and an empty `.contextMenu` would swallow it.
+private struct DelegateMenuModifier: ViewModifier {
+    let enabled: Bool
+    let delegate: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.contextMenu {
+                Button(action: delegate) {
                     Label("Ask agent to do this", systemImage: "cpu")
                 }
             }
+        } else {
+            content
         }
     }
 }

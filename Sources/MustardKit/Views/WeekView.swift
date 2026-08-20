@@ -4,8 +4,9 @@ import SwiftData
 /// Week planner v2 (Sunsama/Akiflow/Morgen hybrid): an unscheduled + overdue rail
 /// and a Mon–Sun grid. Each day has a light time axis (8am–6pm) where meetings and
 /// *timed* tasks anchor and size by duration, plus an ordered list below for
-/// *untimed* tasks. Drag a rail task onto a day to schedule it (keeps time-of-day,
-/// 9:00 default); drag a day block back to the rail to unschedule.
+/// *untimed* tasks (the shared condensed `TimelineRow`, BAK-245). Drag a rail task
+/// onto a day to schedule it (keeps time-of-day, 9:00 default); drag a day block
+/// back to the rail to unschedule.
 public struct WeekView: View {
     @Environment(\.modelContext) private var context
     @Environment(AgentService.self) private var agent
@@ -242,12 +243,17 @@ public struct WeekView: View {
                             .foregroundStyle(Theme.Palette.textTertiary)
                             .padding(.top, 2)
                         ForEach(group.1) { task in
-                            WeekBlock(task: task,
-                                      onOpen: { selectedTask = task },
-                                      onToggle: { toggle(task) })
-                                .weekDraggable(task.uid,
-                                               enabled: CodeHeroesDecisionPresentation.allows(.drag, for: task))
-                                .contextMenu { menu(for: task) }
+                            TimelineRow(
+                                task: task,
+                                density: .tighter,
+                                showsDelegateMenu: false,
+                                titleLineLimit: 2,
+                                onToggleDone: { toggle(task) },
+                                onOpen: { selectedTask = task }
+                            )
+                            .weekDraggable(task.uid,
+                                           enabled: CodeHeroesDecisionPresentation.allows(.drag, for: task))
+                            .contextMenu { menu(for: task) }
                         }
                     }
                     QuickCaptureField(scheduleOnto: day, placeholder: "Add…")
@@ -566,49 +572,6 @@ struct AxisTaskBlock: View {
                         .onEnded { _ in dragStartEstimate = nil }
                 )
         }
-    }
-}
-
-/// A task in the list below the axis (untimed, or timed outside the window).
-struct WeekBlock: View {
-    @Bindable var task: MustardTask
-    let onOpen: () -> Void
-    let onToggle: () -> Void
-
-    private var tint: Color { task.owner == .agent ? Theme.Palette.agent : Theme.Palette.accent }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if CodeHeroesDecisionPolicy.isProjection(task) {
-                Image(systemName: "lock.fill")
-                    .font(Theme.Fonts.caption)
-                    .foregroundStyle(tint)
-                    .accessibilityLabel(CodeHeroesDecisionPresentation.badgeText)
-                    .help(CodeHeroesDecisionPresentation.readOnlyExplanation)
-            } else {
-                Button(action: onToggle) {
-                    Image(systemName: task.stage == .done ? "checkmark.circle.fill" : "circle")
-                        .font(Theme.Fonts.caption).foregroundStyle(tint)
-                }
-                .buttonStyle(.plain)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                if task.isTimed, let when = task.scheduledAt {
-                    Text(when.formatted(date: .omitted, time: .shortened))
-                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(tint)
-                }
-                Text(task.title)
-                    .font(Theme.Fonts.meta)
-                    .foregroundStyle(Theme.Palette.textPrimary)
-                    .strikethrough(task.stage == .done, color: Theme.Palette.textTertiary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-        .onTapGesture(perform: onOpen)
     }
 }
 

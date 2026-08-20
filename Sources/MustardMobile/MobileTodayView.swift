@@ -1,10 +1,10 @@
 import SwiftUI
 import SwiftData
 
-/// Mobile Today (BAK-113): day-progress bar, agent nudge, FOCUS pins, timeline
-/// with gate-status pills (mobile-only), and the inbox — reusing the tested
-/// DayPlanner / RitualPlanner / AgentInbox logic. FOCUS-starred tasks render
-/// once in the FOCUS band (BAK-247), matching desktop Today.
+/// Mobile Today (BAK-113): day-progress bar, agent nudge, FOCUS pins, timeline,
+/// and the inbox — reusing the tested DayPlanner / RitualPlanner / AgentInbox
+/// logic. Rows are the shared condensed `TimelineRow` (BAK-245). FOCUS-starred
+/// tasks render once in the FOCUS band (BAK-247), matching desktop Today.
 struct MobileTodayView: View {
     @Environment(\.modelContext) private var context
     @Query private var allTasks: [MustardTask]
@@ -95,41 +95,25 @@ struct MobileTodayView: View {
     }
 
     private func row(_ task: MustardTask, pinned: Bool = false) -> some View {
-        let done = task.stage == .done
-        return Button { selected = task } label: {
-            HStack(alignment: .top, spacing: 10) {
-                if pinned {
-                    Image(systemName: "star.fill")
-                        .font(.caption)
-                        .foregroundStyle(Theme.Palette.accent)
-                        .padding(.top, 4)
-                }
-                Button {
-                    if done { task.stage = .planned; task.completedAt = nil }
-                    else { TaskCompletion.complete(task, in: context) }
-                } label: {
-                    Image(systemName: done ? "largecircle.fill.circle" : "circle")
-                        .foregroundStyle(done ? Theme.Palette.done
-                                         : (task.owner == .agent ? Theme.Palette.agent : .secondary))
-                }.buttonStyle(.plain)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        PriorityFlag(priority: task.priority)
-                        Text(task.title)
-                            .font(.system(size: 15.5, weight: done ? .regular : .semibold))
-                            .strikethrough(done)
-                            .foregroundStyle(done ? .secondary : .primary)
-                    }
-                    // Same condensed detail-card chip vocabulary as the desktop row
-                    // (BAK-245) — blocked · time · due · estimate · area · agent · subtasks.
-                    if TaskChipRow.hasChips(task) {
-                        TaskChipRow(task: task)
-                    }
-                }
-                Spacer()
+        HStack(alignment: .top, spacing: 8) {
+            if pinned {
+                Image(systemName: "star.fill")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.accent)
+                    .padding(.top, 4)
             }
-            .padding(.vertical, 6)
-        }.buttonStyle(.plain)
+            TimelineRow(
+                task: task,
+                onToggleDone: {
+                    if task.stage == .done {
+                        task.stage = .planned
+                        task.completedAt = nil
+                    } else {
+                        TaskCompletion.complete(task, in: context)
+                    }
+                },
+                onOpen: { selected = task }
+            )
+        }
     }
 }

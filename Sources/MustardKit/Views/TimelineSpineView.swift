@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// Renders the Today spine: days flowing forward, each a merged chronological agenda on
-/// a continuous rail. Ownership is carried by dot colour (grey event / blue you / purple
-/// agent); today's elapsed items dim; a coral "now" line marks the present. Tapping a
-/// task opens the detail drawer; the dot toggles a task's done state.
+/// Renders the Today spine: days flowing forward, each a merged chronological agenda.
+/// Task items reuse the shared condensed `TimelineRow` (BAK-245 — time is a chip,
+/// no left gutter). Calendar events stay on the spine as a matching chip row.
+/// Today's elapsed items dim; a coral "now" line marks the present. Tapping a
+/// task opens the detail drawer; the row checkbox toggles done.
 public struct TimelineSpineView: View {
     private let days: [SpineDay]
     private let now: Date
@@ -80,26 +81,32 @@ public struct TimelineSpineView: View {
                 .font(Theme.Fonts.caption)
                 .tracking(0.8)
                 .foregroundStyle(Theme.Palette.textFaint)
-                .padding(.leading, 58)
+                .padding(.leading, 8)
                 .padding(.top, 6)
                 .padding(.bottom, 8)
         case .now:
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Circle().fill(Theme.Palette.now).frame(width: 7, height: 7)
                 Text(now.formatted(.dateTime.hour().minute()))
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.now)
-                    .frame(width: 44, alignment: .trailing)
-                Circle().fill(Theme.Palette.now).frame(width: 7, height: 7)
                 Rectangle().fill(Theme.Palette.nowLine).frame(height: 1)
             }
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
         case .item(let item):
-            SpineItemRow(
-                item: item,
-                isPast: isToday && TimelineSpine.isPast(item, relativeTo: now),
-                onToggleDone: onToggleDone,
-                onOpen: onOpen
-            )
+            let isPast = isToday && TimelineSpine.isPast(item, relativeTo: now)
+            switch item.kind {
+            case .task(let task):
+                TimelineRow(
+                    task: task,
+                    onToggleDone: { onToggleDone(task) },
+                    onOpen: { onOpen(task) }
+                )
+                .opacity(isPast ? 0.5 : 1)
+            case .event:
+                SpineEventRow(item: item, isPast: isPast)
+            }
         }
     }
 
@@ -112,85 +119,51 @@ public struct TimelineSpineView: View {
     }
 }
 
-/// One item on the spine: time gutter · coloured dot (a done-toggle for tasks) · title
-/// with an agent-stage suffix and optional area tag.
-private struct SpineItemRow: View {
+/// Calendar event on the spine: same condensed vocabulary as a task row (time is
+/// a chip, no gutter) so meetings stay interleaved with work.
+private struct SpineEventRow: View {
     let item: AgendaItem
     let isPast: Bool
-    let onToggleDone: (MustardTask) -> Void
-    let onOpen: (MustardTask) -> Void
+    @State private var hovering = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(timeText)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "calendar")
                 .font(Theme.Fonts.caption)
                 .foregroundStyle(Theme.Palette.textTertiary)
-                .frame(width: 44, alignment: .trailing)
-                .padding(.top, 2)
+                .padding(.top, 4)
+                .frame(width: 16)
 
-            dot.padding(.top, 3)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(item.title)
-                        .font(Theme.Fonts.body)
-                        .foregroundStyle(item.isDone ? Theme.Palette.textMuted : Theme.Palette.textPrimary)
-                        .strikethrough(item.isDone, color: Theme.Palette.strikethrough)
-                    if let suffix = agentSuffix {
-                        Text("· \(suffix)")
-                            .font(Theme.Fonts.meta)
-                            .foregroundStyle(Theme.Palette.agentText)
+            VStack(alignment: .leading, spacing: TaskRowDensity.condensed.rowSpacing) {
+                Text(item.title)
+                    .font(.system(size: TaskRowDensity.condensed.titleSize, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                FlowMeta(spacing: 6) {
+                    MetaChip(
+                        systemImage: "clock",
+                        TaskRowPresentation.eventTimeLabel(
+                            isAllDay: item.time == nil,
+                            start: item.time ?? .now,
+                            calendar: .current
+                        )
+                    )
+                    if let join = item.joinURL, let url = URL(string: join) {
+                        Link(destination: url) {
+                            MetaChip("Join ↗", tint: Theme.Palette.accent)
+                        }
                     }
-                }
-                if let tag = item.tagLabel {
-                    Text(tag)
-                        .font(Theme.Fonts.caption)
-                        .foregroundStyle(Theme.Palette.textSecondary)
                 }
             }
             Spacer(minLength: 0)
         }
+        .padding(.vertical, TaskRowDensity.condensed.vPadding)
+        .padding(.horizontal, 8)
         .opacity(isPast ? 0.5 : 1)
-        .padding(.vertical, 6)
+        .background(hovering ? Theme.Palette.titleBar : .clear,
+                    in: RoundedRectangle(cornerRadius: Theme.Metrics.rMd))
         .contentShape(Rectangle())
-        .onTapGesture {
-            if case let .task(t) = item.kind { onOpen(t) }
-        }
-    }
-
-    private var timeText: String {
-        guard let time = item.time else { return "" }
-        return time.formatted(.dateTime.hour().minute())
-    }
-
-    @ViewBuilder private var dot: some View {
-        switch item.kind {
-        case .event:
-            Circle().fill(Theme.Palette.textTertiary).frame(width: 8, height: 8)
-        case .task(let t):
-            Button {
-                onToggleDone(t)
-            } label: {
-                Image(systemName: item.isDone ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(item.isDone ? Theme.Palette.done
-                                     : (t.owner == .agent ? Theme.Palette.agent : Theme.Palette.accent))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    /// Short agent-stage suffix for an agent-owned task (mirrors `DelegationBadge`).
-    private var agentSuffix: String? {
-        guard case let .task(t) = item.kind, t.owner == .agent else { return nil }
-        switch t.stage {
-        case .forAgent: return "for agent"
-        case .needsApproval: return "approve"
-        case .queued: return "queued"
-        case .inProgress: return "working"
-        case .needsInput: return "reply"
-        case .needsReview: return "review"
-        default: return nil
-        }
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.settle, value: hovering)
     }
 }
