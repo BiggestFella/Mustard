@@ -156,11 +156,23 @@ explicit dark hex, not `Theme`.
 ## Build & run
 
 ```bash
-swift test            # full suite (1,751 at the SDK-symbol-removal fix)
+swift test            # full suite (2,037 at the iOS-build repair)
 swift build           # compile check
 ./build-app.sh        # → build/Mustard.app (ad-hoc signed, double-clickable)
 open build/Mustard.app
+./build-ios.sh        # iOS companion: xcodegen + simulator build (needs `xcodegen`)
 ```
+
+**`swift build` does not cover the iOS companion.** The `MustardMobile`
+xcodegen target (project.yml) compiles *all* of MustardKit except `Views/**` and
+the two `claude`-process files, so any macOS-only symbol reached outside a
+platform guard breaks iOS while macOS stays green. That went unnoticed for weeks
+— by 2026-08-20 pristine `main` failed `./build-ios.sh` three ways at once (an
+AppKit thumbnail helper, an asset catalog with no `AppIcon`, and Voice/ APIs
+annotated `@available(macOS 26, *)` with no iOS clause). CI now runs
+`./build-ios.sh` as its own job, so this fails in the PR instead of rotting.
+If you add a framework call the iPhone doesn't have, guard it with
+`#if os(macOS)` rather than adding a `project.yml` exclude.
 
 **Use the plain, selected toolchain — do NOT export `DEVELOPER_DIR`.** Older plan
 docs tell you to point it at `~/Downloads/Xcode-beta.app` because two macOS 27-only
