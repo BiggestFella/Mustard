@@ -102,7 +102,7 @@ public enum VoiceContextVocabulary {
 /// The `VoiceTranscribing` adapter over an injected analyzer driver. An actor
 /// so provisional/final bookkeeping and lifecycle flags stay race-free while
 /// the driver's result stream is consumed concurrently.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public actor AppleSpeechSession: VoiceTranscribing {
     private let driver: any SpeechAnalyzerDriving
     private let readinessProbe: @Sendable () async -> VoiceReadiness
@@ -260,7 +260,7 @@ public actor AppleSpeechSession: VoiceTranscribing {
 
 // MARK: - Live asset readiness (Task 3's injected closures, wired)
 
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 extension VoiceAssetReadiness {
     /// The production closures: locale resolution via the transcriber's
     /// supported-locale table, installation via `AssetInventory` (a no-op
@@ -293,7 +293,7 @@ extension VoiceAssetReadiness {
 /// in this driver needs more than macOS 26 any more, but dropping the gate would
 /// switch voice capture on for macOS 26 users, which is a product change and not
 /// this fix's business.
-@available(macOS 27.0, *)
+@available(macOS 27.0, iOS 27.0, *)
 public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
     private let locale: Locale
     private var analyzer: SpeechAnalyzer?
@@ -401,7 +401,7 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
 
 // MARK: - Live session factory
 
-@available(macOS 27.0, *)
+@available(macOS 27.0, iOS 27.0, *)
 extension AppleSpeechSession {
     /// The production session: live analyzer driver plus live asset
     /// readiness for the (transcriber-supported equivalent of the) locale.

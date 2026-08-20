@@ -27,6 +27,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.codeheroes.mustard.ios
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        # The shared catalog (Sources/MustardKit/Resources/Assets.xcassets) holds
+        # source logos, not an app icon, and Xcode's default of "AppIcon" makes
+        # actool fail the build looking for one. Empty = "this app has no icon
+        # set", which is right until the companion ships with real artwork.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         # Device signing: set MUSTARD_TEAM_ID (your Apple Developer Team ID) before
         # `xcodegen generate` and Xcode auto-signs for your device. Unset → empty, which
         # is fine for the Simulator (build-ios.sh passes CODE_SIGNING_ALLOWED=NO). Keeps
@@ -47,3 +52,13 @@ targets:
           # iOS reads/writes the shared conversation data but never executes turns.
           - "Agent/ClaudeTaskRuntime.swift"
           - "Agent/AgentTaskCoordinator.swift"
+      # The one shared view: mobile triage rows draw the same brand marks as the
+      # desktop console (`SourceLogo`). Everything else under Views/ is AppKit.
+      #
+      # Everything NOT listed above compiles for iOS, including the voice,
+      # meeting, dictation, clipboard and rewrite layers — their macOS plumbing
+      # sits behind `#if os(macOS)` and their contracts are what Logic/ is
+      # written against, so the two platforms cannot drift apart silently.
+      # Keep it that way: a new macOS-only framework call belongs behind a
+      # platform guard, not on a new excludes line.
+      - path: Sources/MustardKit/Views/SourceLogo.swift

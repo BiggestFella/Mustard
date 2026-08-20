@@ -14,7 +14,7 @@ import Observation
 /// - `reassertSelection` runs immediately BEFORE `writeBack`, so the write
 ///   lands on the range that was snapshotted rather than on whatever the app
 ///   left selected while the card had key focus.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 @MainActor
 @Observable
 public final class RewriteCoordinator {

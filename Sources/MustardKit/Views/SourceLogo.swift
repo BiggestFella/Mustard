@@ -42,7 +42,15 @@ public struct SourceLogo: View {
     }
 
     private func mark(_ assetName: String) -> some View {
-        Image(assetName, bundle: .module)
+        // SwiftPM synthesizes `Bundle.module` for the catalog; the iOS companion
+        // (project.yml) compiles Assets.xcassets straight into the app, where the
+        // same artwork lives in the main bundle. Same pattern as AgentTurnContract.
+        #if SWIFT_PACKAGE
+        let assets = Bundle.module
+        #else
+        let assets = Bundle.main
+        #endif
+        return Image(assetName, bundle: assets)
             .renderingMode(.template)
             .resizable()
             .aspectRatio(contentMode: .fit)

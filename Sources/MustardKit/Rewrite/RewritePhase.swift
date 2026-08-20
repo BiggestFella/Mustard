@@ -4,7 +4,7 @@
 import Foundation
 
 /// What the card is showing. One value, so the view is a pure function of it.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public enum RewritePhase: Equatable, Sendable {
     case idle
     case reading
@@ -16,7 +16,7 @@ public enum RewritePhase: Equatable, Sendable {
 /// A rewrite awaiting the user's decision. Holds the original so the card can
 /// show the before/after, and the target so the accept writes to the element
 /// that was focused when ⌃⌥R was pressed — not whatever has focus later.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public struct RewriteReview: Equatable, Sendable {
     public let original: String
     public let rewritten: String

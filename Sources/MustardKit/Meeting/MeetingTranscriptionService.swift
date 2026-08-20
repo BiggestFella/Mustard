@@ -157,7 +157,7 @@ extension MeetingTranscriptionService {
     public static func liveMeeting() -> MeetingTranscriptionService {
         MeetingTranscriptionService(
             makeSession: {
-                guard #available(macOS 27.0, *) else {
+                guard #available(macOS 27.0, iOS 27.0, *) else {
                     throw VoiceSessionError.notReady(
                         .unavailable("Meeting transcription needs macOS 27"))
                 }
@@ -171,14 +171,14 @@ extension MeetingTranscriptionService {
                 return true
             },
             transcribeFile: { url in
-                guard #available(macOS 27.0, *) else { return [] }
+                guard #available(macOS 27.0, iOS 27.0, *) else { return [] }
                 return try await transcribeAudioFile(url)
             })
     }
 
     /// Post-process one finalized audio file through a fresh session —
     /// the sequential fallback's second half.
-    @available(macOS 27.0, *)
+    @available(macOS 27.0, iOS 27.0, *)
     @MainActor
     static func transcribeAudioFile(_ url: URL) async throws -> [VoiceTranscriptSegment] {
         let session = AppleSpeechSession.live()

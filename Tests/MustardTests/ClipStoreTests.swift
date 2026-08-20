@@ -139,6 +139,36 @@ final class ClipStoreTests: XCTestCase {
         XCTAssertNotNil(clip.thumbnailData)
     }
 
+    /// Spec §8's "≤480 px" half. Pins the geometry so the thumbnail encoder can
+    /// be swapped (AppKit → ImageIO, for the iOS build) without silently
+    /// changing what gets stored.
+    func testThumbnailCapsLongEdgeAt480() throws {
+        let context = try makeContext()
+        let store = ClipStore(context: context)
+        store.addShelfDrop(imageData: try makeOversizePNG())  // 1500 × 1500
+        let clip = try XCTUnwrap(context.fetch(FetchDescriptor<ClipItem>()).first)
+        let thumbnail = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(clip.thumbnailData)))
+        XCTAssertEqual(thumbnail.pixelsWide, 480)
+        XCTAssertEqual(thumbnail.pixelsHigh, 480)
+    }
+
+    /// The other half: an image already under the cap is stored at its own size,
+    /// never blown up to 480.
+    func testThumbnailDoesNotUpscaleSmallImage() throws {
+        let context = try makeContext()
+        let store = ClipStore(context: context)
+        // Read the fixture's own pixel size — `makeSmallPNG` draws in points, so
+        // the backing scale of whatever display runs the suite decides it.
+        let png = try makeSmallPNG()
+        let original = try XCTUnwrap(NSBitmapImageRep(data: png))
+        XCTAssertLessThan(original.pixelsWide, 480, "fixture must start under the cap")
+        store.addShelfDrop(imageData: png)
+        let clip = try XCTUnwrap(context.fetch(FetchDescriptor<ClipItem>()).first)
+        let thumbnail = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(clip.thumbnailData)))
+        XCTAssertEqual(thumbnail.pixelsWide, original.pixelsWide)
+        XCTAssertEqual(thumbnail.pixelsHigh, original.pixelsHigh)
+    }
+
     /// Browser "Copy Image" puts image bytes on the pasteboard alongside the
     /// image's own URL as text — that's still an image copy.
     func testImageWithLinkTextStoresImage() throws {

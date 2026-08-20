@@ -1,6 +1,9 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 import Observation
 import SwiftData
+import UniformTypeIdentifiers
 
 /// Applies `ClipStoreRules` to candidates and writes results into SwiftData.
 /// No decisions live here beyond fetch/insert/delete plumbing.
@@ -116,26 +119,32 @@ public final class ClipboardServices {
     }
 }
 
-#if os(macOS)
-import AppKit
-
+/// Downscaled JPEG preview for a stored image clip.
+///
+/// ImageIO, not AppKit: `NSImage` is macOS-only, and `ClipStore` compiles for
+/// the iOS companion too (project.yml) — the AppKit version was invisible there
+/// and broke `./build-ios.sh`. `CGImageSource` thumbnailing caps the long edge
+/// and never upscales, which is what the old `min(1, maxEdge / longEdge)` did.
 enum ClipThumbnail {
     static func jpegThumbnail(from data: Data, maxEdge: CGFloat) -> Data? {
-        guard let image = NSImage(data: data) else { return nil }
-        let size = image.size
-        guard size.width > 0, size.height > 0 else { return nil }
-        let scale = min(1, maxEdge / max(size.width, size.height))
-        let target = NSSize(width: size.width * scale, height: size.height * scale)
-        let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(target.width), pixelsHigh: Int(target.height),
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-        guard let rep else { return nil }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(origin: .zero, size: target))
-        NSGraphicsContext.restoreGraphicsState()
-        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxEdge),
+        ]
+        guard
+            let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else { return nil }
+        let output = NSMutableData()
+        guard
+            let destination = CGImageDestinationCreateWithData(
+                output, UTType.jpeg.identifier as CFString, 1, nil)
+        else { return nil }
+        CGImageDestinationAddImage(
+            destination, thumbnail,
+            [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
     }
 }
-#endif
