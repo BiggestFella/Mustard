@@ -149,7 +149,7 @@ claude call and no automatic delegation from a voice task.
 | Notch | `NotchSurface` | tabbed command shelf (Today · Agent · Meetings · Clips · Shelf · collections); hover peeks, click/⌘⇧N pins |
 | Hover | `HoverPanel` | non-activating floating `NSPanel`; current focus + next-up tasks + waiting badge |
 | Voice pill | `VoiceCapturePillView` | non-activating top-centre `NSPanel` shown while ⌃⌥Space is held |
-| Task detail | `TaskDetailSheet` | edit title/notes/stage/owner/estimate/schedule, conversation, mark done, delete |
+| Task detail | `TaskDetailSheet` | read-first personal task (Edit → property grid); stage-adaptive footer; mark done, delete |
 
 `NotchController` and `HoverPanel` own `NSPanel`s configured non-activating
 (`.nonactivatingPanel`) so they never steal focus; `.canJoinAllSpaces`,

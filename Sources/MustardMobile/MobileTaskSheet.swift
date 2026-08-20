@@ -1,137 +1,317 @@
 import SwiftUI
 import SwiftData
 
-/// Shared task-detail bottom sheet (the task half of BAK-115), presented from Today /
-/// Board / Week. Read-oriented (no edit form on mobile — desktop only); interactive
-/// subtasks + a compact stage-adaptive footer that reuses the tested state machine.
+/// Shared task-detail bottom sheet. Read-first to match the desktop
+/// `TaskDetailSheet` (BAK-244): stage badge · location · large title · glance
+/// chips · notes · DETAILS · tags · interactive subtasks. **Edit** opens a
+/// personal-field grid (title, notes, priority, due, scheduled, estimate, tags).
+/// Agent WHY/draft/confidence and the BAK-136 footer stay. Full desktop field
+/// parity (parent / blocked-by / list picker / agent assignee) stays Mac-only.
 struct MobileTaskSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Bindable var task: MustardTask
+    @State private var isEditing: Bool
+    @State private var isScheduled: Bool
+    @State private var scheduledDate: Date
+    @State private var hasDue: Bool
+    @State private var dueDate: Date
+    @State private var newTag = ""
 
-    private var isAgent: Bool { task.owner == .agent }
+    private static let estimates = [15, 30, 45, 60, 90, 120]
 
     /// The latest agent question, when the task is waiting on you.
     private var agentQuestion: String? {
         task.agentRun?.orderedMessages.last { $0.role == .agent && $0.kind == .question }?.content
     }
 
+    init(task: MustardTask) {
+        self.task = task
+        _isEditing = State(initialValue: TaskDetailPresentation.startsInEditMode(title: task.title))
+        _isScheduled = State(initialValue: task.scheduledAt != nil)
+        _scheduledDate = State(initialValue: task.scheduledAt ?? Self.defaultSlot())
+        _hasDue = State(initialValue: task.dueAt != nil)
+        _dueDate = State(initialValue: task.dueAt ?? Self.defaultSlot())
+    }
+
+    private static func defaultSlot() -> Date {
+        Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: .now) ?? .now
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text(task.stage.label.uppercased())
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(isAgent ? Theme.Palette.agentText : .secondary)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background((isAgent ? Theme.Palette.agentText : .gray).opacity(0.14), in: Capsule())
-                        if task.isGated {
-                            Label("Gated", systemImage: "lock").font(.caption2)
-                                .foregroundStyle(Theme.Palette.agentText)
-                        }
-                        Spacer()
+                    header
+                    if isEditing {
+                        editBody
+                    } else {
+                        readBody
                     }
-
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        PriorityFlag(priority: task.priority)
-                        Text(task.title).font(.title2.bold())
-                    }
-                    // At-a-glance chips shared with the desktop sheet + rows (BAK-244/245).
-                    if TaskChipRow.hasChips(task) { TaskChipRow(task: task) }
-                    if !task.notes.isEmpty {
-                        Text(task.notes).font(.subheadline).foregroundStyle(.secondary)
-                    }
-
-                    if let conf = task.confidence { confidence(conf) }
-                    if let why = task.delegation?.reasoning, !why.isEmpty { section("WHY", why) }
-                    if let draft = task.delegation?.draft, !draft.isEmpty { section("DRAFT", draft) }
-                    // Needs You: mobile can't run the CLI, so it shows the question read-only
-                    // and points back to the Mac (live reply awaits CloudKit sync).
-                    if task.stage == .needsInput, let question = agentQuestion {
-                        section("AGENT NEEDS YOU", question)
-                        Text("Reply on Mac to resume.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    details
-                    if !task.tags.isEmpty { tags }
-                    if !(task.subtasks ?? []).isEmpty { subtasks }
                 }
-                .padding()
+                .padding(.horizontal, 22)
+                .padding(.vertical, 8)
             }
+            .background(Theme.Palette.bg)
             .safeAreaInset(edge: .bottom) { footer }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .animation(Theme.Motion.expand, value: isEditing)
         }
         .presentationDetents([.medium, .large])
     }
 
-    private func confidence(_ c: Double) -> some View {
-        HStack(spacing: 6) {
-            Text("CONFIDENCE").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Text(String(format: "%.2f", c)).font(.caption.weight(.medium)).foregroundStyle(Theme.confidenceColor(c))
-            HStack(spacing: 2) {
-                ForEach(0..<5, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(i < Int((c * 5).rounded(.down)) ? Theme.confidenceColor(c) : Theme.Palette.confidenceUnfilled)
-                        .frame(width: 16, height: 5)
+    // MARK: - Header (shared look with desktop)
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                TaskStageBadge(stage: task.stage, owner: task.owner)
+                if task.isGated {
+                    Label("Gated", systemImage: "lock")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.agentText)
+                }
+                if let location = TaskDetailPresentation.locationLine(for: task) {
+                    Text(location)
+                        .font(Theme.Fonts.meta)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button(isEditing ? "Done editing" : "Edit") {
+                    withAnimation(Theme.Motion.expand) { isEditing.toggle() }
+                }
+                .font(Theme.Fonts.meta)
+                .foregroundStyle(Theme.Palette.accent)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                TaskDetailCompleteCircle(
+                    isDone: task.stage == .done,
+                    isAgent: task.owner == .agent,
+                    enabled: !CodeHeroesDecisionPolicy.isProjection(task),
+                    action: toggleComplete
+                )
+                PriorityFlag(priority: task.priority)
+                if isEditing {
+                    TextField("Title", text: $task.title)
+                        .font(Theme.Fonts.docH1)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                } else {
+                    Text(task.title.isEmpty ? "Untitled" : task.title)
+                        .font(Theme.Fonts.docH1)
+                        .foregroundStyle(task.title.isEmpty
+                                         ? Theme.Palette.textTertiary
+                                         : Theme.Palette.textPrimary)
                 }
             }
-        }
-    }
 
-    private func section(_ label: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Text(text).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
-        }
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("DETAILS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            detailRow("Assignee", isAgent ? "✦ Agent" : "You")
-            detailRow("Priority", task.priority.label)
-            if let area = task.list?.area { detailRow("Area", area.name) }
-            detailRow("Estimate", "\(task.estimateMinutes)m")
-            if let due = task.dueAt { detailRow("Due", due.formatted(.dateTime.day().month().hour().minute())) }
-            if let when = task.scheduledAt { detailRow("Day", when.formatted(.dateTime.weekday().day().month().hour().minute())) }
-            if let blocker = task.blockedByTask { detailRow("Blocked by", blocker.title) }
-        }
-    }
-
-    private func detailRow(_ k: String, _ v: String) -> some View {
-        HStack { Text(k).foregroundStyle(.secondary); Spacer(); Text(v) }
-            .font(.footnote)
-    }
-
-    private var tags: some View {
-        HStack {
-            ForEach(task.tags.prefix(6), id: \.self) { t in
-                Text("#\(t)").font(.caption)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Theme.Palette.statusMutedBg, in: Capsule())
+            if !isEditing {
+                TaskDetailGlanceChips(
+                    owner: task.owner,
+                    dueAt: task.dueAt,
+                    scheduledAt: task.scheduledAt,
+                    isTimed: task.isTimed,
+                    estimateMinutes: task.estimateMinutes,
+                    isDone: task.stage == .done
+                )
             }
         }
+    }
+
+    private func toggleComplete() {
+        guard !CodeHeroesDecisionPolicy.isProjection(task) else { return }
+        if task.stage == .done {
+            task.stage = .planned
+            task.completedAt = nil
+        } else {
+            TaskCompletion.complete(task, in: context)
+        }
+    }
+
+    // MARK: - Read
+
+    @ViewBuilder private var readBody: some View {
+        let notes = task.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if notes.isEmpty {
+            Button {
+                withAnimation(Theme.Motion.expand) { isEditing = true }
+            } label: {
+                Text("Add notes…")
+                    .font(Theme.Fonts.reading)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Text(task.notes)
+                .font(Theme.Fonts.reading)
+                .foregroundStyle(Theme.Palette.onSurfaceSoft)
+        }
+
+        TaskDetailAgentContextBlock(
+            isGated: task.isGated,
+            confidence: task.confidence,
+            why: task.delegation?.reasoning ?? "",
+            draft: task.delegation?.draft ?? ""
+        )
+
+        if task.stage == .needsInput, let question = agentQuestion {
+            VStack(alignment: .leading, spacing: 6) {
+                TaskDetailSectionLabel(title: "Agent needs you")
+                Text(question)
+                    .font(Theme.Fonts.meta)
+                    .foregroundStyle(Theme.Palette.onSurfaceSoft)
+                    .textSelection(.enabled)
+                Text("Reply on Mac to resume.")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+            }
+        }
+
+        readDetails
+        if !task.tags.isEmpty { TaskDetailTagPills(tags: task.tags) }
+        subtasks
+    }
+
+    private var readDetails: some View {
+        let rows = TaskDetailPresentation.detailRows(for: task, calendar: .current)
+        return VStack(alignment: .leading, spacing: 0) {
+            TaskDetailSectionLabel(title: "Details")
+                .padding(.bottom, 4)
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                TaskDetailReadPropertyRow(
+                    label: row.label,
+                    value: row.value,
+                    showDivider: index > 0
+                )
+            }
+        }
+    }
+
+    // MARK: - Edit (personal fields)
+
+    private var editBody: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                TaskDetailSectionLabel(title: "Notes")
+                TextField("Add notes…", text: $task.notes, axis: .vertical)
+                    .font(Theme.Fonts.reading)
+                    .foregroundStyle(Theme.Palette.onSurfaceSoft)
+                    .lineLimit(3...8)
+            }
+
+            TaskDetailSectionLabel(title: "Details")
+            labeled("Priority") {
+                Picker("", selection: $task.priority) {
+                    ForEach(TaskPriority.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+            labeled("Due") {
+                Toggle("", isOn: $hasDue).labelsHidden()
+                    .onChange(of: hasDue) { _, on in task.dueAt = on ? dueDate : nil }
+                if hasDue {
+                    DatePicker("", selection: $dueDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .onChange(of: dueDate) { _, d in task.dueAt = d }
+                }
+            }
+            labeled("Scheduled") {
+                Toggle("", isOn: $isScheduled).labelsHidden()
+                    .onChange(of: isScheduled) { _, on in
+                        task.scheduledAt = on ? scheduledDate : nil
+                        task.isTimed = on
+                        PersonalBoard.normalizePlacement(task)
+                    }
+                if isScheduled {
+                    DatePicker("", selection: $scheduledDate)
+                        .labelsHidden()
+                        .onChange(of: scheduledDate) { _, d in
+                            task.scheduledAt = d
+                            task.isTimed = true
+                            PersonalBoard.normalizePlacement(task)
+                        }
+                }
+            }
+            labeled("Estimate") {
+                Picker("", selection: $task.estimateMinutes) {
+                    ForEach(Self.estimates, id: \.self) { Text("\($0)m").tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                TaskDetailSectionLabel(title: "Tags")
+                if !task.tags.isEmpty { TaskDetailTagPills(tags: task.tags) }
+                HStack {
+                    TextField("+ tag", text: $newTag)
+                        .font(Theme.Fonts.meta)
+                        .onSubmit(addTag)
+                    Button("Add", action: addTag)
+                        .font(Theme.Fonts.meta)
+                        .foregroundStyle(Theme.Palette.accent)
+                        .disabled(newTag.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            subtasks
+        }
+    }
+
+    private func labeled<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(label)
+                .font(Theme.Fonts.caption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .frame(width: 92, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func addTag() {
+        let t = newTag.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, !task.tags.contains(t) else { newTag = ""; return }
+        task.tags.append(t)
+        newTag = ""
     }
 
     private var subtasks: some View {
         let subs = task.subtasks ?? []
-        let done = subs.filter { $0.stage == .done }.count
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("SUBTASKS \(done)/\(subs.count)").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+        let progress = task.subtaskProgress
+        return VStack(alignment: .leading, spacing: 8) {
+            if !subs.isEmpty || isEditing {
+                TaskDetailSectionLabel(title: "Subtasks (\(progress.done)/\(progress.total))")
+            }
             ForEach(subs) { sub in
+                TaskDetailSubtaskRow(
+                    title: sub.title,
+                    isDone: sub.stage == .done,
+                    showRemove: isEditing,
+                    onToggle: {
+                        if sub.stage == .done { sub.stage = .planned; sub.completedAt = nil }
+                        else { sub.markDone() }
+                    },
+                    onRemove: { context.delete(sub) }
+                )
+            }
+            if isEditing {
                 Button {
-                    if sub.stage == .done { sub.stage = .planned; sub.completedAt = nil } else { sub.markDone() }
+                    let child = MustardTask(title: "New subtask")
+                    child.parent = task
+                    context.insert(child)
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: sub.stage == .done ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(sub.stage == .done ? Theme.Palette.done : .secondary)
-                        Text(sub.title).strikethrough(sub.stage == .done).foregroundStyle(.primary)
-                        Spacer()
-                    }.font(.subheadline)
-                }.buttonStyle(.plain)
+                    Label("Add subtask", systemImage: "plus").font(Theme.Fonts.meta)
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.Palette.accent)
             }
         }
     }
@@ -143,35 +323,39 @@ struct MobileTaskSheet: View {
             case .needsApproval:
                 Button("Deny", role: .destructive) { deleteTask() }
                 Spacer()
-                Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approve() }.buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
+                Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approve() }
+                    .buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
             case .needsReview:
                 Button("Discard", role: .destructive) { deleteTask() }
                 Spacer()
-                Button("Accept output") { TaskCompletion.complete(task, in: context); dismiss() }.buttonStyle(.borderedProminent).tint(Theme.Palette.done)
+                Button("Accept output") { TaskCompletion.complete(task, in: context); dismiss() }
+                    .buttonStyle(.borderedProminent).tint(Theme.Palette.done)
             case .queued:
                 Button("Hold") { PersonalBoard.move(task, to: .needsApproval) }
                 Spacer()
-                Button("Move to review") { PersonalBoard.move(task, to: .needsReview) }.buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
+                Button("Move to review") { PersonalBoard.move(task, to: .needsReview) }
+                    .buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
             case .forAgent:
                 Spacer()
-                Button("Take back") { task.owner = .me; if task.stage.isOpen { task.stage = .planned } }.buttonStyle(.borderedProminent)
+                Button("Take back") { task.owner = .me; if task.stage.isOpen { task.stage = .planned } }
+                    .buttonStyle(.borderedProminent)
             case .needsInput:
-                // Mobile take-back stays a direct mutation for now (no CLI/coordinator on
-                // iOS; live reply awaits CloudKit sync — see the Task 11 handoff note).
-                Text("Reply on Mac to resume.").foregroundStyle(.secondary)
+                Text("Reply on Mac to resume.").foregroundStyle(Theme.Palette.textSecondary)
                 Spacer()
-                Button("Take back") { task.owner = .me; if task.stage.isOpen { task.stage = .planned } }.buttonStyle(.borderedProminent)
+                Button("Take back") { task.owner = .me; if task.stage.isOpen { task.stage = .planned } }
+                    .buttonStyle(.borderedProminent)
             case .done:
                 Spacer()
                 Button("Reopen") { task.stage = .planned; task.completedAt = nil }
             default:
                 Spacer()
-                Button("Mark done") { TaskCompletion.complete(task, in: context); dismiss() }.buttonStyle(.borderedProminent).tint(Theme.Palette.done)
+                Button("Mark done") { TaskCompletion.complete(task, in: context); dismiss() }
+                    .buttonStyle(.borderedProminent).tint(Theme.Palette.done)
             }
         }
-        .font(.subheadline)
-        .padding()
-        .background(.bar)
+        .font(Theme.Fonts.meta)
+        .padding(.horizontal, 20).padding(.vertical, 13)
+        .background(Theme.Palette.titleBar)
     }
 
     private func approve() {
