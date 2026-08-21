@@ -487,6 +487,37 @@ final class MeetingTaskSyncTests: XCTestCase {
         XCTAssertEqual(t.owner, .agent)
     }
 
+    /// The launch entry point: a pure SwiftData sweep, so it takes a context and
+    /// no vault `io` at all (nothing here reads or writes a file).
+    func test_adoptLedgerTaskOwnership_static_adoptsUntriagedRows_withoutVaultIO() throws {
+        let ctx = try makeContext()
+        let untriaged = MustardTask(title: "untriaged", owner: .agent)
+        untriaged.source = MeetingTaskSource.ledger
+        untriaged.stage = .needsApproval
+        let granted = MustardTask(title: "granted", owner: .agent)
+        granted.source = MeetingTaskSource.ledger
+        granted.stage = .needsApproval
+        granted.agentApprovalGranted = true
+        let running = MustardTask(title: "running", owner: .agent)
+        running.source = MeetingTaskSource.ledger
+        running.stage = .queued
+        let recording = MustardTask(title: "recording", owner: .agent)
+        recording.source = MeetingTaskSource.recording
+        recording.stage = .needsApproval
+        for task in [untriaged, granted, running, recording] { ctx.insert(task) }
+
+        XCTAssertEqual(MeetingTaskSync.adoptLedgerTaskOwnership(context: ctx), 1)
+
+        XCTAssertEqual(untriaged.owner, .me)
+        XCTAssertEqual(untriaged.stage, .needsApproval, "the gate stays; only the lane changes")
+        XCTAssertEqual(granted.owner, .agent, "a live execute grant is never revoked")
+        XCTAssertEqual(running.owner, .agent, "running work keeps its lane")
+        XCTAssertEqual(recording.owner, .agent, "only ledger-harvested rows are in scope")
+
+        // Cheap enough to run on every launch because it is self-limiting.
+        XCTAssertEqual(MeetingTaskSync.adoptLedgerTaskOwnership(context: ctx), 0)
+    }
+
     func test_writeBack_preservesBlockId() throws {
         let ctx = try makeContext()
         let io = FakeVaultIO(["DL/meetings/a.md": note("- [ ] Task with id ^xy7")])

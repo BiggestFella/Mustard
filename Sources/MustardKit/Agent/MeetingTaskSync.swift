@@ -111,8 +111,14 @@ public final class MeetingTaskSync {
     /// its history, and a granted row still sitting at the gate is a genuine execute
     /// decision in flight, so adopting it would silently revoke the grant.
     /// Self-limiting: after one pass there is nothing left matching.
+    ///
+    /// `static` and context-only on purpose: it reads and writes nothing on disk, so
+    /// the launch path can run it without a vault root or a `MeetingVaultIO`
+    /// (`AgentService.adoptMeetingTaskOwnership`). Idempotence comes from the
+    /// predicate, not a persisted flag — a second pass matches nothing — so it is
+    /// safe and cheap (one fetch + filter) to run on every launch.
     @discardableResult
-    func adoptLedgerTaskOwnership() -> Int {
+    public static func adoptLedgerTaskOwnership(context: ModelContext) -> Int {
         let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
         var adopted = 0
         for task in all
@@ -124,6 +130,11 @@ public final class MeetingTaskSync {
             adopted += 1
         }
         return adopted
+    }
+
+    @discardableResult
+    func adoptLedgerTaskOwnership() -> Int {
+        Self.adoptLedgerTaskOwnership(context: context)
     }
 
     @discardableResult

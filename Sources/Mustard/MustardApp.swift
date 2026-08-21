@@ -30,6 +30,13 @@ private final class MustardAppScheduler {
 
     func startIfNeeded() {
         guard schedulerTask == nil else { return }
+        // Adopt legacy meeting rows on the spot, before any tick. The hourly
+        // importer also does this, but it sits behind vault file I/O, a
+        // `meetingVaultPath` being set, and the Claude execution gate — so rows
+        // born under the old execute-triage rules could keep showing
+        // "Approve & run" (which still queues a real execution) long after
+        // launch. This is a single fetch + filter, no files, and self-limiting.
+        agent.adoptMeetingTaskOwnership()
         calendar.bootstrap()
         schedulerTask = Task { [weak self] in
             await withTaskGroup(of: Void.self) { group in
