@@ -316,17 +316,22 @@ struct MobileTaskSheet: View {
         }
     }
 
+    /// The gate's shared verbs (`AgentInbox.gate`) — desktop and iOS must show the
+    /// same word for the same call (parity rule).
+    private var gate: AgentInbox.GateChoice? { AgentInbox.gate(for: task) }
+
     // Compact stage-adaptive footer (mirrors the desktop matrix, BAK-136).
     @ViewBuilder private var footer: some View {
         HStack(spacing: 8) {
             switch task.stage {
             case .needsApproval:
-                Button("Deny", role: .destructive) { deleteTask() }
+                Button(gate?.secondary ?? "Deny", role: .destructive) { deleteTask() }
                 Spacer()
-                Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approve() }
-                    .buttonStyle(.borderedProminent).tint(Theme.Palette.agent)
+                Button(gate?.primary ?? "Approve") { approve() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AgentInbox.isExistenceTriage(task) ? Theme.Palette.accent : Theme.Palette.agent)
             case .needsReview:
-                Button("Discard", role: .destructive) { deleteTask() }
+                Button(gate?.secondary ?? "Discard", role: .destructive) { deleteTask() }
                 Spacer()
                 Button("Accept output") { TaskCompletion.complete(task, in: context); dismiss() }
                     .buttonStyle(.borderedProminent).tint(Theme.Palette.done)

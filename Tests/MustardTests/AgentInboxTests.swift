@@ -116,15 +116,62 @@ final class AgentInboxTests: XCTestCase {
         )
     }
 
-    func test_gateAction_perStage() {
-        XCTAssertEqual(AgentInbox.gateAction(for: .needsApproval)?.label, "Approve")
-        XCTAssertEqual(AgentInbox.gateAction(for: .needsApproval)?.oneClick, true)
-        XCTAssertEqual(AgentInbox.gateAction(for: .needsInput)?.label, "Answer")
-        XCTAssertEqual(AgentInbox.gateAction(for: .needsInput)?.oneClick, false)
-        XCTAssertEqual(AgentInbox.gateAction(for: .needsReview)?.label, "Accept")
-        XCTAssertEqual(AgentInbox.gateAction(for: .needsReview)?.oneClick, true)
-        XCTAssertNil(AgentInbox.gateAction(for: .planned))
-        XCTAssertNil(AgentInbox.gateAction(for: .queued))
+    func test_gate_perStage() {
+        let ap = MustardTask(title: "a"); ap.stage = .needsApproval
+        XCTAssertEqual(AgentInbox.gate(for: ap)?.primary, "Approve")
+        XCTAssertEqual(AgentInbox.gate(for: ap)?.secondary, "Deny")
+        XCTAssertEqual(AgentInbox.gate(for: ap)?.oneClick, true)
+
+        let input = MustardTask(title: "b"); input.stage = .needsInput
+        XCTAssertEqual(AgentInbox.gate(for: input)?.primary, "Answer")
+        XCTAssertNil(AgentInbox.gate(for: input)?.secondary)
+        XCTAssertEqual(AgentInbox.gate(for: input)?.oneClick, false)
+
+        let review = MustardTask(title: "c"); review.stage = .needsReview
+        XCTAssertEqual(AgentInbox.gate(for: review)?.primary, "Accept")
+        XCTAssertEqual(AgentInbox.gate(for: review)?.secondary, "Discard")
+
+        let planned = MustardTask(title: "d"); planned.stage = .planned
+        XCTAssertNil(AgentInbox.gate(for: planned))
+        let queued = MustardTask(title: "e"); queued.stage = .queued
+        XCTAssertNil(AgentInbox.gate(for: queued))
+    }
+
+    /// An outward action still says what approving actually does.
+    func test_gate_gatedApproval_readsApproveAndRun() {
+        let t = MustardTask(title: "Email Kamil"); t.stage = .needsApproval
+        t.actionType = .draftEmail
+        XCTAssertEqual(AgentInbox.gate(for: t)?.primary, "Approve & run")
+    }
+
+    /// A ledger-harvested meeting task is triaged for existence: one verb pair,
+    /// the same on every surface, and neither word promises execution.
+    func test_gate_ledgerMeetingTask_isKeepOrDelete() {
+        let t = MustardTask(title: "Move the Sales Buddi Miro board")
+        t.source = MeetingTaskSource.ledger
+        t.stage = .needsApproval
+        XCTAssertTrue(AgentInbox.isExistenceTriage(t))
+        XCTAssertEqual(AgentInbox.gate(for: t)?.primary, "Keep")
+        XCTAssertEqual(AgentInbox.gate(for: t)?.secondary, "Delete")
+        XCTAssertEqual(AgentInbox.gate(for: t)?.oneClick, true)
+    }
+
+    /// Once handed to the agent the same row is an execute decision again, so it
+    /// must not keep showing the existence-triage words.
+    func test_gate_ledgerMeetingTask_agentOwned_isExecuteApproval() {
+        let t = MustardTask(title: "Move the Sales Buddi Miro board", owner: .agent)
+        t.source = MeetingTaskSource.ledger
+        t.stage = .needsApproval
+        XCTAssertFalse(AgentInbox.isExistenceTriage(t))
+        XCTAssertEqual(AgentInbox.gate(for: t)?.primary, "Approve & run")
+    }
+
+    func test_gate_recordingMeetingTask_isNotExistenceTriage() {
+        let t = MustardTask(title: "Recording action item")
+        t.source = MeetingTaskSource.recording
+        t.stage = .needsApproval
+        XCTAssertFalse(AgentInbox.isExistenceTriage(t))
+        XCTAssertEqual(AgentInbox.gate(for: t)?.primary, "Approve")
     }
 
     func test_backgroundCodeHeroesMaintenanceDoesNotInflateNeedsYou() {
