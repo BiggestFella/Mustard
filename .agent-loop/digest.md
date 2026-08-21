@@ -2,6 +2,51 @@
 
 Append-only ledger of merges and holds. Each entry carries a ready `git revert` line.
 
+## 2026-08-21 — MERGED · Legacy meeting-task owners adopted at launch (PR #145)
+
+- **Trigger:** Leon has ~69 rows in the Agent console's `IN FLIGHT · NEEDS YOU` lane that
+  were born under the pre-#143 rules. They still show the old gate verb (`Approve & run`
+  rather than `Keep`) and approving one still routes to `.queued` — i.e. it executes —
+  because they are still `owner: .agent`. He asked for the adoption to run at launch
+  instead of waiting for the loop.
+- **Why they were stuck:** #143 added `MeetingTaskSync.adoptLedgerTaskOwnership()`, but it
+  was only called from `importTasks`, whose one caller
+  (`MustardAppScheduler.runSourceTick`) is throttled to an hourly batch
+  (`MeetingTaskImportSchedule.defaultInterval`), sequenced *after* an awaited `claude -p`
+  source sweep, gated on `!agent.isSweeping && !agent.isExecuting`, and skipped entirely
+  when `meetingVaultPath` is unset. So the stale gate could survive well past launch.
+- **What landed:** `adoptLedgerTaskOwnership(context:)` became a `public static` sweep —
+  it reads and writes no files, so the launch path needs neither a vault root nor a
+  `MeetingVaultIO` for a migration that only touches SwiftData. The instance method
+  delegates to it, so `importTasks` behaviour is unchanged.
+  `AgentService.adoptMeetingTaskOwnership()` is the app-facing entry point (decision logic
+  stays in `MustardKit`, out of `Views/` and out of the executable), and
+  `MustardAppScheduler.startIfNeeded()` calls it once, synchronously, before the first tick.
+- **Predicate untouched, deliberately:** still only `source == MeetingTaskSource.ledger &&
+  owner == .agent && stage == .needsApproval && !agentApprovalGranted`. A granted gate row
+  is a live execute decision and is left alone; queued/running/review/done rows keep their
+  lane; `meeting-recording` rows are out of scope. Widening it to clear the stale labels
+  faster would silently revoke approvals or drag running work backwards — worse than the
+  labels. Idempotence comes from the predicate, not a `UserDefaults` flag: a second pass
+  matches nothing, so it is safe and cheap (one fetch + filter) on every launch.
+- **How verified:** TDD, red first — both new tests failed to compile against the old API.
+  `swift test` exit 0 → **2063 tests, 3 skipped, 0 failures** (same-worktree pre-change
+  baseline 2061, so the +2 is exactly the two new tests); `swift build` exit 0;
+  `./build-ios.sh` exit 0 (`** BUILD SUCCEEDED **`). Both CI jobs green on the
+  self-hosted `mustard` runner. New coverage:
+  `MeetingTaskSyncTests.test_adoptLedgerTaskOwnership_static_adoptsUntriagedRows_withoutVaultIO`
+  (all four boundary rows + the self-limiting second pass) and
+  `AgentTests.test_adoptMeetingTaskOwnership_flipsUntriagedLegacyRows_withoutVaultPath`.
+  The three existing adoption tests from #143 stay green unchanged.
+- **Not run on purpose:** `./build-app.sh` and launching `Mustard.app`. A worktree build
+  silently migrates the live `mustard.store` down and drops missing entities' tables —
+  that destroyed Leon's meeting records on 2026-08-13 — so this was verified by tests and
+  compilation only. Leon runs the app himself.
+- **Leon:** relaunch `Mustard.app`; the ~69 rows should read `Keep` / `Delete`. Nothing
+  else to do. Revert: `git revert 9c4ccb9`
+- **Outward actions:** one squash-merge to main, one branch deletion. No release, no
+  remote data deleted, no secrets.
+
 ## 2026-08-20 — MERGED · Open-PR backlog cleared: five Cursor-agent PRs landed (PRs #137, #131, #138, #139, #134)
 
 - **Trigger:** Leon asked which of the five open PRs were good to go and invited the merge.
