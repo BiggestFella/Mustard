@@ -2,6 +2,65 @@
 
 Append-only ledger of merges and holds. Each entry carries a ready `git revert` line.
 
+## 2026-08-21 — MERGED · Dictation's AX insertion runs on the main actor (PR #147)
+
+- **The crash:** dictating (⌃⌥D) into one of Mustard's **own** text fields killed the app —
+  `EXC_BREAKPOINT (SIGTRAP)` / `dispatch_assert_queue_fail`, 2026-08-21 11:22, on thread 6,
+  queue `com.apple.root.user-initiated-qos.cooperative`. The AX write was serviced
+  *in-process* (`NSAccessibilityEntryPointSetValueForAttribute` → `NSTextView`), not in a
+  remote app, so `AXUIElementSetAttributeValue(kAXSelectedText)` →
+  `NSTextView.replaceCharactersInRange` → `NSTextInputContext.invalidateCharacterCoordinates`
+  → `TSMInvalidateClientGeometry` → HIToolbox's `dispatch_assert_queue(main)`, which traps
+  off the main thread.
+- **Root cause:** `TextInserter.insert` was a **nonisolated `async`** method. Swift runs such
+  a body on the cooperative pool even when it is awaited from a main-actor caller — the
+  coordinator's `insert` seam was already `@MainActor`, so the hop happened and `insert`
+  hopped straight back off — and the *synchronous* seams it then calls lose their inferred
+  isolation to their nonisolated function types. Measured on the pre-fix sources: **all nine**
+  AX/pasteboard edges ran off the main thread. The one `async` seam (`settle`) did hop to
+  main, because a non-Sendable async closure inherits its formation context's isolation.
+  That asymmetry is exactly why only the synchronous AX write tripped the assert.
+- **What landed:** `insert` and all nine seam types are `@MainActor` — one hop at the
+  boundary, and an off-main seam is no longer representable. Behaviour is untouched and
+  covered by the pre-existing tests, all green unchanged: an unconfirmed direct write still
+  falls through to paste (Chromium/Electron lie about `kAXSelectedText`), the paste path is
+  still capture → write → ⌘V → restore-only-while-still-ours, the transcript still survives
+  every failure path, secure targets are still refused first, and the injected-closure design
+  stands.
+- **⌃⌥R shared the crash:** the rewrite surface write-back *is* this inserter, so accepting a
+  rewrite into a Mustard field went down the identical stack. Fixed by the same change. The
+  audit also found `AccessibilitySelectionReader.read` with the identical defect (its
+  synchronous AX rungs ran off-main — now `@MainActor`, proven by a test that fails without
+  it); `SelectionRestorer`, which writes `kAXSelectedTextRangeAttribute` and reaches the same
+  `NSTextView.setSelectedRanges` → HIToolbox path, main-thread-only by accident of being
+  called synchronously (now annotated); and `RewriteCoordinator`'s OS-facing seam types, now
+  `@MainActor` so the guarantee holds end to end. `ClipPaster` was already safe (`@MainActor`
+  class). `AccessibilityFocusReader` stays nonisolated on purpose — pure mapping, compiles for
+  iOS, `FocusedTextReading` witness — with the invariant documented and every caller
+  main-actor typed.
+- **Trade-off, stated rather than hidden:** an AX call into a *hung* remote app now occupies
+  the main thread until the AX messaging timeout instead of a cooperative one. "Is this
+  element ours?" is not safely knowable from the PID (an out-of-process write can still be
+  serviced in-process), so the blunt rule wins; it is commented in `TextInserter`.
+- **How verified:** TDD, red first — the new isolation tests fail on the pre-fix sources
+  (`TextInserterTests` listed all 8 paste-path seams as off-main;
+  `AccessibilitySelectionReaderTests` listed all 3 rungs). `swift test` exit 0 → **2065
+  tests, 3 skipped, 0 failures** (same-worktree pre-change baseline **2061**, measured, so
+  the +4 is exactly the four new tests); `swift build` exit 0; `./build-ios.sh` exit 0
+  (`** BUILD SUCCEEDED **`). Both CI jobs green on the self-hosted `mustard` runner. On
+  merged `main` (with #145 alongside): `swift test` exit 0 → **2067 tests, 3 skipped, 0
+  failures**. The new `RewriteCoordinatorTests` case cannot fail today — the seam types make
+  the compiler insert the hop — and its comment says so rather than overclaiming; it guards
+  the plausible next mistake of making `invoke()`/`accept()` nonisolated.
+- **Risk:** low/medium — isolation-only, no schema, no outward surface, no control-flow change.
+- **⚠ Leon eye-check OUTSTANDING** (asked in chat, two items): (1) hold **⌃⌥D** and dictate
+  into a Mustard text field — a note in the Notes editor, or the notch capture field — the
+  words should land instead of the app dying; (2) hold ⌃⌥D in Slack or Mail to confirm the
+  paste fallback still delivers into other apps. Same two checks for **⌃⌥R** accept.
+- **Outward actions:** branch pushed, PR #147 opened and merged, remote branch deleted. No
+  release, no remote data deletion, no secrets.
+- **Revert:** `git revert f57bb4c`
+
 ## 2026-08-21 — MERGED · Legacy meeting-task owners adopted at launch (PR #145)
 
 - **Trigger:** Leon has ~69 rows in the Agent console's `IN FLIGHT · NEEDS YOU` lane that
