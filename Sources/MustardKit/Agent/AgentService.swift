@@ -280,6 +280,20 @@ public final class AgentService {
         }
     }
 
+    /// Adopt untriaged legacy ledger rows (`owner: .agent` → `.me`) so they show the
+    /// existence gate — `Keep`/`Delete` — instead of the old `Approve & run`.
+    ///
+    /// Runs at launch, ahead of the hourly meeting import, because the import is the
+    /// only other place this happens and it is throttled behind vault file I/O and
+    /// the Claude execution gate; rows born before 2026-08-21 would otherwise keep
+    /// offering "approve" (which still queues an execution) until it next fired.
+    /// Pure store sweep — no vault root, no file access. Narrow and self-limiting:
+    /// see `MeetingTaskSync.adoptLedgerTaskOwnership`.
+    @discardableResult
+    public func adoptMeetingTaskOwnership() -> Int {
+        MeetingTaskSync.adoptLedgerTaskOwnership(context: context)
+    }
+
     /// One-time backlog prune (2026-06-24 spec): the meeting importer historically
     /// lifted the whole team's action items in as Leon's tasks. Mark every meeting
     /// task whose meeting is older than `days` as done and retag its source to

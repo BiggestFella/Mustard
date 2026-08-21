@@ -282,6 +282,28 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(recent.source, "meeting")
     }
 
+    /// Runs once at launch (see `MustardAppScheduler.startIfNeeded`) so the rows
+    /// born under the old execute-triage rules show `Keep`/`Delete` immediately,
+    /// instead of waiting for the hourly meeting import.
+    func test_adoptMeetingTaskOwnership_flipsUntriagedLegacyRows_withoutVaultPath() throws {
+        let ctx = try makeContext()
+        let service = AgentService(context: ctx, claude: { _, _ in ClaudeResult(ok: true, text: "[]") })
+        let untriaged = MustardTask(title: "untriaged", owner: .agent)
+        untriaged.source = MeetingTaskSource.ledger
+        untriaged.stage = .needsApproval
+        let granted = MustardTask(title: "granted", owner: .agent)
+        granted.source = MeetingTaskSource.ledger
+        granted.stage = .needsApproval
+        granted.agentApprovalGranted = true
+        ctx.insert(untriaged); ctx.insert(granted)
+
+        XCTAssertEqual(service.adoptMeetingTaskOwnership(), 1)
+
+        XCTAssertEqual(untriaged.owner, .me)
+        XCTAssertEqual(granted.owner, .agent)
+        XCTAssertEqual(service.adoptMeetingTaskOwnership(), 0, "idempotent — safe every launch")
+    }
+
     // MARK: - decide(approved) — board promotion (ADR-0010)
 
     func test_approve_outwardAction_stagesQueuedAgentTask_noClaude() async throws {
