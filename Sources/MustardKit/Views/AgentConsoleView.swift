@@ -19,6 +19,8 @@ public struct AgentConsoleView: View {
     @State private var console = TriageConsoleState()
     /// Approval-gate spec (2026-08-14): reveals the held meeting-task rows.
     @State private var showBackgroundMaintenance = false
+    /// Why a one-click gate reject didn't take (see `rejectGate`). Nil when clear.
+    @State private var gateError: String?
 
     @Query(sort: \Recommendation.createdAt, order: .reverse) private var recommendations: [Recommendation]
     @Query private var allTasks: [MustardTask]
@@ -117,6 +119,12 @@ public struct AgentConsoleView: View {
 
                 if !attention.inFlight.isEmpty {
                     sectionLabel("IN FLIGHT · NEEDS YOU", count: attention.inFlight.count)
+                    if let gateError {
+                        Text(gateError)
+                            .font(Theme.Fonts.caption)
+                            .foregroundStyle(Theme.Palette.error)
+                            .padding(.bottom, 6)
+                    }
                     ForEach(attention.inFlight) { gateRow($0) }
                 }
                 if !attention.background.isEmpty {
@@ -292,10 +300,14 @@ public struct AgentConsoleView: View {
     }
 
     /// The muted sub-meta line under a gate row's title. Enumerates the gate stages
-    /// (`TaskStage.isGate`) — keep in sync with `gateSpineColor` / `AgentInbox.gateAction`.
+    /// (`TaskStage.isGate`) — keep in sync with `gateSpineColor` / `AgentInbox.gate`.
     private func gateSubmeta(_ task: MustardTask) -> String {
         switch task.stage {
-        case .needsApproval: return task.isGated ? "gated · approve to run" : "approve to run"
+        case .needsApproval:
+            // Existence triage asks whether the item is real, so the row must not
+            // promise a run — keeping it puts it on your own board.
+            if AgentInbox.isExistenceTriage(task) { return "from a meeting · is this a real task?" }
+            return task.isGated ? "gated · approve to run" : "approve to run"
         case .needsInput: return "agent asked · your answer needed"
         case .needsReview: return "finished · check the output"
         default: return ""
@@ -314,7 +326,7 @@ public struct AgentConsoleView: View {
     /// distinct from the rich proposal cards. Meeting tasks expose both quick Do and
     /// Don't decisions here; tapping the row still opens the full task sheet.
     private func gateRow(_ task: MustardTask) -> some View {
-        let action = AgentInbox.gateAction(for: task.stage)
+        let gate = AgentInbox.gate(for: task)
         return HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(gateSpineColor(task.stage))
@@ -330,16 +342,16 @@ public struct AgentConsoleView: View {
                     .foregroundStyle(Theme.Palette.textTertiary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if let action {
+            if let gate {
                 Button {
-                    if action.oneClick { advanceGate(task) } else { console.sheetTask = task }
+                    if gate.oneClick { advanceGate(task) } else { console.sheetTask = task }
                 } label: {
-                    Text(task.source == "meeting" && task.stage == .needsApproval ? "Do" : action.label)
+                    Text(gate.primary)
                         .font(Theme.Fonts.caption.weight(.semibold))
-                        .foregroundStyle(action.oneClick ? .white : Theme.Palette.textSecondary)
+                        .foregroundStyle(gate.oneClick ? .white : Theme.Palette.textSecondary)
                         .padding(.horizontal, 11).padding(.vertical, 5)
                         .background {
-                            if action.oneClick {
+                            if gate.oneClick {
                                 RoundedRectangle(cornerRadius: 7).fill(gateSpineColor(task.stage))
                             } else {
                                 RoundedRectangle(cornerRadius: 7).stroke(Theme.Palette.hairline, lineWidth: 0.5)
@@ -347,8 +359,10 @@ public struct AgentConsoleView: View {
                         }
                 }
                 .buttonStyle(.plain)
-                if task.source == "meeting", task.stage == .needsApproval {
-                    Button("Don't") { rejectGate(task) }
+                // The row carries the reject verb only for existence triage — the
+                // other gates keep it in the detail sheet where the output is visible.
+                if let secondary = gate.secondary, AgentInbox.isExistenceTriage(task) {
+                    Button(secondary) { rejectGate(task) }
                         .font(Theme.Fonts.caption.weight(.medium))
                         .foregroundStyle(Theme.Palette.confidenceLow)
                         .padding(.horizontal, 9).padding(.vertical, 5)
@@ -366,9 +380,18 @@ public struct AgentConsoleView: View {
         .padding(.bottom, 8)
     }
 
+    /// `reject` returns false when the ledger decision could not be persisted — no
+    /// vault path configured, or the line no longer matches its key (it was reworded).
+    /// Surfacing that is load-bearing: the row is a one-click control, so swallowing
+    /// the failure left the click looking like a no-op with no explanation.
     private func rejectGate(_ task: MustardTask) {
         let vaultRoot = UserDefaults.standard.string(forKey: "meetingVaultPath") ?? ""
-        _ = MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot)
+        if MeetingTaskSync.reject(task, context: context, vaultRoot: vaultRoot) {
+            gateError = nil
+        } else {
+            gateError = "Couldn't record that decision in the vault for “\(task.title)” — "
+                + "check the meeting vault path in Settings, and that its ledger line is unchanged."
+        }
     }
 
     /// A compact attention row (Needs You / Needs Review) that opens the task's

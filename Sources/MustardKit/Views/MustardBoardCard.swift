@@ -330,13 +330,12 @@ public struct MustardBoardCard: View {
         }
     }
 
-    /// "✓ Approve & run" (gated approval) / "✓ Approve" (non-gated) / "✓ Accept" (review).
-    private var primaryGateLabel: String {
-        if stage == .needsReview { return "✓ Accept" }
-        return task.isGated || task.owner == .agent ? "✓ Approve & run" : "✓ Approve"
-    }
+    /// The gate's shared verbs (`AgentInbox.gate`) — one source of truth with the
+    /// console row and the task detail sheet, so the board can't invent a third word
+    /// for the same call. The card only adds its check glyph.
+    private var primaryGateLabel: String { "✓ \(AgentInbox.gate(for: task)?.primary ?? "Approve")" }
 
-    private var secondaryGateLabel: String { stage == .needsReview ? "Discard" : "Deny" }
+    private var secondaryGateLabel: String { AgentInbox.gate(for: task)?.secondary ?? "Deny" }
 
     private func approveGate() {
         guard let target = PersonalBoard.approveTarget(for: task) else { return }

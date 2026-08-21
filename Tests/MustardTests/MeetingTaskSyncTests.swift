@@ -52,9 +52,10 @@ final class MeetingTaskSyncTests: XCTestCase {
         let t = all[0]
         XCTAssertEqual(t.title, "Email Kamil the SDK spec")
         XCTAssertEqual(t.status, .inbox)
-        // Imported meeting work waits for Leon's explicit decision. Approval later
-        // moves it to `.queued`, which is the runnable agent lane.
-        XCTAssertEqual(t.owner, .agent)
+        // Imported meeting work waits for Leon's existence decision — is this a real
+        // task? It is born his, so keeping it lands it on his own board; handing it
+        // to the agent is a separate later choice.
+        XCTAssertEqual(t.owner, .me)
         XCTAssertEqual(t.stage, .needsApproval)
         XCTAssertEqual(t.source, "meeting")
         XCTAssertEqual(t.sourceURL, "DL/meetings/sync.md")
@@ -89,6 +90,8 @@ final class MeetingTaskSyncTests: XCTestCase {
 
         _ = sync.importTasks()
         let task = try XCTUnwrap(try tasks(ctx).first)
+        // The pre-gate birth state: agent-owned and already in a runnable lane.
+        task.owner = .agent
         task.stage = .forAgent
         task.agentApprovalGranted = false
 
@@ -420,6 +423,68 @@ final class MeetingTaskSyncTests: XCTestCase {
         legacy.notes = "manually edited"
         _ = sync.importTasks()
         XCTAssertEqual(legacy.notes, "manually edited")
+    }
+
+    // MARK: Legacy owner adoption
+
+    /// Rows imported before the existence-triage change were born `owner: .agent`,
+    /// so approving them meant "run it now". Untriaged ones adopt `.me` on the next
+    /// import; anything already approved keeps its history.
+    func test_import_adoptsUntriagedLegacyRowsAsMine() throws {
+        let ctx = try makeContext()
+        let path = "DL/meetings/a.md"
+        let io = FakeVaultIO([path: note("- [ ] Email Kamil the SDK spec")])
+        let sync = MeetingTaskSync(context: ctx, io: io)
+        _ = sync.importTasks()
+        let t = try XCTUnwrap(try tasks(ctx).first)
+        // Simulate the pre-change birth state.
+        t.owner = .agent
+        t.stage = .needsApproval
+        t.agentApprovalGranted = false
+
+        let digest = sync.importTasks()
+
+        XCTAssertEqual(t.owner, .me)
+        XCTAssertEqual(t.stage, .needsApproval)
+        XCTAssertEqual(digest.ownersAdopted, 1)
+
+        // Self-limiting: a second pass finds nothing left to adopt.
+        XCTAssertEqual(sync.importTasks().ownersAdopted, 0)
+    }
+
+    func test_import_leavesAlreadyApprovedLegacyRowsAlone() throws {
+        let ctx = try makeContext()
+        let path = "DL/meetings/a.md"
+        let io = FakeVaultIO([path: note("- [ ] Email Kamil the SDK spec")])
+        let sync = MeetingTaskSync(context: ctx, io: io)
+        _ = sync.importTasks()
+        let t = try XCTUnwrap(try tasks(ctx).first)
+        t.owner = .agent
+        t.stage = .queued
+        t.agentApprovalGranted = true
+
+        let digest = sync.importTasks()
+
+        XCTAssertEqual(t.owner, .agent, "work already approved for execution keeps its lane")
+        XCTAssertEqual(t.stage, .queued)
+        XCTAssertEqual(digest.ownersAdopted, 0)
+    }
+
+    /// A row granted approval but still sitting at the gate is a genuine execute
+    /// decision in flight — adopting it would silently revoke the grant.
+    func test_import_leavesGrantedGateRowsAlone() throws {
+        let ctx = try makeContext()
+        let path = "DL/meetings/a.md"
+        let io = FakeVaultIO([path: note("- [ ] Email Kamil the SDK spec")])
+        let sync = MeetingTaskSync(context: ctx, io: io)
+        _ = sync.importTasks()
+        let t = try XCTUnwrap(try tasks(ctx).first)
+        t.owner = .agent
+        t.stage = .needsApproval
+        t.agentApprovalGranted = true
+
+        XCTAssertEqual(sync.importTasks().ownersAdopted, 0)
+        XCTAssertEqual(t.owner, .agent)
     }
 
     func test_writeBack_preservesBlockId() throws {

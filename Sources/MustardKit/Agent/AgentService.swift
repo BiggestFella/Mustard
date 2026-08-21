@@ -762,6 +762,12 @@ public final class AgentService {
         lastHint = nil
         task.owner = .agent
         task.stage = .forAgent
+        // A manual hand-off IS the human approval for the agent to act on this, so a
+        // ledger-harvested meeting task must carry the grant. Without it the task is
+        // stuck twice over: `AgentTaskQueue.nextRunnable` filters out ungranted ledger
+        // work, and the importer's legacy rehold would bounce it back to the gate on
+        // the next hourly pass.
+        if MeetingTaskSource.requiresAgentApproval(task.source) { task.agentApprovalGranted = true }
 
         let run: AgentRun
         if let existing = previousRun {

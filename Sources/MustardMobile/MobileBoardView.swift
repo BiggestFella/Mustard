@@ -147,13 +147,15 @@ private struct MobileBoardCard: View {
 
     private var gateButtons: some View {
         HStack(spacing: 8) {
-            Button(stage == .needsReview ? "✓ Accept" : (task.isGated || task.owner == .agent ? "✓ Approve & run" : "✓ Approve")) {
+            // Shared verbs (`AgentInbox.gate`) — desktop and iOS must never show
+            // different words for the same call (parity rule).
+            Button("✓ \(AgentInbox.gate(for: task)?.primary ?? "Approve")") {
                 if let target = PersonalBoard.approveTarget(for: task) { PersonalBoard.move(task, to: target) }
             }
             .font(.caption.weight(.semibold)).foregroundStyle(.white)
             .padding(.horizontal, 9).padding(.vertical, 4)
             .background(Theme.Palette.agent, in: RoundedRectangle(cornerRadius: 7))
-            Button(stage == .needsReview ? "Discard" : "Deny") { onDelete(task) }
+            Button(AgentInbox.gate(for: task)?.secondary ?? "Deny") { onDelete(task) }
                 .font(.caption.weight(.medium)).foregroundStyle(Theme.Palette.error)
             Spacer(minLength: 0)
         }

@@ -28,6 +28,8 @@ public struct ImportDigest: Equatable {
     public var archivedAsStale = 0
     /// Rows re-keyed from the pre-2026-08-14 whole-line hash to the durable one.
     public var keysMigrated = 0
+    /// Untriaged legacy rows adopted from `owner: .agent` to `.me` (2026-08-21).
+    public var ownersAdopted = 0
     public var clients: Set<String> = []
 
     public var summary: String {
@@ -100,9 +102,34 @@ public final class MeetingTaskSync {
 
     // MARK: Import (vault → Mustard)
 
+    /// One-time adoption: rows imported before 2026-08-21 were born `owner: .agent`,
+    /// so approving them at the gate meant "run it now" rather than "yes, this is a
+    /// real task". Flip the ones still awaiting that decision to `.me`.
+    ///
+    /// Deliberately narrow — only `.needsApproval` rows that were never granted
+    /// approval. A row already approved, running, in review or done keeps its lane and
+    /// its history, and a granted row still sitting at the gate is a genuine execute
+    /// decision in flight, so adopting it would silently revoke the grant.
+    /// Self-limiting: after one pass there is nothing left matching.
+    @discardableResult
+    func adoptLedgerTaskOwnership() -> Int {
+        let all = (try? context.fetch(FetchDescriptor<MustardTask>())) ?? []
+        var adopted = 0
+        for task in all
+        where task.source == MeetingTaskSource.ledger
+            && task.owner == .agent
+            && task.stage == .needsApproval
+            && !task.agentApprovalGranted {
+            task.owner = .me
+            adopted += 1
+        }
+        return adopted
+    }
+
     @discardableResult
     public func importTasks(now: Date = .now) -> ImportDigest {
         var digest = ImportDigest()
+        digest.ownersAdopted = adoptLedgerTaskOwnership()
         var byKey = existingMeetingTasksByKey()
         // Keys already matched or created in this pass. The legacy re-key below
         // must never steal a row another ledger line has already claimed: for a
@@ -203,7 +230,10 @@ public final class MeetingTaskSync {
         // semantics `archiveStaleMeetingTasks` uses, applied at the door.
         let isFresh = MeetingTaskFreshness.isFresh(
             srcNote: p.srcNote, notePath: p.notePath, now: now)
-        let task = MustardTask(title: p.title, owner: isFresh ? .agent : .me)
+        // Born mine, not the agent's: the gate this lands on asks "is this a real
+        // task?", and keeping it must not hand work to the agent as a side effect
+        // (`AgentInbox.isExistenceTriage`). Delegation stays an explicit later step.
+        let task = MustardTask(title: p.title, owner: .me)
         let meeting = resolveMeetingNote(p)
         task.stage = isFresh ? .needsApproval : .done
         task.source = isFresh ? "meeting" : "meeting:archived"

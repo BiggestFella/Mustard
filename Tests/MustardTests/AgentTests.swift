@@ -487,6 +487,27 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(task.agentRun, fetchedRun)
     }
 
+    /// A kept meeting task is mine and unqueued; handing it to the agent IS the human
+    /// approval, so the grant must land with it. Without it the task strands twice:
+    /// `AgentTaskQueue` skips ungranted ledger work, and the importer's legacy rehold
+    /// drags it back to the gate.
+    func test_delegate_ledgerMeetingTask_grantsAgentApproval_andStaysRunnable() throws {
+        let ctx = try! makeContext()
+        let service = AgentService(context: ctx, claude: { _, _ in ClaudeResult(ok: true, text: "x") })
+        let task = MustardTask(title: "Move the Sales Buddi Miro board", owner: .me)
+        task.source = MeetingTaskSource.ledger
+        task.stage = .planned
+        task.list = TaskList(name: "SB", area: Area(name: "Sales Buddi"))
+        ctx.insert(task)
+
+        service.delegate(task)
+
+        XCTAssertEqual(task.owner, .agent)
+        XCTAssertEqual(task.stage, .forAgent)
+        XCTAssertTrue(task.agentApprovalGranted)
+        XCTAssertTrue(AgentTaskQueue.nextRunnable([task]) === task)
+    }
+
     // BAK-90: an area-less task can't be handed off (the bridge export filters by area,
     // so it would silently never route). Block it and surface a hint instead.
     func test_delegate_areaLessTask_isBlocked_withHint() throws {

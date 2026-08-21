@@ -83,9 +83,17 @@ public enum PersonalBoard {
     /// needsReview → done. Nil when the task isn't on a gate stage. Reject/Discard
     /// (deletion) and the reverse transitions (Hold→needsApproval, Request changes→
     /// queued) are handled by the caller via `move`/delete.
+    ///
+    /// Existence triage is the exception: keeping a ledger-harvested meeting task
+    /// answers "yes, this is really mine to do", so it lands on your own board and
+    /// nothing runs — not even when it carries a gated action type. Handing it to the
+    /// agent afterwards is the separate decision, and re-approving it then (now
+    /// agent-owned) is the execute approval that queues it.
     public static func approveTarget(for task: MustardTask) -> TaskStage? {
         switch task.stage {
-        case .needsApproval: return task.isGated || task.owner == .agent ? .queued : .needsReview
+        case .needsApproval:
+            if AgentInbox.isExistenceTriage(task) { return .planned }
+            return task.isGated || task.owner == .agent ? .queued : .needsReview
         case .needsReview: return .done
         default: return nil
         }

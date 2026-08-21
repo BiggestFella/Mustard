@@ -58,17 +58,46 @@ public enum AgentInbox {
         return task.tags.contains("human-action")
     }
 
-    /// The console gate row's primary button for a stage: its label, and whether it
-    /// advances in one click (Approve/Accept, via PersonalBoard.approveTarget) or must
-    /// open the conversation (Answer — replying needs typing). Nil for non-gate stages.
-    /// Enumerates the gate stages (`TaskStage.isGate`) — keep in sync if a gate stage is
-    /// added, or a new `.gate` stage will surface in `inFlight` with no action button.
-    public static func gateAction(for stage: TaskStage) -> (label: String, oneClick: Bool)? {
-        switch stage {
-        case .needsApproval: return ("Approve", true)
-        case .needsInput: return ("Answer", false)
-        case .needsReview: return ("Accept", true)
-        default: return nil
+    /// The verb pair a gate offers. Single source of truth for the console row, the
+    /// task detail sheet and the board card, so the same function can never wear
+    /// three different labels (it wore five before 2026-08-21: Do/Don't on the row,
+    /// Approve & run/Deny/Delete task in the sheet, two of them the same call).
+    ///
+    /// `oneClick` is false when the primary needs the conversation open (Answer —
+    /// replying means typing). `secondary` is the destructive drop, nil on stages
+    /// that have none.
+    public struct GateChoice: Equatable, Sendable {
+        public let primary: String
+        public let secondary: String?
+        public let oneClick: Bool
+    }
+
+    /// True when the gate decision is "is this a real task?" rather than "should the
+    /// agent run this?" — a ledger-harvested meeting task that is mine. Those arrive
+    /// unasked from a meeting note, so triage classifies them; execution is a later,
+    /// separate hand-off (`AgentService.delegate`). Once handed over the row is
+    /// agent-owned again and the gate goes back to being an execute approval.
+    public static func isExistenceTriage(_ task: MustardTask) -> Bool {
+        MeetingTaskSource.requiresAgentApproval(task.source) && task.owner == .me
+    }
+
+    /// The gate's verbs for a task. Nil for non-gate stages. Enumerates the gate
+    /// stages (`TaskStage.isGate`) — keep in sync if a gate stage is added, or a new
+    /// `.gate` stage will surface in `inFlight` with no action button.
+    public static func gate(for task: MustardTask) -> GateChoice? {
+        switch task.stage {
+        case .needsApproval:
+            if isExistenceTriage(task) {
+                return GateChoice(primary: "Keep", secondary: "Delete", oneClick: true)
+            }
+            let approve = task.isGated || task.owner == .agent ? "Approve & run" : "Approve"
+            return GateChoice(primary: approve, secondary: "Deny", oneClick: true)
+        case .needsInput:
+            return GateChoice(primary: "Answer", secondary: nil, oneClick: false)
+        case .needsReview:
+            return GateChoice(primary: "Accept", secondary: "Discard", oneClick: true)
+        default:
+            return nil
         }
     }
 

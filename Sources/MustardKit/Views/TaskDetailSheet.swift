@@ -423,12 +423,22 @@ public struct TaskDetailSheet: View {
 
     // MARK: - Footer (BAK-136)
 
+    /// The gate's shared verb pair — one source of truth with the console row and the
+    /// board card (`AgentInbox.gate`).
+    private var gate: AgentInbox.GateChoice? { AgentInbox.gate(for: task) }
+
     private var footer: some View {
         HStack(spacing: 8) {
-            Button(role: .destructive) {
-                deleteTask()
-            } label: { Label("Delete task", systemImage: "trash") }
-            .controlSize(.small)
+            // Suppressed when `stageActions` already offers the destructive drop.
+            // Deny/Discard and this button ran the identical call, so a gate showed
+            // two buttons for one action — one of them wearing a trash icon that lied
+            // (a meeting task is marked ignored in the ledger, never deleted).
+            if gate?.secondary == nil {
+                Button(role: .destructive) {
+                    deleteTask()
+                } label: { Label("Delete task", systemImage: "trash") }
+                .controlSize(.small)
+            }
             Spacer()
             stageActions
         }
@@ -439,12 +449,18 @@ public struct TaskDetailSheet: View {
     @ViewBuilder private var stageActions: some View {
         switch task.stage {
         case .needsApproval:
-            Button("I'll do it") { takeOver() }.controlSize(.small)
-            Button("Deny", role: .destructive) { deleteTask() }.controlSize(.small)
-            Button(task.isGated || task.owner == .agent ? "Approve & run" : "Approve") { approveGate() }
-                .buttonStyle(.borderedProminent).tint(Theme.Palette.agent).controlSize(.small)
+            // Existence triage is a two-outcome decision: Keep (it's mine to do) or
+            // Delete. "I'll do it" would be a third word for what Keep already does.
+            if !AgentInbox.isExistenceTriage(task) {
+                Button("I'll do it") { takeOver() }.controlSize(.small)
+            }
+            Button(gate?.secondary ?? "Deny", role: .destructive) { deleteTask() }.controlSize(.small)
+            Button(gate?.primary ?? "Approve") { approveGate() }
+                .buttonStyle(.borderedProminent)
+                .tint(AgentInbox.isExistenceTriage(task) ? Theme.Palette.accent : Theme.Palette.agent)
+                .controlSize(.small)
         case .needsReview:
-            Button("Discard", role: .destructive) { deleteTask() }.controlSize(.small)
+            Button(gate?.secondary ?? "Discard", role: .destructive) { deleteTask() }.controlSize(.small)
             if task.agentRun == nil {
                 Button("Request changes") { PersonalBoard.move(task, to: .queued) }.controlSize(.small)
                 Button("Accept output") { TaskCompletion.complete(task, in: context); close() }

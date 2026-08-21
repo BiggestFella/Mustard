@@ -80,7 +80,7 @@ final class MeetingTaskStalenessTests: XCTestCase {
         let digest = sync.importTasks(now: at(now))
 
         let all = try tasks(ctx)
-        XCTAssertEqual(all[0].owner, .agent)
+        XCTAssertEqual(all[0].owner, .me)
         XCTAssertEqual(all[0].stage, .needsApproval)
         XCTAssertEqual(digest.archivedAsStale, 0)
     }
