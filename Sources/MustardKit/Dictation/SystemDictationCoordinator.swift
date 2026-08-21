@@ -211,6 +211,9 @@ public final class SystemDictationCoordinator {
                 await self.speech.cancel()
                 guard self.holdEpoch == epoch else { return }
                 self.pressedAt = nil
+                // A hold that died mid-flight is the one most worth timing —
+                // a failed cold start shows up here, not on the happy path.
+                self.logLatency()
                 let stable = VoiceCapture.transcript(
                     from: self.segmentsByID.values.filter(\.isFinal))
                 self.recover(
@@ -233,6 +236,9 @@ public final class SystemDictationCoordinator {
                 await self?.speech.cancel()   // an accidental tap
                 guard let self, self.holdEpoch == epoch else { return }
                 self.consumeTask?.cancel()
+                // Timed too: a tap that felt deliberate but fell under the
+                // minimum is worth being able to see in the log.
+                self.logLatency()
                 self.pill.hide()
                 self.phase = .idle
             }
@@ -394,10 +400,12 @@ public final class SystemDictationCoordinator {
         scheduleIdle(after: 2.5)
     }
 
-    /// Emits the hold's timings once, at the end of the hold. Two numbers
-    /// matter: `startup` (key-down → recognizer live, the window the pre-roll
-    /// buffer has to cover) and `finish` (key-up → words in the field). Never
-    /// logs transcript content — only durations.
+    /// Emits the hold's timings once, however the hold ended — inserted,
+    /// recovered, failed mid-flight, or released under the minimum. Two
+    /// numbers matter: `startup` (key-down → recognizer live, the window the
+    /// pre-roll buffer has to cover) and `finish` (key-up → words in the
+    /// field). Holds refused before the press was accepted have no marks and
+    /// log nothing. Never logs transcript content — only durations.
     private func logLatency() {
         guard let summary = latency.summary else { return }
         voiceLog.notice("dictation: latency \(summary, privacy: .public)")

@@ -575,6 +575,13 @@ private final class MicrophoneFeed {
     private var session: (any VoiceTranscribing)?
     private var pump: Task<Void, Never>?
     private var chunks: AsyncStream<AudioChunk>.Continuation?
+    /// The in-flight `startCapture`, so a release that beats the analyzer's
+    /// cold start can wait for it instead of finding a half-built feed.
+    private var startupTask: Task<AsyncThrowingStream<VoiceTranscriptSegment, Error>, Error>?
+    /// Buffers the tap produced that the capped stream refused. Written from
+    /// the audio thread, so it is lock-guarded — and the lock is taken only on
+    /// the drop path, which is the pathological case, never the normal one.
+    private var droppedChunks: OSAllocatedUnfairLock<Int>?
     /// Bumped by every begin and every cancel. `begin` is async, so a cancel
     /// can land mid-setup; without this the teardown runs BEFORE the tap is
     /// installed and the microphone is left running with nothing owning it
@@ -598,6 +605,26 @@ private final class MicrophoneFeed {
         await cancel()
         generation += 1
         let mine = generation
+
+        // Startup runs as a task the rest of the feed can await, because a
+        // hold shorter than the analyzer's cold start releases while this is
+        // still in flight. Without the handle, `end()` finds a nil session,
+        // returns nothing, and discards the buffered pre-roll — the very
+        // words this pre-roll exists to save — while the session that lands
+        // a moment later is never finished. See `end()`.
+        let startup = Task { try await self.startCapture(generation: mine) }
+        startupTask = startup
+        return try await startup.value
+    }
+
+    private func startCapture(
+        generation mine: Int
+    ) async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error> {
+        // Running as a task adds a suspension point between `begin` scheduling
+        // this and the body starting, and a quick tap releases inside it — so a
+        // cancel can already have happened. Check before touching hardware,
+        // rather than opening the microphone for a capture that is over.
+        guard generation == mine else { throw CancellationError() }
 
         // Constructed first because it is the one cheap, synchronous step that
         // can refuse outright (dictation throws `.notReady` below macOS 27).
@@ -633,6 +660,8 @@ private final class MicrophoneFeed {
         // one escaping through this async frame poisons the concurrency
         // runtime (delayed SIGSEGV in MainActor.assumeIsolated). Catch and
         // convert to a thrown error the pill's recovery path already handles.
+        let dropped = OSAllocatedUnfairLock(initialState: 0)
+        droppedChunks = dropped
         var startError: Error?
         let raised = MSTDCatchException {
             input.removeTap(onBus: 0)
@@ -641,7 +670,11 @@ private final class MicrophoneFeed {
                 format: format
             ) { buffer, when in
                 guard let copy = buffer.deepCopy() else { return }
-                continuation.yield(AudioChunk(buffer: copy, time: when))
+                // The capped stream discards the oldest chunk in silence, so
+                // the yield result is the only evidence that audio was lost.
+                if case .dropped = continuation.yield(AudioChunk(buffer: copy, time: when)) {
+                    dropped.withLock { $0 += 1 }
+                }
             }
             engine.prepare()
             do { try engine.start() } catch { startError = error }
@@ -690,8 +723,10 @@ private final class MicrophoneFeed {
             throw CancellationError()
         }
         self.session = session
-        // How long the buffer actually had to cover. If this ever approaches
-        // `preRollCap` the cap is too small and words are being dropped again.
+        // How long the buffer had to cover before anything drained it. This
+        // measures the cold start only — it cannot see drops caused by the
+        // pump falling behind later in a capture; `reportDroppedChunks` is
+        // what catches those.
         let preRoll = Int(Date().timeIntervalSince(micLiveAt) * 1000)
         voiceLog.notice("feed: analyzer ready preRoll=\(preRoll, privacy: .public)ms")
 
@@ -716,11 +751,18 @@ private final class MicrophoneFeed {
     }
 
     func end() async throws -> [VoiceTranscriptSegment] {
+        // A hold shorter than the analyzer's cold start lands here while
+        // `begin` is still setting up. Waiting for it is what makes the
+        // pre-roll worth having: otherwise the session does not exist yet,
+        // this returns nothing, and every buffered word is thrown away.
+        _ = try? await startupTask?.value
+        startupTask = nil
         stopAudio()
         chunks?.finish()
         chunks = nil
         await pump?.value   // drain queued audio before finalizing
         pump = nil
+        reportDroppedChunks()
         guard let session else { return [] }
         self.session = nil
         return try await session.finish()
@@ -728,15 +770,35 @@ private final class MicrophoneFeed {
 
     func cancel() async {
         generation += 1
+        // Deliberately NOT awaited: a wedged startup must not be able to hang
+        // teardown, and the generation bump already makes it bail and release
+        // its own session. Dropping the handle keeps a stale one out of the
+        // next capture's `end`.
+        startupTask = nil
         stopAudio()
         chunks?.finish()
         chunks = nil
         pump?.cancel()
         pump = nil
+        reportDroppedChunks()
         if let session {
             self.session = nil
             await session.cancel()
         }
+    }
+
+    /// Surfaces pre-roll overflow, which is otherwise silent: `bufferingNewest`
+    /// discards the oldest chunk without telling anyone, so a capture that
+    /// outran the buffer would look identical to one that did not. If this ever
+    /// reports a non-zero count, `MicrophonePreRoll.maxBufferedChunks` is too
+    /// small or the pump is falling behind the tap.
+    private func reportDroppedChunks() {
+        guard let counter = droppedChunks else { return }
+        droppedChunks = nil
+        let dropped = counter.withLock { $0 }
+        guard dropped > 0 else { return }
+        voiceLog.error(
+            "feed: pre-roll overflow, \(dropped, privacy: .public) buffers dropped — audio was lost")
     }
 
     private func stopAudio() {
@@ -756,6 +818,7 @@ private final class MicrophoneFeed {
         stopAudio()
         chunks?.finish()
         chunks = nil
+        droppedChunks = nil   // a start that never ran cannot have dropped audio
         self.session = nil
         await session?.cancel()
     }

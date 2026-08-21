@@ -289,7 +289,19 @@ extension VoiceAssetReadiness {
                     return true
                 }
                 guard held.count < max(1, AssetInventory.maximumReservedLocales) else {
-                    return false
+                    // At the cap, and none of the slots is the locale we want:
+                    // these are our own stale reservations, left by a system
+                    // language change. Without releasing them the slot stays
+                    // pinned to a model nothing uses and the locale actually
+                    // being dictated in is never reserved again. Safe because
+                    // Mustard only ever reserves one locale — revisit if that
+                    // changes.
+                    for stale in held {
+                        _ = await AssetInventory.release(reservedLocale: stale)
+                        voiceLog.notice(
+                            "assets: released stale reservation \(stale.identifier, privacy: .public)")
+                    }
+                    return try await AssetInventory.reserve(locale: locale)
                 }
                 return try await AssetInventory.reserve(locale: locale)
             })
