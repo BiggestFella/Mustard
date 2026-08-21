@@ -238,6 +238,31 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
 
 ## Next — buildable, unblocked 🟢
 
+- [x] **F28 Dictation start-up latency** *(built 2026-08-21, branch
+      `claude/talkify-dictation-review-5n5d6b` — **NOT yet verified: the session that
+      wrote it had no Swift toolchain, so `swift test`/`swift build` have not run**).
+      From a review of `tornikegomareli/Talkify`, which uses the same Apple
+      SpeechAnalyzer engine but starts a hold faster.
+      - **The defect:** `MicrophoneFeed` started the analyzer first and installed the
+        mic tap last, so audio spoken between key-down and the tap going live was never
+        recorded. Tap now goes first, audio buffers into a capped `AsyncStream`
+        (`MicrophonePreRoll`), pump drains the backlog in order.
+      - **`DictationLatency`:** key-down → recognizer live, key-up → words in field,
+        logged per hold on a diagnostics clock kept separate from the decision clock.
+        Nobody could previously say whether dictation was slow by 200ms or 900ms.
+      - `AssetInventory.reserve` at launch (stop the OS evicting the speech model);
+        `.alternativeTranscriptions` dropped (nothing ever read the runner-ups).
+      - **Considered and rejected:** Talkify's warm analyzer per locale — holds the
+        model resident all day, and our three voice features would share one warm slot,
+        which is the sharing that already stranded a capture once. Revisit only if the
+        new numbers say the spin-up is genuinely slow. A persistently warm *audio
+        engine* is rejected outright: it pins the mic-in-use indicator on all day.
+- [ ] **F29 Read aloud** *(spec written 2026-08-21,
+      `docs/specs/2026-08-21-read-aloud-design.md` — awaiting Leon's approval; no code)*.
+      Chord reads the selection aloud anywhere via `AVSpeechSynthesizer`; karaoke
+      highlighting in Mustard's own editors only. Main risk is voice quality — Apple
+      does not expose Siri voices to third-party apps. Three open questions for Leon
+      at the foot of the spec.
 - [x] **F25 Voice capture** *(✅ BUILT — v1 capture shipped in PR #98; the v2
       claude-based cleanup queue and v3 routing were REPLACED 2026-07-29 by the
       Voice Suite's on-device drafting — see below. Automatic delegation from a
