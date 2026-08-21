@@ -108,8 +108,9 @@ final class VoiceAssetReadinessTests: XCTestCase {
 
     func test_reserve_resolvesTheLocaleBeforeReservingIt() async {
         let recorder = ReserveRecorder()
+        let supported = enUS   // en_AU resolves to en_US
         let readiness = VoiceAssetReadiness(
-            resolveLocale: { _ in self.enUS },   // en_AU resolves to en_US
+            resolveLocale: { _ in supported },
             installAssets: { _ in },
             reserveLocale: { locale in
                 await recorder.record(locale)

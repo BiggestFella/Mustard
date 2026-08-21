@@ -74,7 +74,8 @@ public struct VoiceAssetReadiness {
             return .unsupportedLocale
         }
         do {
-            return try await reserveLocale(supported) ? .reserved : .refused
+            let granted = try await reserveLocale(supported)
+            return granted ? .reserved : .refused
         } catch {
             return .failed(error.localizedDescription)
         }

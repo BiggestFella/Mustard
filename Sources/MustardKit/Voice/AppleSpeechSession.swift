@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreMedia
 import Speech
+import os
 
 /// SpeechAnalyzer-backed transcription session (Voice Core Task 4). The
 /// session owns all mapping decisions — provisional/final segments, timing,
@@ -278,13 +279,48 @@ extension VoiceAssetReadiness {
             },
             reserveLocale: { locale in
                 // Already ours — re-reserving would spend a second slot from a
-                // pool that is only guaranteed to hold one.
-                guard !AssetInventory.reservedLocales.contains(locale) else { return true }
-                guard AssetInventory.reservedLocales.count < max(1, AssetInventory.maximumReservedLocales) else {
+                // pool only guaranteed to hold one. Compared by identifier
+                // rather than `Locale` equality: the system's canonicalization
+                // of a reserved locale need not match the one we resolved.
+                let held = AssetInventory.reservedLocales
+                guard !held.contains(where: { $0.identifier == locale.identifier }) else {
+                    return true
+                }
+                guard held.count < max(1, AssetInventory.maximumReservedLocales) else {
                     return false
                 }
                 return try await AssetInventory.reserve(locale: locale)
             })
+    }
+
+    /// Launch-time asset reservation (Talkify review, item 3). Best-effort and
+    /// fire-and-forget: a refusal or failure is logged and otherwise ignored,
+    /// because an unreserved locale still transcribes — it is merely evictable,
+    /// which costs a silent re-download on some later first dictation.
+    ///
+    /// Lives here, at the macOS 26 asset layer, rather than beside the session
+    /// factory: reservation is about what is on disk, and it is worth doing on
+    /// a machine whose OS is too old to run the live analyzer at all.
+    ///
+    /// Call once per launch. Reserving is idempotent (the live closure checks
+    /// `reservedLocales` first), so a repeat call cannot burn a second slot.
+    @discardableResult
+    public static func reserveAssets(locale: Locale = .current) async -> Reservation {
+        let outcome = await live().reserve(locale: locale)
+        switch outcome {
+        case .reserved:
+            voiceLog.notice("assets: reserved \(locale.identifier, privacy: .public)")
+        case .refused:
+            voiceLog.notice(
+                "assets: reservation refused for \(locale.identifier, privacy: .public) — pool full; speech assets stay evictable")
+        case .unsupportedLocale:
+            voiceLog.notice(
+                "assets: no reservation, \(locale.identifier, privacy: .public) is unsupported by the recognizer")
+        case .failed(let reason):
+            voiceLog.error(
+                "assets: reservation failed for \(locale.identifier, privacy: .public): \(reason, privacy: .public)")
+        }
+        return outcome
     }
 }
 
@@ -427,32 +463,6 @@ extension AppleSpeechSession {
             driver: AppleSpeechAnalyzerDriver(locale: locale),
             readiness: { await liveReadiness(locale: locale) },
             prepare: { await assets.prepare(locale: locale) })
-    }
-
-    /// Launch-time asset reservation (Talkify review, item 3). Best-effort and
-    /// fire-and-forget: a refusal or failure is logged and otherwise ignored,
-    /// because an unreserved locale still transcribes — it is merely evictable,
-    /// which costs a silent re-download on some later first dictation.
-    ///
-    /// Call once per launch. Reserving is idempotent (the live closure checks
-    /// `reservedLocales` first), so a repeat call cannot burn a second slot.
-    @discardableResult
-    public static func reserveAssets(locale: Locale = .current) async -> VoiceAssetReadiness.Reservation {
-        let outcome = await VoiceAssetReadiness.live().reserve(locale: locale)
-        switch outcome {
-        case .reserved:
-            voiceLog.notice("assets: reserved \(locale.identifier, privacy: .public)")
-        case .refused:
-            voiceLog.notice(
-                "assets: reservation refused for \(locale.identifier, privacy: .public) — the pool is full; speech assets stay evictable")
-        case .unsupportedLocale:
-            voiceLog.notice(
-                "assets: no reservation, \(locale.identifier, privacy: .public) is unsupported by the recognizer")
-        case .failed(let reason):
-            voiceLog.error(
-                "assets: reservation failed for \(locale.identifier, privacy: .public): \(reason, privacy: .public)")
-        }
-        return outcome
     }
 
     /// Passive readiness: reports whether transcription could start now

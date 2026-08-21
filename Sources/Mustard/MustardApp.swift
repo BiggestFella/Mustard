@@ -336,7 +336,7 @@ struct MustardApp: App {
                         // reservation pool is shared and device-capped) and voice
                         // works either way, so launch never waits on it.
                         if #available(macOS 26.0, *) {
-                            Task.detached { await AppleSpeechSession.reserveAssets() }
+                            Task.detached { await VoiceAssetReadiness.reserveAssets() }
                         }
                     }
 

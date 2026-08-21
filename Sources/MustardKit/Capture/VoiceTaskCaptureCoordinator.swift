@@ -671,14 +671,22 @@ private final class MicrophoneFeed {
             stream = try await session.start(source: .microphone)
         } catch {
             // The analyzer never came up, so nothing will ever drain the
-            // buffer — the microphone must not be left hot.
-            await abandonFailedStart(session)
+            // buffer — the microphone must not be left hot. Unless the capture
+            // is no longer ours, in which case see the guard below.
+            if generation == mine {
+                await abandonFailedStart(session)
+            } else {
+                await session.cancel()
+            }
             throw error
         }
-        // A cancel that arrived during those awaits already ran its teardown,
-        // so finishing setup now would strand a live tap. Undo and bail.
+        // A cancel — or a whole new capture — arrived during those awaits. The
+        // engine, tap and continuation belong to whatever came next now (a
+        // plain cancel already tore them down; a new `begin` has replaced
+        // them), so tearing them down here would sabotage it. Release only
+        // this orphaned session and bail.
         guard generation == mine else {
-            await abandonFailedStart(session)
+            await session.cancel()
             throw CancellationError()
         }
         self.session = session
