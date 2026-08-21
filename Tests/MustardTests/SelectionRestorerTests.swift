@@ -6,6 +6,11 @@ import XCTest
 /// its selection while the card held key focus. Whether an app keeps its
 /// selection highlight after losing key-window status is app-specific; this
 /// removes the question from the correctness path entirely.
+///
+/// `@MainActor` because the restorer's AX seams are main-actor-isolated: an AX
+/// range write can be serviced in-process and reaches HIToolbox, which asserts
+/// the main queue.
+@MainActor
 final class SelectionRestorerTests: XCTestCase {
 
     private func target(range: NSRange?) -> FocusedTextTarget {

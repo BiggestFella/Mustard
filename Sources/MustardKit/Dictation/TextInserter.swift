@@ -15,31 +15,53 @@ public enum TextInsertionOutcome: Equatable, Sendable {
 /// the target PID → restore only while the clipboard still holds our write).
 /// Every edge is an injected closure; tests never touch AX, the pasteboard,
 /// or key events.
+///
+/// **Every seam is `@MainActor`, and so is `insert` — that is a crash fix, not
+/// tidiness.** All nine edges reach AppKit, the pasteboard, or Accessibility,
+/// and an AX write to a field inside *Mustard itself* is serviced in-process:
+/// `AXUIElementSetAttributeValue` → `NSTextView.replaceCharactersInRange` →
+/// `NSTextInputContext` → HIToolbox, which calls `dispatch_assert_queue(main)`
+/// and `SIGTRAP`s the whole app off the main thread. `insert` used to be a
+/// plain nonisolated `async` method, so Swift ran its body — and every
+/// *synchronous* seam it calls, whose inferred isolation is erased by a
+/// nonisolated function type — on a cooperative thread. Dictating into
+/// Mustard's own notes editor crashed it on 2026-08-21 for exactly that
+/// reason. Keep the isolation annotations: they are what makes the seams
+/// unrepresentable off the main actor.
+///
+/// The trade-off is deliberate: an AX call into a *hung* remote application now
+/// occupies the main thread until the AX messaging timeout instead of a
+/// cooperative one. Dispatching only in-process writes to the main actor would
+/// keep that off it, but "is this element ours?" is not knowable from the PID
+/// alone (an out-of-process write can still be serviced in-process through a
+/// helper), so the safe rule is the blunt one. `settle`'s 350 ms is an `await`,
+/// which suspends the main actor rather than blocking the main thread.
 public struct TextInserter {
-    public var stillFocused: (FocusedTextTarget) -> Bool
-    public var directInsert: (FocusedTextTarget, String) -> Bool
-    public var readPasteboard: () -> PasteboardSnapshot
-    public var writeTranscript: (String) -> Int
-    public var currentChangeCount: () -> Int
-    public var restorePasteboard: (PasteboardSnapshot) -> Void
-    public var sendPaste: (pid_t) -> Bool
-    /// Gives the target app time to process ⌘V before restoration.
-    public var settle: () async -> Void
+    public var stillFocused: @MainActor (FocusedTextTarget) -> Bool
+    public var directInsert: @MainActor (FocusedTextTarget, String) -> Bool
+    public var readPasteboard: @MainActor () -> PasteboardSnapshot
+    public var writeTranscript: @MainActor (String) -> Int
+    public var currentChangeCount: @MainActor () -> Int
+    public var restorePasteboard: @MainActor (PasteboardSnapshot) -> Void
+    public var sendPaste: @MainActor (pid_t) -> Bool
+    /// Gives the target app time to process ⌘V before restoration. Awaited on
+    /// the main actor, which suspends rather than blocks the main thread.
+    public var settle: @MainActor () async -> Void
     /// Delivery check: true = the text is present, false = readable and
     /// absent, nil = unreadable, so unknowable. The two insertion paths hold
     /// this to different bars — see `insert`.
-    public var verifyInserted: (FocusedTextTarget, String) -> Bool?
+    public var verifyInserted: @MainActor (FocusedTextTarget, String) -> Bool?
 
     public init(
-        stillFocused: @escaping (FocusedTextTarget) -> Bool,
-        directInsert: @escaping (FocusedTextTarget, String) -> Bool,
-        readPasteboard: @escaping () -> PasteboardSnapshot,
-        writeTranscript: @escaping (String) -> Int,
-        currentChangeCount: @escaping () -> Int,
-        restorePasteboard: @escaping (PasteboardSnapshot) -> Void,
-        sendPaste: @escaping (pid_t) -> Bool,
-        settle: @escaping () async -> Void,
-        verifyInserted: @escaping (FocusedTextTarget, String) -> Bool?
+        stillFocused: @escaping @MainActor (FocusedTextTarget) -> Bool,
+        directInsert: @escaping @MainActor (FocusedTextTarget, String) -> Bool,
+        readPasteboard: @escaping @MainActor () -> PasteboardSnapshot,
+        writeTranscript: @escaping @MainActor (String) -> Int,
+        currentChangeCount: @escaping @MainActor () -> Int,
+        restorePasteboard: @escaping @MainActor (PasteboardSnapshot) -> Void,
+        sendPaste: @escaping @MainActor (pid_t) -> Bool,
+        settle: @escaping @MainActor () async -> Void,
+        verifyInserted: @escaping @MainActor (FocusedTextTarget, String) -> Bool?
     ) {
         self.stillFocused = stillFocused
         self.directInsert = directInsert
@@ -52,6 +74,9 @@ public struct TextInserter {
         self.verifyInserted = verifyInserted
     }
 
+    /// `@MainActor` because the seams below are AppKit/AX calls; see the type's
+    /// note. A nonisolated `async` body here put them on a cooperative thread.
+    @MainActor
     public func insert(_ text: String, into target: FocusedTextTarget) async -> TextInsertionOutcome {
         guard !target.isSecure else {
             return .recoverable("This looks like a password field — dictation is never inserted there.")

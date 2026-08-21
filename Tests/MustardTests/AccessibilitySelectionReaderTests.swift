@@ -28,6 +28,29 @@ final class AccessibilitySelectionReaderTests: XCTestCase {
 
     final class CopyCounter: @unchecked Sendable { var calls = 0 }
 
+    /// Records seams that ran off the main thread.
+    final class ThreadJournal: @unchecked Sendable { var offMain: [String] = [] }
+
+    /// Regression for the 2026-08-21 SIGTRAP class: `read` was a nonisolated
+    /// `async` method, so its synchronous AX rungs ran on a cooperative thread
+    /// even when awaited from the main-actor coordinator. AX/NSPasteboard/
+    /// CGEvent work belongs on the main actor.
+    func test_everyRung_runsOnTheMainActor() async {
+        let journal = ThreadJournal()
+        func note(_ seam: String) {
+            if !Thread.isMainThread { journal.offMain.append(seam) }
+        }
+        let reader = AccessibilitySelectionReader(
+            readSelectedTextAttribute: { _ in note("rung1"); return nil },
+            readValueAttribute: { _ in note("rung2"); return nil },
+            copySelectionViaKeystroke: { _ in note("rung3"); return "copied" })
+
+        _ = await reader.read(target)
+
+        XCTAssertEqual(journal.offMain, [],
+                       "AX and pasteboard rungs must run on the main actor")
+    }
+
     func test_rungOne_wins_andNoKeystrokeIsSynthesized() async {
         let counter = CopyCounter()
         let reader = self.reader(axSelectedText: { "Hello there" }, copyCount: counter)

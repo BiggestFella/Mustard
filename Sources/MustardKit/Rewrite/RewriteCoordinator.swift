@@ -20,28 +20,33 @@ import Observation
 public final class RewriteCoordinator {
     public private(set) var phase: RewritePhase = .idle
 
-    private let snapshotFocus: () -> FocusedTextTarget?
-    private let focusedRole: () -> String?
-    private let hasAccessibility: () -> Bool
-    private let applicationName: (pid_t) -> String
+    // The OS-facing seams are `@MainActor`: they read/write Accessibility,
+    // NSPasteboard, and AppKit. An async seam without the annotation runs its
+    // body off the main actor even when called from here — that is what
+    // SIGTRAPed dictation on 2026-08-21 (see `TextInserter`), and `writeBack`
+    // is the very same inserter.
+    private let snapshotFocus: @MainActor () -> FocusedTextTarget?
+    private let focusedRole: @MainActor () -> String?
+    private let hasAccessibility: @MainActor () -> Bool
+    private let applicationName: @MainActor (pid_t) -> String
     private let maxWords: () -> Int
     private let bandInstructions: () -> String
-    private let readSelection: (FocusedTextTarget) async -> SelectionLadder.Resolution
+    private let readSelection: @MainActor (FocusedTextTarget) async -> SelectionLadder.Resolution
     private let generate: (String, RewriteIntent) async throws -> RewriteDraft
-    private let reassertSelection: (FocusedTextTarget) -> SelectionRestorer.Outcome
-    private let writeBack: (String, FocusedTextTarget) async -> TextInsertionOutcome
+    private let reassertSelection: @MainActor (FocusedTextTarget) -> SelectionRestorer.Outcome
+    private let writeBack: @MainActor (String, FocusedTextTarget) async -> TextInsertionOutcome
 
     public init(
-        snapshotFocus: @escaping () -> FocusedTextTarget?,
-        focusedRole: @escaping () -> String?,
-        hasAccessibility: @escaping () -> Bool,
-        applicationName: @escaping (pid_t) -> String,
+        snapshotFocus: @escaping @MainActor () -> FocusedTextTarget?,
+        focusedRole: @escaping @MainActor () -> String?,
+        hasAccessibility: @escaping @MainActor () -> Bool,
+        applicationName: @escaping @MainActor (pid_t) -> String,
         maxWords: @escaping () -> Int,
         bandInstructions: @escaping () -> String,
-        readSelection: @escaping (FocusedTextTarget) async -> SelectionLadder.Resolution,
+        readSelection: @escaping @MainActor (FocusedTextTarget) async -> SelectionLadder.Resolution,
         generate: @escaping (String, RewriteIntent) async throws -> RewriteDraft,
-        reassertSelection: @escaping (FocusedTextTarget) -> SelectionRestorer.Outcome,
-        writeBack: @escaping (String, FocusedTextTarget) async -> TextInsertionOutcome
+        reassertSelection: @escaping @MainActor (FocusedTextTarget) -> SelectionRestorer.Outcome,
+        writeBack: @escaping @MainActor (String, FocusedTextTarget) async -> TextInsertionOutcome
     ) {
         self.snapshotFocus = snapshotFocus
         self.focusedRole = focusedRole

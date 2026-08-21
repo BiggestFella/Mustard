@@ -8,27 +8,34 @@ import Foundation
 /// passive reads, and rung 3 posts ⌘C key events into someone else's
 /// application. Rung 3 is therefore last, and `RewriteGate.admits` must have
 /// already refused secure fields before this runs at all.
+///
+/// `read` and every rung are `@MainActor`: they are AX reads, `NSPasteboard`
+/// access, and synthesized `CGEvent`s. As a nonisolated `async` method `read`
+/// ran its *synchronous* rungs on a cooperative thread even when called from
+/// the main-actor coordinator — the same defect that crashed dictation on
+/// 2026-08-21 (see `TextInserter`).
 public struct AccessibilitySelectionReader {
     /// Rung 1 — `kAXSelectedTextAttribute`. nil means unreadable.
-    public var readSelectedTextAttribute: (FocusedTextTarget) -> String?
+    public var readSelectedTextAttribute: @MainActor (FocusedTextTarget) -> String?
     /// Rung 2 — `kAXValueAttribute`, to be sliced by the target's range.
-    public var readValueAttribute: (FocusedTextTarget) -> String?
+    public var readValueAttribute: @MainActor (FocusedTextTarget) -> String?
     /// Rung 3 — synthesize ⌘C, read the pasteboard, restore it. nil means
     /// the application did not service the copy. Async because the real one has
     /// to wait for the target to service the keystroke, and blocking the main
     /// thread for that settle would freeze the pill mid-rewrite.
-    public var copySelectionViaKeystroke: (FocusedTextTarget) async -> String?
+    public var copySelectionViaKeystroke: @MainActor (FocusedTextTarget) async -> String?
 
     public init(
-        readSelectedTextAttribute: @escaping (FocusedTextTarget) -> String?,
-        readValueAttribute: @escaping (FocusedTextTarget) -> String?,
-        copySelectionViaKeystroke: @escaping (FocusedTextTarget) async -> String?
+        readSelectedTextAttribute: @escaping @MainActor (FocusedTextTarget) -> String?,
+        readValueAttribute: @escaping @MainActor (FocusedTextTarget) -> String?,
+        copySelectionViaKeystroke: @escaping @MainActor (FocusedTextTarget) async -> String?
     ) {
         self.readSelectedTextAttribute = readSelectedTextAttribute
         self.readValueAttribute = readValueAttribute
         self.copySelectionViaKeystroke = copySelectionViaKeystroke
     }
 
+    @MainActor
     public func read(_ target: FocusedTextTarget) async -> SelectionLadder.Resolution {
         var attempts: [(SelectionRung, SelectionRead)] = []
 
@@ -44,6 +51,7 @@ public struct AccessibilitySelectionReader {
 
     /// Rung 2 needs BOTH a readable value and a known range — a withheld range
     /// cannot be sliced, so that case is unreadable and falls through.
+    @MainActor
     private func rungTwo(_ target: FocusedTextTarget) -> SelectionRead {
         guard let value = readValueAttribute(target),
               let range = target.selectedRange,

@@ -21,6 +21,7 @@ final class TextInserterTests: XCTestCase {
     }
 
     /// Everything succeeds by default; tests flip one seam at a time.
+    @MainActor
     private final class Harness {
         var stillFocused = true
         var directInsertSucceeds = true
@@ -32,6 +33,17 @@ final class TextInserterTests: XCTestCase {
         /// entry repeats for any further calls.
         var verifyResults: [Bool?] = [true]
         var externalBumpAfterWrite = false
+
+        /// Names of seams that ran somewhere other than the main thread.
+        /// AppKit/AX/HIToolbox is main-thread-only: `AXUIElementSetAttributeValue`
+        /// on one of Mustard's OWN fields re-enters NSTextView in-process and
+        /// HIToolbox's `dispatch_assert_queue(main)` kills the app (2026-08-21
+        /// crash). Every seam is checked, not just the one that crashed.
+        var offMainSeams: [String] = []
+
+        private func requireMain(_ seam: String) {
+            if !Thread.isMainThread { offMainSeams.append(seam) }
+        }
 
         var verifyCallCount = 0
         var directInsertReceived: (FocusedTextTarget, String)?
@@ -46,27 +58,43 @@ final class TextInserterTests: XCTestCase {
 
         var inserter: TextInserter {
             TextInserter(
-                stillFocused: { _ in self.stillFocused },
+                stillFocused: { _ in
+                    self.requireMain("stillFocused")
+                    return self.stillFocused
+                },
                 directInsert: { target, text in
+                    self.requireMain("directInsert")
                     self.directInsertReceived = (target, text)
                     return self.directInsertSucceeds
                 },
-                readPasteboard: { self.snapshot },
+                readPasteboard: {
+                    self.requireMain("readPasteboard")
+                    return self.snapshot
+                },
                 writeTranscript: { text in
+                    self.requireMain("writeTranscript")
                     self.wroteTranscript = text
                     self.currentCount += 1
                     let writeCount = self.currentCount
                     if self.externalBumpAfterWrite { self.currentCount += 1 }
                     return writeCount
                 },
-                currentChangeCount: { self.currentCount },
-                restorePasteboard: { self.restored = $0 },
+                currentChangeCount: {
+                    self.requireMain("currentChangeCount")
+                    return self.currentCount
+                },
+                restorePasteboard: {
+                    self.requireMain("restorePasteboard")
+                    self.restored = $0
+                },
                 sendPaste: { pid in
+                    self.requireMain("sendPaste")
                     self.pastedToPID = pid
                     return self.pasteSucceeds
                 },
-                settle: {},
+                settle: { self.requireMain("settle") },
                 verifyInserted: { _, _ in
+                    self.requireMain("verifyInserted")
                     defer { self.verifyCallCount += 1 }
                     return self.verifyResults[
                         min(self.verifyCallCount, self.verifyResults.count - 1)]
@@ -198,6 +226,33 @@ final class TextInserterTests: XCTestCase {
             return XCTFail("expected recoverable, got \(outcome)")
         }
         XCTAssertEqual(harness.restored, harness.snapshot, "the clipboard still restores")
+    }
+
+    // MARK: - Main-thread isolation (the 2026-08-21 SIGTRAP)
+
+    /// Regression, dictating into one of Mustard's OWN text fields: the AX
+    /// write is serviced in-process, re-entering NSTextView →
+    /// NSTextInputContext → HIToolbox, whose `dispatch_assert_queue(main)`
+    /// traps. `insert` used to be a nonisolated `async` method, so Swift ran
+    /// its body — and every synchronous seam it calls — on a cooperative
+    /// thread instead of the main actor. Every seam touches AppKit or AX, so
+    /// every seam is asserted, not just `directInsert`.
+    func test_pasteFallbackPath_runsEverySeamOnTheMainActor() async {
+        let harness = Harness()
+        harness.directInsertSucceeds = false   // walk the whole ladder
+
+        _ = await harness.inserter.insert("hello", into: target())
+
+        XCTAssertEqual(harness.offMainSeams, [],
+                       "AppKit/AX seams must run on the main actor: HIToolbox traps otherwise")
+    }
+
+    func test_directInsertPath_runsEverySeamOnTheMainActor() async {
+        let harness = Harness()
+
+        _ = await harness.inserter.insert("hello", into: target())
+
+        XCTAssertEqual(harness.offMainSeams, [])
     }
 
     // MARK: - Refusals (fail closed)

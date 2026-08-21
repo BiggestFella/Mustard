@@ -4,6 +4,14 @@ import Foundation
 /// written back. Only a genuine focus change blocks the write — a withheld or
 /// unsettable range is reported (so the matrix records it) but still proceeds,
 /// because ⌘V over the live selection remains correct in those apps.
+///
+/// Both seams are `@MainActor` for the same reason as `TextInserter`'s: setting
+/// `kAXSelectedTextRangeAttribute` on a field inside Mustard itself is serviced
+/// in-process and reaches `NSTextView.setSelectedRanges` →
+/// `NSTextInputContext.invalidateCharacterCoordinates` → HIToolbox's
+/// `dispatch_assert_queue(main)`. Today `reassert` happens to be called
+/// synchronously from a main-actor coordinator; the annotation is what keeps
+/// that true if an `async` hop is ever added between them.
 public struct SelectionRestorer {
     public enum Outcome: Equatable, Sendable {
         /// The range was set successfully.
@@ -18,17 +26,18 @@ public struct SelectionRestorer {
         public var permitsWrite: Bool { self != .focusChanged }
     }
 
-    public var stillFocused: (FocusedTextTarget) -> Bool
-    public var setSelectedRange: (FocusedTextTarget, NSRange) -> Bool
+    public var stillFocused: @MainActor (FocusedTextTarget) -> Bool
+    public var setSelectedRange: @MainActor (FocusedTextTarget, NSRange) -> Bool
 
     public init(
-        stillFocused: @escaping (FocusedTextTarget) -> Bool,
-        setSelectedRange: @escaping (FocusedTextTarget, NSRange) -> Bool
+        stillFocused: @escaping @MainActor (FocusedTextTarget) -> Bool,
+        setSelectedRange: @escaping @MainActor (FocusedTextTarget, NSRange) -> Bool
     ) {
         self.stillFocused = stillFocused
         self.setSelectedRange = setSelectedRange
     }
 
+    @MainActor
     public func reassert(on target: FocusedTextTarget) -> Outcome {
         guard stillFocused(target) else { return .focusChanged }
         guard let range = target.selectedRange else { return .noRangeToReassert }
