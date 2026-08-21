@@ -275,6 +275,15 @@ extension VoiceAssetReadiness {
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                     try await request.downloadAndInstall()
                 }
+            },
+            reserveLocale: { locale in
+                // Already ours — re-reserving would spend a second slot from a
+                // pool that is only guaranteed to hold one.
+                guard !AssetInventory.reservedLocales.contains(locale) else { return true }
+                guard AssetInventory.reservedLocales.count < max(1, AssetInventory.maximumReservedLocales) else {
+                    return false
+                }
+                return try await AssetInventory.reserve(locale: locale)
             })
     }
 }
@@ -282,8 +291,8 @@ extension VoiceAssetReadiness {
 // MARK: - Live driver (macOS 27)
 
 /// The production `SpeechAnalyzerDriving`: one `SpeechAnalyzer` with a
-/// `SpeechTranscriber` (volatile results + alternatives, time/confidence
-/// attributes) and a `SpeechDetector`, fed `AnalyzerInput` through a single
+/// `SpeechTranscriber` (volatile + fast results, time/confidence attributes)
+/// and a `SpeechDetector`, fed `AnalyzerInput` through a single
 /// `AsyncStream` after `AnalyzerInputResampler` resamples the caller's PCM
 /// buffers to the analyzer's preferred format.
 ///
@@ -317,7 +326,14 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
             // With it, volatile updates arrive roughly every second while audio
             // keeps arriving. Verified against a file-fed harness on macOS 27:
             // results at 1.2s/2.1s/3.1s of a 4s feed, versus nothing until 6.1s.
-            reportingOptions: [.volatileResults, .alternativeTranscriptions, .fastResults],
+            //
+            // `.alternativeTranscriptions` was here and is deliberately NOT:
+            // nothing in Mustard ever read the runner-up hypotheses. They were
+            // discarded at the `SpeechAnalysisResult` boundary — which does not
+            // even carry them — so the recognizer was producing them for the
+            // bin. Re-add it only alongside a consumer (a "did you mean"
+            // correction affordance would be the obvious one).
+            reportingOptions: [.volatileResults, .fastResults],
             attributeOptions: [.audioTimeRange, .transcriptionConfidence])
         let detector = SpeechDetector()
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(
@@ -411,6 +427,32 @@ extension AppleSpeechSession {
             driver: AppleSpeechAnalyzerDriver(locale: locale),
             readiness: { await liveReadiness(locale: locale) },
             prepare: { await assets.prepare(locale: locale) })
+    }
+
+    /// Launch-time asset reservation (Talkify review, item 3). Best-effort and
+    /// fire-and-forget: a refusal or failure is logged and otherwise ignored,
+    /// because an unreserved locale still transcribes — it is merely evictable,
+    /// which costs a silent re-download on some later first dictation.
+    ///
+    /// Call once per launch. Reserving is idempotent (the live closure checks
+    /// `reservedLocales` first), so a repeat call cannot burn a second slot.
+    @discardableResult
+    public static func reserveAssets(locale: Locale = .current) async -> VoiceAssetReadiness.Reservation {
+        let outcome = await VoiceAssetReadiness.live().reserve(locale: locale)
+        switch outcome {
+        case .reserved:
+            voiceLog.notice("assets: reserved \(locale.identifier, privacy: .public)")
+        case .refused:
+            voiceLog.notice(
+                "assets: reservation refused for \(locale.identifier, privacy: .public) — the pool is full; speech assets stay evictable")
+        case .unsupportedLocale:
+            voiceLog.notice(
+                "assets: no reservation, \(locale.identifier, privacy: .public) is unsupported by the recognizer")
+        case .failed(let reason):
+            voiceLog.error(
+                "assets: reservation failed for \(locale.identifier, privacy: .public): \(reason, privacy: .public)")
+        }
+        return outcome
     }
 
     /// Passive readiness: reports whether transcription could start now

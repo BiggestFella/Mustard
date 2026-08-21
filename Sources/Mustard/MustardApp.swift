@@ -330,6 +330,14 @@ struct MustardApp: App {
                             clipStore: services.store)
                         coordinator.activate()
                         dictation = coordinator
+
+                        // Ask macOS to keep this locale's speech assets on disk.
+                        // Best-effort and detached: a refusal is normal (the
+                        // reservation pool is shared and device-capped) and voice
+                        // works either way, so launch never waits on it.
+                        if #available(macOS 26.0, *) {
+                            Task.detached { await AppleSpeechSession.reserveAssets() }
+                        }
                     }
 
                     // Route saved global chords into the owning coordinator's

@@ -94,4 +94,88 @@ final class VoiceAssetReadinessTests: XCTestCase {
 
         XCTAssertEqual(result, .unavailable("Asset installation cancelled"))
     }
+
+    // MARK: - Reservation (Talkify review, item 3)
+
+    /// macOS may evict on-device speech assets to reclaim disk. Reserving the
+    /// locale asks it not to, which is the difference between a fast next
+    /// dictation and one that silently re-downloads a model first.
+
+    private actor ReserveRecorder {
+        private(set) var locales: [Locale] = []
+        func record(_ locale: Locale) { locales.append(locale) }
+    }
+
+    func test_reserve_resolvesTheLocaleBeforeReservingIt() async {
+        let recorder = ReserveRecorder()
+        let readiness = VoiceAssetReadiness(
+            resolveLocale: { _ in self.enUS },   // en_AU resolves to en_US
+            installAssets: { _ in },
+            reserveLocale: { locale in
+                await recorder.record(locale)
+                return true
+            })
+
+        let result = await readiness.reserve(locale: enAU)
+
+        XCTAssertEqual(result, .reserved)
+        let reserved = await recorder.locales
+        XCTAssertEqual(
+            reserved, [enUS],
+            "the supported equivalent must be reserved, not the raw request")
+    }
+
+    func test_reserve_reportsUnsupportedWithoutCallingTheReservation() async {
+        let recorder = ReserveRecorder()
+        let readiness = VoiceAssetReadiness(
+            resolveLocale: { _ in nil },
+            installAssets: { _ in },
+            reserveLocale: { locale in
+                await recorder.record(locale)
+                return true
+            })
+
+        let result = await readiness.reserve(locale: enAU)
+
+        XCTAssertEqual(result, .unsupportedLocale)
+        let reserved = await recorder.locales
+        XCTAssertTrue(reserved.isEmpty)
+    }
+
+    /// The reservation pool is shared across apps and device-capped. Being
+    /// refused a slot is normal and must never be treated as a failure —
+    /// dictation still works, it is just evictable.
+    func test_reserve_reportsRefusalWhenTheSystemDeclines() async {
+        let readiness = VoiceAssetReadiness(
+            resolveLocale: { locale in locale },
+            installAssets: { _ in },
+            reserveLocale: { _ in false })
+
+        let result = await readiness.reserve(locale: enAU)
+
+        XCTAssertEqual(result, .refused)
+    }
+
+    func test_reserve_surfacesAThrownReservationAsFailedWithItsReason() async {
+        let readiness = VoiceAssetReadiness(
+            resolveLocale: { locale in locale },
+            installAssets: { _ in },
+            reserveLocale: { _ in throw StubError.downloadFailed })
+
+        let result = await readiness.reserve(locale: enAU)
+
+        XCTAssertEqual(result, .failed(StubError.downloadFailed.localizedDescription))
+    }
+
+    /// Callers that predate reservation keep compiling and reserve nothing,
+    /// rather than silently claiming a slot they never asked for.
+    func test_reserve_defaultsToRefusedWhenNoReservationClosureIsSupplied() async {
+        let readiness = VoiceAssetReadiness(
+            resolveLocale: { locale in locale },
+            installAssets: { _ in })
+
+        let result = await readiness.reserve(locale: enAU)
+
+        XCTAssertEqual(result, .refused)
+    }
 }
