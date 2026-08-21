@@ -282,7 +282,9 @@ extension VoiceAssetReadiness {
                 // pool only guaranteed to hold one. Compared by identifier
                 // rather than `Locale` equality: the system's canonicalization
                 // of a reserved locale need not match the one we resolved.
-                let held = AssetInventory.reservedLocales
+                // `reservedLocales` is an async property, unlike the
+                // synchronous `maximumReservedLocales` beside it.
+                let held = await AssetInventory.reservedLocales
                 guard !held.contains(where: { $0.identifier == locale.identifier }) else {
                     return true
                 }
