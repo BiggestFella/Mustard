@@ -568,6 +568,13 @@ private final class MicrophoneFeed {
     private var session: (any VoiceTranscribing)?
     private var pump: Task<Void, Never>?
     private var chunks: AsyncStream<AudioChunk>.Continuation?
+    /// The in-flight `startCapture`, so a release that beats the analyzer's
+    /// cold start can wait for it instead of finding a half-built feed.
+    private var startupTask: Task<AsyncThrowingStream<VoiceTranscriptSegment, Error>, Error>?
+    /// Buffers the tap produced that the capped stream refused. Written from
+    /// the audio thread, so it is lock-guarded — and the lock is taken only on
+    /// the drop path, which is the pathological case, never the normal one.
+    private var droppedChunks: OSAllocatedUnfairLock<Int>?
     /// Bumped by every begin and every cancel. `begin` is async, so a cancel
     /// can land mid-setup; without this the teardown runs BEFORE the tap is
     /// installed and the microphone is left running with nothing owning it
@@ -592,20 +599,42 @@ private final class MicrophoneFeed {
         generation += 1
         let mine = generation
 
-        let session = try makeSession()
-        // BAK-334: computed once for this capture, applied before the
-        // session starts. A biasing failure never blocks capture.
-        try? await session.setContext(lexicon())
-        let stream = try await session.start(source: .microphone)
-        // A cancel that arrived during that await already ran its teardown,
-        // so finishing setup now would strand a live tap. Undo and bail.
-        guard generation == mine else {
-            await session.cancel()
-            throw CancellationError()
-        }
-        self.session = session
+        // Startup runs as a task the rest of the feed can await, because a
+        // hold shorter than the analyzer's cold start releases while this is
+        // still in flight. Without the handle, `end()` finds a nil session,
+        // returns nothing, and discards the buffered pre-roll — the very
+        // words this pre-roll exists to save — while the session that lands
+        // a moment later is never finished. See `end()`.
+        let startup = Task { try await self.startCapture(generation: mine) }
+        startupTask = startup
+        return try await startup.value
+    }
 
-        let (buffers, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
+    private func startCapture(
+        generation mine: Int
+    ) async throws -> AsyncThrowingStream<VoiceTranscriptSegment, Error> {
+        // Running as a task adds a suspension point between `begin` scheduling
+        // this and the body starting, and a quick tap releases inside it — so a
+        // cancel can already have happened. Check before touching hardware,
+        // rather than opening the microphone for a capture that is over.
+        guard generation == mine else { throw CancellationError() }
+
+        // Constructed first because it is the one cheap, synchronous step that
+        // can refuse outright (dictation throws `.notReady` below macOS 27).
+        // Discovering that AFTER opening the microphone would flick the
+        // mic-in-use indicator on for a capture that was never going to run.
+        let session = try makeSession()
+
+        // ORDER IS LOAD-BEARING from here: the microphone goes live BEFORE the
+        // analyzer is started, and audio spoken in between is buffered rather
+        // than lost. Previously the session was started first and the tap was
+        // installed last, so everything said between key-down and the tap going
+        // live was never recorded at all — not late, gone. The buffer is capped
+        // (`MicrophonePreRoll`) so a wedged analyzer start drops the oldest
+        // audio instead of growing without bound.
+        let (buffers, continuation) = AsyncStream.makeStream(
+            of: AudioChunk.self,
+            bufferingPolicy: .bufferingNewest(MicrophonePreRoll.maxBufferedChunks))
         chunks = continuation
         let engine = AVAudioEngine()
         self.engine = engine
@@ -617,19 +646,28 @@ private final class MicrophoneFeed {
         // pill says so instead of recording nothing.
         guard format.sampleRate > 0, format.channelCount > 0,
               format.sampleRate == input.inputFormat(forBus: 0).sampleRate else {
-            await abandonFailedStart(session)
+            await abandonFailedStart()
             throw VoiceSessionError.audioFormatUnavailable
         }
         // AVFAudio signals misconfiguration by raising ObjC exceptions, and
         // one escaping through this async frame poisons the concurrency
         // runtime (delayed SIGSEGV in MainActor.assumeIsolated). Catch and
         // convert to a thrown error the pill's recovery path already handles.
+        let dropped = OSAllocatedUnfairLock(initialState: 0)
+        droppedChunks = dropped
         var startError: Error?
         let raised = MSTDCatchException {
             input.removeTap(onBus: 0)
-            input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, when in
+            input.installTap(
+                onBus: 0, bufferSize: AVAudioFrameCount(MicrophonePreRoll.tapFrameCount),
+                format: format
+            ) { buffer, when in
                 guard let copy = buffer.deepCopy() else { return }
-                continuation.yield(AudioChunk(buffer: copy, time: when))
+                // The capped stream discards the oldest chunk in silence, so
+                // the yield result is the only evidence that audio was lost.
+                if case .dropped = continuation.yield(AudioChunk(buffer: copy, time: when)) {
+                    dropped.withLock { $0 += 1 }
+                }
             }
             engine.prepare()
             do { try engine.start() } catch { startError = error }
@@ -637,15 +675,56 @@ private final class MicrophoneFeed {
         if let raised {
             voiceLog.error(
                 "feed: audio engine raised \(raised.name.rawValue, privacy: .public): \(raised.reason ?? "no reason", privacy: .public)")
-            await abandonFailedStart(session)
+            await abandonFailedStart()
             throw VoiceSessionError.audioEngineFailure(raised.reason ?? raised.name.rawValue)
         }
         if let startError {
-            await abandonFailedStart(session)
+            await abandonFailedStart()
             throw startError
         }
+        // From here on the user's words are being captured. Everything below
+        // happens while audio accumulates in `buffers`.
+        let micLiveAt = Date()
+        let preRollCap = Int(MicrophonePreRoll.bufferedSeconds(sampleRate: format.sampleRate) * 1000)
         voiceLog.notice(
-            "feed: tap installed rate=\(format.sampleRate, privacy: .public) ch=\(format.channelCount, privacy: .public)")
+            "feed: tap installed rate=\(format.sampleRate, privacy: .public) ch=\(format.channelCount, privacy: .public) preRollCap=\(preRollCap, privacy: .public)ms")
+
+        // BAK-334: computed once for this capture, applied before the session
+        // starts. A biasing failure never blocks capture.
+        try? await session.setContext(lexicon())
+        let stream: AsyncThrowingStream<VoiceTranscriptSegment, Error>
+        do {
+            stream = try await session.start(source: .microphone)
+        } catch {
+            // The analyzer never came up, so nothing will ever drain the
+            // buffer — the microphone must not be left hot. Unless the capture
+            // is no longer ours, in which case see the guard below.
+            if generation == mine {
+                await abandonFailedStart(session)
+            } else {
+                await session.cancel()
+            }
+            throw error
+        }
+        // A cancel — or a whole new capture — arrived during those awaits. The
+        // engine, tap and continuation belong to whatever came next now (a
+        // plain cancel already tore them down; a new `begin` has replaced
+        // them), so tearing them down here would sabotage it. Release only
+        // this orphaned session and bail.
+        guard generation == mine else {
+            await session.cancel()
+            throw CancellationError()
+        }
+        self.session = session
+        // How long the buffer had to cover before anything drained it. This
+        // measures the cold start only — it cannot see drops caused by the
+        // pump falling behind later in a capture; `reportDroppedChunks` is
+        // what catches those.
+        let preRoll = Int(Date().timeIntervalSince(micLiveAt) * 1000)
+        voiceLog.notice("feed: analyzer ready preRoll=\(preRoll, privacy: .public)ms")
+
+        // Drains the pre-roll backlog first (in arrival order — analyzer input
+        // must stay ordered), then keeps pace with live audio.
         pump = Task {
             var appended = 0
             for await chunk in buffers {
@@ -665,11 +744,18 @@ private final class MicrophoneFeed {
     }
 
     func end() async throws -> [VoiceTranscriptSegment] {
+        // A hold shorter than the analyzer's cold start lands here while
+        // `begin` is still setting up. Waiting for it is what makes the
+        // pre-roll worth having: otherwise the session does not exist yet,
+        // this returns nothing, and every buffered word is thrown away.
+        _ = try? await startupTask?.value
+        startupTask = nil
         stopAudio()
         chunks?.finish()
         chunks = nil
         await pump?.value   // drain queued audio before finalizing
         pump = nil
+        reportDroppedChunks()
         guard let session else { return [] }
         self.session = nil
         return try await session.finish()
@@ -677,15 +763,35 @@ private final class MicrophoneFeed {
 
     func cancel() async {
         generation += 1
+        // Deliberately NOT awaited: a wedged startup must not be able to hang
+        // teardown, and the generation bump already makes it bail and release
+        // its own session. Dropping the handle keeps a stale one out of the
+        // next capture's `end`.
+        startupTask = nil
         stopAudio()
         chunks?.finish()
         chunks = nil
         pump?.cancel()
         pump = nil
+        reportDroppedChunks()
         if let session {
             self.session = nil
             await session.cancel()
         }
+    }
+
+    /// Surfaces pre-roll overflow, which is otherwise silent: `bufferingNewest`
+    /// discards the oldest chunk without telling anyone, so a capture that
+    /// outran the buffer would look identical to one that did not. If this ever
+    /// reports a non-zero count, `MicrophonePreRoll.maxBufferedChunks` is too
+    /// small or the pump is falling behind the tap.
+    private func reportDroppedChunks() {
+        guard let counter = droppedChunks else { return }
+        droppedChunks = nil
+        let dropped = counter.withLock { $0 }
+        guard dropped > 0 else { return }
+        voiceLog.error(
+            "feed: pre-roll overflow, \(dropped, privacy: .public) buffers dropped — audio was lost")
     }
 
     private func stopAudio() {
@@ -697,12 +803,17 @@ private final class MicrophoneFeed {
 
     /// Undo a partially-started capture: the mic must never stay hot and the
     /// analyzer session must not dangle behind a thrown `begin`.
-    private func abandonFailedStart(_ session: any VoiceTranscribing) async {
+    ///
+    /// `session` is optional because the microphone now opens before the
+    /// analyzer is started — the early failure paths (bad format, engine
+    /// refusal) have a live tap to tear down but no started session yet.
+    private func abandonFailedStart(_ session: (any VoiceTranscribing)? = nil) async {
         stopAudio()
         chunks?.finish()
         chunks = nil
+        droppedChunks = nil   // a start that never ran cannot have dropped audio
         self.session = nil
-        await session.cancel()
+        await session?.cancel()
     }
 }
 

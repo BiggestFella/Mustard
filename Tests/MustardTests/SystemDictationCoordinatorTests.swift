@@ -71,9 +71,17 @@ final class SystemDictationCoordinatorTests: XCTestCase {
 
         func makeCoordinator(
             clock: Clock,
-            registration: HotKeyRegistration = .registered
+            registration: HotKeyRegistration = .registered,
+            latencyClock: Clock? = nil
         ) -> SystemDictationCoordinator {
-            SystemDictationCoordinator(
+            // Independent of `clock` by default: latency marks must never
+            // consume a test's scripted instants, or measuring dictation would
+            // change how dictation behaves. Only tests that assert timings
+            // script this, and they script it separately.
+            let latencySource: () -> Date = latencyClock.map { pinned in
+                { pinned.next() }
+            } ?? { Date() }
+            return SystemDictationCoordinator(
                 snapshotFocus: {
                     self.events.append("snapshot")
                     return try self.snapshotResult.get()
@@ -109,7 +117,8 @@ final class SystemDictationCoordinatorTests: XCTestCase {
                 onFinalTranscript: { self.offeredTranscripts.append($0) },
                 pill: .none(),
                 finalizeTimeout: 0.05,
-                now: { clock.next() })
+                now: { clock.next() },
+                latencyNow: latencySource)
         }
     }
 
@@ -446,6 +455,92 @@ final class SystemDictationCoordinatorTests: XCTestCase {
             harness.offeredTranscripts, ["hello world"],
             "the words as spoken reach history exactly once — not the target-specific normalization")
         XCTAssertEqual(harness.insertedText, " hello world")
+    }
+
+    // MARK: - Latency marks (Talkify review, item 5)
+
+    /// The measurement exists to answer "is dictation slow because of 200ms or
+    /// 900ms". These pin that the marks land on the right events, on a clock of
+    /// their own — the hold-duration decision must stay driven by `now`.
+
+    func test_latency_recordsStartupAndFinishAcrossAHold() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello", final: true)]
+        let coordinator = harness.makeCoordinator(
+            clock: Clock([t0, t0.addingTimeInterval(2)]),
+            // press, listening, release, inserted
+            latencyClock: Clock([
+                t0,
+                t0.addingTimeInterval(0.25),
+                t0.addingTimeInterval(2),
+                t0.addingTimeInterval(2.4),
+            ]))
+
+        await dictate(coordinator, harness: harness)
+
+        XCTAssertEqual(coordinator.phase, .inserted)
+        XCTAssertEqual(coordinator.latency.startupMilliseconds, 250)
+        XCTAssertEqual(coordinator.latency.heldMilliseconds, 2_000)
+        XCTAssertEqual(coordinator.latency.finishMilliseconds, 400)
+    }
+
+    /// A hold that ends in recovery still reports what it cost to start — that
+    /// is exactly the case worth investigating.
+    func test_latency_recordsStartup_evenWhenNothingIsInserted() async {
+        let harness = Harness(target: target())
+        harness.finals = []   // nothing heard
+        let coordinator = harness.makeCoordinator(
+            clock: Clock([t0, t0.addingTimeInterval(2)]),
+            latencyClock: Clock([t0, t0.addingTimeInterval(0.31), t0.addingTimeInterval(2)]))
+
+        await dictate(coordinator, harness: harness)
+
+        XCTAssertEqual(coordinator.latency.startupMilliseconds, 310)
+        XCTAssertNil(coordinator.latency.finishMilliseconds, "nothing was inserted")
+    }
+
+    /// A second hold measures itself, never the previous one.
+    func test_latency_resetsOnEachPress() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello", final: true)]
+        let coordinator = harness.makeCoordinator(
+            // Both holds must read as 2s on the decision clock, or the second
+            // one would be swallowed as an accidental tap.
+            clock: Clock([
+                t0, t0.addingTimeInterval(2),
+                t0.addingTimeInterval(10), t0.addingTimeInterval(12),
+            ]),
+            latencyClock: Clock([
+                t0, t0.addingTimeInterval(0.25),
+                t0.addingTimeInterval(2), t0.addingTimeInterval(2.4),
+                // second hold
+                t0.addingTimeInterval(10), t0.addingTimeInterval(10.1),
+                t0.addingTimeInterval(12), t0.addingTimeInterval(12.2),
+            ]))
+
+        await dictate(coordinator, harness: harness)
+        await dictate(coordinator, harness: harness)
+
+        XCTAssertEqual(coordinator.latency.startupMilliseconds, 100)
+        XCTAssertEqual(coordinator.latency.finishMilliseconds, 200)
+    }
+
+    /// The decision clock drives whether a hold commits; the diagnostics clock
+    /// must not touch it. If measurement consumed `now`, this hold would read
+    /// as a different duration than the one the test scripted.
+    func test_latency_doesNotConsumeTheDecisionClock() async {
+        let harness = Harness(target: target())
+        harness.finals = [seg("a", "hello", final: true)]
+        // Exactly two decision instants: press, then a release 2s later. Any
+        // extra `now()` call would shift the release and break the hold check.
+        let coordinator = harness.makeCoordinator(
+            clock: Clock([t0, t0.addingTimeInterval(2)]),
+            latencyClock: Clock([t0, t0.addingTimeInterval(0.2)]))
+
+        await dictate(coordinator, harness: harness)
+
+        XCTAssertEqual(coordinator.phase, .inserted, "the 2s hold still commits")
+        XCTAssertEqual(harness.insertedText, " hello")
     }
 
     func test_secureFieldTranscript_isNeverOffered() async {

@@ -71,6 +71,10 @@ public final class SystemDictationCoordinator {
     public private(set) var hotKeyRegistration: HotKeyRegistration?
     /// The finalized words whenever insertion could not happen — never lost.
     public private(set) var recoveredTranscript: String?
+    /// Where the current (or most recent) hold spent its time. Read by tests;
+    /// logged at the end of every hold so real-hardware behaviour can be
+    /// measured without a rebuild. See `DictationLatency`.
+    public private(set) var latency = DictationLatency()
 
     private(set) var activationTask: Task<Void, Never>?
     private(set) var finalizeTask: Task<Void, Never>?
@@ -86,6 +90,14 @@ public final class SystemDictationCoordinator {
     /// Hard ceiling on waiting for the recognizer's final answer.
     private let finalizeTimeout: TimeInterval
     private let now: () -> Date
+    /// Diagnostics clock, deliberately separate from `now`.
+    ///
+    /// `now` drives a decision — whether a hold was long enough to commit — and
+    /// tests pin it to exact scripted instants. Reading it to timestamp a
+    /// measurement would advance those scripts and change the behaviour being
+    /// measured. Measuring must never perturb what it measures, so the marks
+    /// read this instead; tests that assert timings inject it.
+    private let latencyNow: () -> Date
 
     private var authorized = false
     /// Hold generation: bumped on every new hold (and retry), captured by
@@ -107,7 +119,8 @@ public final class SystemDictationCoordinator {
         onFinalTranscript: (@MainActor (String) -> Void)? = nil,
         pill: PillPresentation,
         finalizeTimeout: TimeInterval = 4,
-        now: @escaping () -> Date = { .now }
+        now: @escaping () -> Date = { .now },
+        latencyNow: @escaping () -> Date = { .now }
     ) {
         self.snapshotFocus = snapshotFocus
         self.speech = speech
@@ -117,6 +130,7 @@ public final class SystemDictationCoordinator {
         self.pill = pill
         self.finalizeTimeout = finalizeTimeout
         self.now = now
+        self.latencyNow = latencyNow
     }
 
     /// Claim the dictation chord (a conflict is surfaced, never silent) and
@@ -170,6 +184,7 @@ public final class SystemDictationCoordinator {
 
         target = snapshot
         pressedAt = now()
+        latency.markPressed(latencyNow())
         segmentsByID = [:]
         liveTranscript = ""
         recoveredTranscript = nil
@@ -180,6 +195,11 @@ public final class SystemDictationCoordinator {
             guard let self else { return }
             do {
                 let stream = try await self.speech.begin()
+                // The recognizer is up and the microphone has been live since
+                // partway through `begin` — audio from before this point is
+                // buffered, not lost (`MicrophonePreRoll`). This mark is what
+                // tells us how long that buffer had to cover.
+                if self.holdEpoch == epoch { self.latency.markListening(self.latencyNow()) }
                 for try await segment in stream {
                     guard self.holdEpoch == epoch else { return }
                     self.record(segment)
@@ -191,6 +211,9 @@ public final class SystemDictationCoordinator {
                 await self.speech.cancel()
                 guard self.holdEpoch == epoch else { return }
                 self.pressedAt = nil
+                // A hold that died mid-flight is the one most worth timing —
+                // a failed cold start shows up here, not on the happy path.
+                self.logLatency()
                 let stable = VoiceCapture.transcript(
                     from: self.segmentsByID.values.filter(\.isFinal))
                 self.recover(
@@ -205,6 +228,7 @@ public final class SystemDictationCoordinator {
         // Stamp the release before awaiting finalization — recognizer latency
         // must not count toward the minimum hold.
         let releasedAt = now()
+        latency.markReleased(latencyNow())
         self.pressedAt = nil
         let epoch = holdEpoch
         if releasedAt.timeIntervalSince(pressedAt) < VoiceCapture.minimumHold {
@@ -212,6 +236,9 @@ public final class SystemDictationCoordinator {
                 await self?.speech.cancel()   // an accidental tap
                 guard let self, self.holdEpoch == epoch else { return }
                 self.consumeTask?.cancel()
+                // Timed too: a tap that felt deliberate but fell under the
+                // minimum is worth being able to see in the log.
+                self.logLatency()
                 self.pill.hide()
                 self.phase = .idle
             }
@@ -224,6 +251,7 @@ public final class SystemDictationCoordinator {
             let transcript = VoiceCapture.transcript(from: finals)
             voiceLog.notice("dictation: finals=\(finals.count, privacy: .public) chars=\(transcript.count, privacy: .public)")
             guard !transcript.isEmpty else {
+                self.logLatency()
                 return self.recover(transcript: nil, reason: "Nothing was heard — the field is untouched.")
             }
             self.phase = .inserting
@@ -264,9 +292,12 @@ public final class SystemDictationCoordinator {
             guard self.holdEpoch == epoch else { return }
             switch outcome {
             case .insertedDirectly, .insertedByPaste:
+                self.latency.markInserted(self.latencyNow())
+                self.logLatency()
                 self.phase = .inserted
                 self.scheduleIdle(after: 1.2)
             case .recoverable(let reason):
+                self.logLatency()
                 self.recover(transcript: transcript, reason: reason)
             }
         }
@@ -367,6 +398,17 @@ public final class SystemDictationCoordinator {
         phase = refusal
         pill.show(self)
         scheduleIdle(after: 2.5)
+    }
+
+    /// Emits the hold's timings once, however the hold ended — inserted,
+    /// recovered, failed mid-flight, or released under the minimum. Two
+    /// numbers matter: `startup` (key-down → recognizer live, the window the
+    /// pre-roll buffer has to cover) and `finish` (key-up → words in the
+    /// field). Holds refused before the press was accepted have no marks and
+    /// log nothing. Never logs transcript content — only durations.
+    private func logLatency() {
+        guard let summary = latency.summary else { return }
+        voiceLog.notice("dictation: latency \(summary, privacy: .public)")
     }
 
     private func recover(transcript: String?, reason: String) {

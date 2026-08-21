@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreMedia
 import Speech
+import os
 
 /// SpeechAnalyzer-backed transcription session (Voice Core Task 4). The
 /// session owns all mapping decisions — provisional/final segments, timing,
@@ -275,15 +276,73 @@ extension VoiceAssetReadiness {
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                     try await request.downloadAndInstall()
                 }
+            },
+            reserveLocale: { locale in
+                // Already ours — re-reserving would spend a second slot from a
+                // pool only guaranteed to hold one. Compared by identifier
+                // rather than `Locale` equality: the system's canonicalization
+                // of a reserved locale need not match the one we resolved.
+                // `reservedLocales` is an async property, unlike the
+                // synchronous `maximumReservedLocales` beside it.
+                let held = await AssetInventory.reservedLocales
+                guard !held.contains(where: { $0.identifier == locale.identifier }) else {
+                    return true
+                }
+                guard held.count < max(1, AssetInventory.maximumReservedLocales) else {
+                    // At the cap, and none of the slots is the locale we want:
+                    // these are our own stale reservations, left by a system
+                    // language change. Without releasing them the slot stays
+                    // pinned to a model nothing uses and the locale actually
+                    // being dictated in is never reserved again. Safe because
+                    // Mustard only ever reserves one locale — revisit if that
+                    // changes.
+                    for stale in held {
+                        _ = await AssetInventory.release(reservedLocale: stale)
+                        voiceLog.notice(
+                            "assets: released stale reservation \(stale.identifier, privacy: .public)")
+                    }
+                    return try await AssetInventory.reserve(locale: locale)
+                }
+                return try await AssetInventory.reserve(locale: locale)
             })
+    }
+
+    /// Launch-time asset reservation (Talkify review, item 3). Best-effort and
+    /// fire-and-forget: a refusal or failure is logged and otherwise ignored,
+    /// because an unreserved locale still transcribes — it is merely evictable,
+    /// which costs a silent re-download on some later first dictation.
+    ///
+    /// Lives here, at the macOS 26 asset layer, rather than beside the session
+    /// factory: reservation is about what is on disk, and it is worth doing on
+    /// a machine whose OS is too old to run the live analyzer at all.
+    ///
+    /// Call once per launch. Reserving is idempotent (the live closure checks
+    /// `reservedLocales` first), so a repeat call cannot burn a second slot.
+    @discardableResult
+    public static func reserveAssets(locale: Locale = .current) async -> Reservation {
+        let outcome = await live().reserve(locale: locale)
+        switch outcome {
+        case .reserved:
+            voiceLog.notice("assets: reserved \(locale.identifier, privacy: .public)")
+        case .refused:
+            voiceLog.notice(
+                "assets: reservation refused for \(locale.identifier, privacy: .public) — pool full; speech assets stay evictable")
+        case .unsupportedLocale:
+            voiceLog.notice(
+                "assets: no reservation, \(locale.identifier, privacy: .public) is unsupported by the recognizer")
+        case .failed(let reason):
+            voiceLog.error(
+                "assets: reservation failed for \(locale.identifier, privacy: .public): \(reason, privacy: .public)")
+        }
+        return outcome
     }
 }
 
 // MARK: - Live driver (macOS 27)
 
 /// The production `SpeechAnalyzerDriving`: one `SpeechAnalyzer` with a
-/// `SpeechTranscriber` (volatile results + alternatives, time/confidence
-/// attributes) and a `SpeechDetector`, fed `AnalyzerInput` through a single
+/// `SpeechTranscriber` (volatile + fast results, time/confidence attributes)
+/// and a `SpeechDetector`, fed `AnalyzerInput` through a single
 /// `AsyncStream` after `AnalyzerInputResampler` resamples the caller's PCM
 /// buffers to the analyzer's preferred format.
 ///
@@ -317,7 +376,14 @@ public actor AppleSpeechAnalyzerDriver: SpeechAnalyzerDriving {
             // With it, volatile updates arrive roughly every second while audio
             // keeps arriving. Verified against a file-fed harness on macOS 27:
             // results at 1.2s/2.1s/3.1s of a 4s feed, versus nothing until 6.1s.
-            reportingOptions: [.volatileResults, .alternativeTranscriptions, .fastResults],
+            //
+            // `.alternativeTranscriptions` was here and is deliberately NOT:
+            // nothing in Mustard ever read the runner-up hypotheses. They were
+            // discarded at the `SpeechAnalysisResult` boundary — which does not
+            // even carry them — so the recognizer was producing them for the
+            // bin. Re-add it only alongside a consumer (a "did you mean"
+            // correction affordance would be the obvious one).
+            reportingOptions: [.volatileResults, .fastResults],
             attributeOptions: [.audioTimeRange, .transcriptionConfidence])
         let detector = SpeechDetector()
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(
