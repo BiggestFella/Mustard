@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// Row density (BAK-245). `condensed` is the default detail-card row; `tighter`
-/// shrinks the title and vertical padding so a full day fits without scrolling.
+/// shrinks the title and vertical padding so a full day (or a Week column) fits.
 public enum TaskRowDensity {
     case condensed, tighter
-    var titleSize: CGFloat { self == .condensed ? 15.5 : 13.5 }
-    var vPadding: CGFloat { self == .condensed ? 8 : 5 }
-    var rowSpacing: CGFloat { self == .condensed ? 5 : 3 }
+    public var titleSize: CGFloat { self == .condensed ? 15.5 : 13.5 }
+    public var vPadding: CGFloat { self == .condensed ? 8 : 5 }
+    public var rowSpacing: CGFloat { self == .condensed ? 5 : 3 }
 }
 
 /// HIGH / URGENT flag — the exact pill the board card uses (BAK-79), shown inline
@@ -39,8 +39,8 @@ public struct PriorityFlag: View {
 }
 
 /// A small, calm meta pill: an optional SF Symbol + label on the shared muted chip
-/// background (the tag-pill look from the board card). The single chip primitive the
-/// condensed row is built from, so due / estimate / area / subtask chips all match.
+/// background (the tag-pill look from the board card and BAK-244 glance chips).
+/// The single chip primitive the condensed row is built from.
 public struct MetaChip: View {
     let systemImage: String?
     let text: String
@@ -75,72 +75,46 @@ public struct TaskChipRow: View {
     let task: MustardTask
     public init(task: MustardTask) { self.task = task }
 
-    private var isDone: Bool { task.stage == .done }
-
-    /// Short agent-stage label — mirrors the board's DelegationBadge wording.
-    private static func agentStage(_ task: MustardTask) -> String? {
-        guard task.owner == .agent, task.stage != .done else { return nil }
-        switch task.stage {
-        case .forAgent: return "For agent"
-        case .needsApproval: return "Approve"
-        case .queued: return "Queued"
-        case .inProgress: return "Working…"
-        case .needsInput: return "Needs you"
-        case .needsReview: return "Review"
-        default: return "Agent"
-        }
-    }
-
     /// Whether the task has any chip to show — lets a row skip the strip entirely so a
     /// bare task (untimed, default estimate, no area/subtasks) adds no empty gap.
     public static func hasChips(_ task: MustardTask) -> Bool {
-        task.isBlocked
-            || (task.isTimed && task.scheduledAt != nil)
-            || task.dueAt != nil
-            || task.estimateMinutes != 30
-            || task.list?.area != nil
-            || agentStage(task) != nil
-            || task.subtaskProgress.total > 0
+        TaskRowPresentation.hasChips(for: task)
     }
 
     public var body: some View {
-        let progress = task.subtaskProgress
-        let overdueDue = task.dueAt.map { $0 < .now && !isDone } ?? false
         FlowMeta(spacing: 6) {
-            if task.isBlocked {
-                MetaChip(systemImage: "exclamationmark.triangle", "Blocked", tint: Theme.Palette.warnText)
+            ForEach(Array(TaskRowPresentation.chips(for: task).enumerated()), id: \.offset) { _, chip in
+                chipView(chip)
             }
-            // Time — only when anchored to a specific time (untimed "planned for the
-            // day" tasks carry a start-of-day date that would read as 12:00 AM).
-            if task.isTimed, let when = task.scheduledAt {
-                MetaChip(systemImage: "clock", when.formatted(date: .omitted, time: .shortened))
+        }
+    }
+
+    @ViewBuilder private func chipView(_ chip: TaskRowChip) -> some View {
+        switch chip {
+        case .blocked:
+            MetaChip(systemImage: "exclamationmark.triangle", "Blocked", tint: Theme.Palette.warnText)
+        case .time(let text):
+            MetaChip(systemImage: "clock", text)
+        case .due(let text, let overdue):
+            MetaChip(systemImage: "calendar", text,
+                     tint: overdue ? Theme.Palette.warnText : Theme.Palette.textSecondary)
+        case .estimate(let minutes):
+            MetaChip(systemImage: "timer", "\(minutes)m")
+        case .area(let name, let colorHex):
+            HStack(spacing: 4) {
+                Circle().fill(Color(hex: colorHex)).frame(width: 6, height: 6)
+                Text(name)
             }
-            if let due = task.dueAt {
-                MetaChip(systemImage: "calendar",
-                         "Due \(due.formatted(.dateTime.month(.abbreviated).day()))",
-                         tint: overdueDue ? Theme.Palette.warnText : Theme.Palette.textSecondary)
-            }
-            if task.estimateMinutes != 30 {
-                MetaChip(systemImage: "timer", "\(task.estimateMinutes)m")
-            }
-            if let area = task.list?.area {
-                HStack(spacing: 4) {
-                    Circle().fill(Color(hex: area.colorHex)).frame(width: 6, height: 6)
-                    Text(area.name)
-                }
-                .font(Theme.Fonts.label)
-                .foregroundStyle(Theme.Palette.textSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1.5)
-                .background(Theme.Palette.statusMutedBg, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.Palette.hairline, lineWidth: 0.5))
-            }
-            if let agentStage = Self.agentStage(task) {
-                MetaChip("✦ \(agentStage)", tint: Theme.Palette.agentText)
-            }
-            if progress.total > 0 {
-                MetaChip(systemImage: "checklist", "\(progress.done)/\(progress.total)")
-            }
+            .font(Theme.Fonts.label)
+            .foregroundStyle(Theme.Palette.textSecondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1.5)
+            .background(Theme.Palette.statusMutedBg, in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.Palette.hairline, lineWidth: 0.5))
+        case .agentStage(let label):
+            MetaChip("✦ \(label)", tint: Theme.Palette.agentText)
+        case .subtasks(let done, let total):
+            MetaChip(systemImage: "checklist", "\(done)/\(total)")
         }
     }
 }

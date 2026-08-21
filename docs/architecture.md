@@ -140,9 +140,9 @@ claude call and no automatic delegation from a voice task.
 | Surface | File | Behaviour |
 |---------|------|-----------|
 | Main window | `RootView` | calm sidebar → Today · Board · Week · Notes · Agent; ⌘K command bar overlay |
-| Today | `TodayView` + `TimelineSpineView` | scheduled timeline (tasks **and** calendar events), capture, complete, carry-forward, tap → detail |
+| Today | `TodayView` + `TimelineSpineView` | scheduled timeline (tasks **and** calendar events), capture, complete, carry-forward, tap → detail. Task items are the shared condensed `TimelineRow` (time is a chip, no gutter); events stay on the spine |
 | Board | `BoardView` | Kanban by stage, drag-drop, per-column add, tap → detail |
-| Week | `WeekView` | Mon–Sun grid + unscheduled rail, drag to (un)schedule, meetings interleaved |
+| Week | `WeekView` | Mon–Sun grid + unscheduled rail, drag to (un)schedule, meetings interleaved. Day-list tasks reuse `TimelineRow` (tighter density) |
 | Notes | `NotesView` + `NoteEditorView` | vault-backed Craft editor, wikilinks, backlinks |
 | Agent | `AgentConsoleView` | source picker, Sweep, Trust menu, recommendation detail, gate attention, single-key triage |
 | Settings | `SettingsHome` | sources, calendar connect, rebindable hotkeys |

@@ -156,63 +156,57 @@ struct MobileWeekView: View {
     }
 
     private func meetingRow(_ event: CalendarEvent) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "calendar").font(.caption2).foregroundStyle(.secondary)
-            Text(event.isAllDay ? "All day" : event.start.formatted(date: .omitted, time: .shortened))
-                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Text(event.title).font(.subheadline).lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(10)
-        .background(Theme.Palette.statusMutedBg, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// A scheduled task on the selected day. Tap opens the sheet; the completion
-    /// toggle and context menu stay independently tappable (card is not a Button).
-    private func dayCard(_ task: MustardTask) -> some View {
-        let done = task.stage == .done
-        return HStack(alignment: .top, spacing: 10) {
-            Button {
-                if done { task.stage = .planned; task.completedAt = nil }
-                else { TaskCompletion.complete(task, in: context) }
-            } label: {
-                Image(systemName: done ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(done ? Theme.Palette.done
-                                     : (task.owner == .agent ? Theme.Palette.agent : .secondary))
-            }.buttonStyle(.plain)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(task.title).strikethrough(done).foregroundStyle(done ? .secondary : .primary)
-                HStack(spacing: 8) {
-                    if task.isTimed, let when = task.scheduledAt {
-                        Text(when.formatted(date: .omitted, time: .shortened))
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(task.owner == .agent ? Theme.Palette.agentText : accent)
-                    }
-                    if task.owner == .agent {
-                        Text("✦ Agent").font(.caption2).foregroundStyle(Theme.Palette.agentText)
-                    }
-                    if let area = task.list?.area {
-                        HStack(spacing: 4) {
-                            Circle().fill(Color(hex: area.colorHex)).frame(width: 6, height: 6)
-                            Text(area.name)
-                        }.font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Text("\(task.estimateMinutes)m").font(.caption2).foregroundStyle(.tertiary)
-                }
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "calendar")
+                .font(Theme.Fonts.caption)
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .padding(.top, 4)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(event.title)
+                    .font(.system(size: TaskRowDensity.tighter.titleSize, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(2)
+                MetaChip(
+                    systemImage: "clock",
+                    TaskRowPresentation.eventTimeLabel(
+                        isAllDay: event.isAllDay,
+                        start: event.start,
+                        calendar: cal
+                    )
+                )
             }
             Spacer(minLength: 0)
         }
-        .padding(11)
-        .background(Theme.Palette.bg, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.Palette.hairline, lineWidth: 0.5))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onTapGesture { selected = task }
+        .padding(.vertical, TaskRowDensity.tighter.vPadding)
+        .padding(.horizontal, 8)
+    }
+
+    /// A scheduled task on the selected day — the same condensed TimelineRow as
+    /// desktop Week / Today (BAK-245). Dense list, no card-per-task.
+    private func dayCard(_ task: MustardTask) -> some View {
+        TimelineRow(
+            task: task,
+            density: .tighter,
+            showsDelegateMenu: false,
+            titleLineLimit: 2,
+            onToggleDone: {
+                if task.stage == .done {
+                    task.stage = .planned
+                    task.completedAt = nil
+                } else {
+                    TaskCompletion.complete(task, in: context)
+                }
+            },
+            onOpen: { selected = task }
+        )
         .contextMenu {
             Button("Open detail") { selected = task }
             Button("Unschedule") { task.scheduledAt = nil; task.isTimed = false }
-            if done { Button("Reopen") { task.stage = .planned; task.completedAt = nil } }
-            else { Button("Complete") { TaskCompletion.complete(task, in: context) } }
+            if task.stage == .done {
+                Button("Reopen") { task.stage = .planned; task.completedAt = nil }
+            } else {
+                Button("Complete") { TaskCompletion.complete(task, in: context) }
+            }
         }
     }
 
