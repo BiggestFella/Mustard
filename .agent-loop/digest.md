@@ -1005,3 +1005,42 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #123 opened and merged, remote branch
   deleted. No release, no remote data deletion, no secrets.
 - **Revert:** `git revert 2d4ae6b`
+
+## 2026-08-21 — meeting-task triage: existence, not execution (PR #143)
+
+- **What:** a ledger-harvested meeting task was born `owner: .agent` at
+  `.needsApproval`, so `PersonalBoard.approveTarget` sent it to `.queued` and
+  `AgentTaskCoordinator` executed it — "Do" on a meeting card meant *go do this now*,
+  and there was no outcome that simply accepted the item onto Leon's own list. (The
+  ledger line records `owner: [[Leon Creed-Baker]]`; the importer parsed it for the
+  notes footer and assigned `.agent` anyway.) Meeting tasks now import as `.me`,
+  keeping one lands it in `.planned` and nothing runs, and delegation returns to the
+  separate `Hand to ✦ agent` step.
+- **Also:** `AgentInbox.gate(for:)` is now the single source of truth for a gate's verb
+  pair — read by the console row, task sheet, board card and both iOS surfaces. One
+  reject call had worn three labels (`Don't`, `Deny`, and a trash-iconed `Delete task`
+  beside `Deny`), and the icon lied: a meeting task is marked
+  `<!-- mustard:ignored -->` in its ledger, never deleted. The console row also
+  discarded `MeetingTaskSync.reject`'s `false` return, so a failed reject read as a
+  dead button; it now says why.
+- **Found while implementing:** delegating a *kept* meeting task would have been
+  broken — `AgentTaskQueue.nextRunnable` skips ledger work without
+  `agentApprovalGranted`, and the importer's legacy rehold would drag it back to the
+  gate. `delegate()` now grants approval for ledger tasks: a manual hand-off *is* the
+  human decision. Without this the new flow had no working path to the agent.
+- **Legacy rows:** untriaged ones adopt `.me` on the next hourly import — narrowly,
+  only `.needsApproval` rows never granted approval, so anything already approved,
+  running, in review or done keeps its lane. Self-limiting.
+- **Risk:** low/medium — behaviour change on one gate, no outward surface, no schema
+  change; the migration is narrow and idempotent (three boundary tests).
+- **Checks:** `swift test` exit 0 — **2049 tests, 3 skipped, 0 failures** (baseline
+  2048 at branch); `swift build` exit 0; `./build-ios.sh` exit 0; CI pass on the
+  mustard runner (both the macOS and iOS Simulator jobs).
+- **⚠ Leon eye-check OUTSTANDING** (asked in chat, three items): (1) console
+  `IN FLIGHT · NEEDS YOU` meeting rows read **Keep / Delete** with submeta "from a
+  meeting · is this a real task?"; (2) the opened task's footer has exactly two
+  buttons — no `I'll do it`, no trash `Delete task` beside Delete; (3) Keep lands the
+  task in the planned lane and the agent does **not** start.
+- **Outward actions:** branch pushed, PR #143 opened and merged, remote branch
+  deleted. No release, no remote data deletion, no secrets.
+- **Revert:** `git revert a713940`
