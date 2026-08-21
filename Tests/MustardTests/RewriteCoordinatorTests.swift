@@ -49,6 +49,48 @@ final class RewriteCoordinatorTests: XCTestCase {
             writeBack: { _, _ in journal.events.append("write"); return write })
     }
 
+    // MARK: - Main-thread isolation (the 2026-08-21 SIGTRAP)
+
+    /// The rewrite write-back is dictation's `TextInserter`, so ⌃⌥R shares the
+    /// crash: an AX write serviced in-process re-enters NSTextView and trips
+    /// HIToolbox's `dispatch_assert_queue(main)`. Every OS-facing seam of the
+    /// coordinator — snapshot, read, re-assert, write — must therefore run on
+    /// the main actor.
+    ///
+    /// Honest scope: with the seam types now `@MainActor` the compiler inserts
+    /// the hop, so this cannot fail today; the runtime bite is in the callees
+    /// (`TextInserterTests` / `AccessibilitySelectionReaderTests`, both of
+    /// which DO fail without the fix). It stays as a guard for the plausible
+    /// next mistake — making `accept()`/`invoke()` nonisolated, which would put
+    /// the synchronous seams back on a cooperative thread.
+    func test_everyOSFacingSeam_runsOnTheMainActor() async {
+        let offMain = Journal()
+        func note(_ seam: String) {
+            if !Thread.isMainThread { offMain.events.append(seam) }
+        }
+        let sut = RewriteCoordinator(
+            snapshotFocus: { note("snapshot"); return self.target() },
+            focusedRole: { note("role"); return "AXTextArea" },
+            hasAccessibility: { note("accessibility"); return true },
+            applicationName: { _ in note("applicationName"); return "Mail" },
+            maxWords: { 1024 },
+            bandInstructions: { "BAND" },
+            readSelection: { _ in
+                note("read")
+                return SelectionLadder.Resolution(read: .text("hedged sentence"), rung: .axSelectedText)
+            },
+            generate: { _, _ in RewriteDraft(rewritten: "Tight sentence", changeNote: "cut") },
+            reassertSelection: { _ in note("reassert"); return .reasserted },
+            writeBack: { _, _ in note("write"); return .insertedDirectly })
+
+        await sut.invoke(intent: .tighten)
+        await sut.accept()
+
+        XCTAssertEqual(sut.phase, .idle)
+        XCTAssertEqual(offMain.events, [],
+                       "AX/AppKit seams must run on the main actor: HIToolbox traps otherwise")
+    }
+
     // MARK: - Ordering
 
     func test_invoke_gatesBeforeReading_soASecureFieldIsNeverRead() async {

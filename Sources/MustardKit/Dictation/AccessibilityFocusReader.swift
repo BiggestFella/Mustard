@@ -54,6 +54,15 @@ public enum FocusReadError: Error, Equatable, Sendable {
 /// BAK-288): snapshots the focused text element and revalidates that a prior
 /// snapshot still owns focus before anything is inserted. All AX access goes
 /// through the injected `probe` closure, so every decision here is pure.
+///
+/// Deliberately NOT `@MainActor` — the mapping below is pure and compiles for
+/// iOS, where there is no AX probe at all. The isolation guarantee lives at
+/// the callers instead, and all of them are main-actor typed: dictation's
+/// `SystemDictationCoordinator.snapshotFocus`, `RewriteCoordinator`'s
+/// `snapshotFocus`, and every `TextInserter` seam. Keep it that way — the
+/// live `probe` below is a real AX call, and an AX read/write reaching one of
+/// Mustard's own text views off the main thread trips HIToolbox's
+/// `dispatch_assert_queue(main)` (the 2026-08-21 crash; see `TextInserter`).
 public struct AccessibilityFocusReader: FocusedTextReading {
     private let isTrusted: () -> Bool
     private let probe: () throws -> AXFocusProbe?
