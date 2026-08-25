@@ -1,6 +1,22 @@
 # Deep-review — PR #150 Gmail inbox (high-risk)
 
-**Verdict: HELD (panel not unanimous).** 2 of 3 lenses blocked. Merge held; fixes in-run.
+**Round 1 verdict: HELD (panel not unanimous).** 2 of 3 lenses blocked. Fixes applied in-run
+(hardening commits c28e420..6d125f6, plan `docs/superpowers/plans/2026-08-25-gmail-inbox-hardening.md`).
+
+**Round 2 verdict: PANEL CLEAR.** Opus re-review confirmed all four blockers (S1–S3, C1) closed and
+the six H5 defense-in-depth items correct with no regression. Full suite 2170 tests / 0 failures,
+`swift build` 0, `./build-ios.sh` 0. Cleared to merge — with the one host-empirical check below left
+to Leon before first activation (the feature ships disabled).
+
+**Leon, before you enable Gmail polling:** verify the triage tool-restriction actually holds on your
+machine's `claude` CLI given its `bypassPermissions` default — run `claude -p "run: echo hi"
+--permission-mode default --disallowedTools Bash --strict-mcp-config --mcp-config '{}'` and confirm it
+reports no Bash tool available. Code can't guarantee precedence over a personal-settings bypass default;
+that check is the last mile.
+
+---
+_Round 1 detail below._
+
 
 ## Panel
 
