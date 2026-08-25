@@ -191,7 +191,10 @@ public enum ClaudeRunner {
             "--allowedTools", "Read,Grep,Glob",
             "--disallowedTools", "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task",
             "--strict-mcp-config",
-            "--mcp-config", "{}",
+            // Must be a full config object: a bare `{}` fails validation
+            // ("mcpServers: expected record, received undefined") and the CLI exits
+            // before running, which would fail every poll rather than secure it.
+            "--mcp-config", #"{"mcpServers":{}}"#,
         ]
     }
 
