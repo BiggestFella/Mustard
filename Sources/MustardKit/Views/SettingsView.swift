@@ -22,6 +22,7 @@ public struct SettingsView: View {
 
                 AgentSettingsSection()
                 CalendarSettingsView()
+                GmailSettingsView()
                 voiceSection
                 HotKeySettingsSection()
             }
