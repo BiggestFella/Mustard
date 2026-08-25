@@ -9,6 +9,7 @@ private final class MustardAppScheduler {
     private let taskAgent: AgentTaskCoordinator
     private let noteIndex: NoteIndexService
     private let calendar: GoogleCalendarService
+    private let gmail: GmailService
     private var schedulerTask: Task<Void, Never>?
     private var lastInbox = Date.distantPast
     private var lastMeetingImportAt: Date?
@@ -20,12 +21,14 @@ private final class MustardAppScheduler {
         agent: AgentService,
         taskAgent: AgentTaskCoordinator,
         noteIndex: NoteIndexService,
-        calendar: GoogleCalendarService
+        calendar: GoogleCalendarService,
+        gmail: GmailService
     ) {
         self.agent = agent
         self.taskAgent = taskAgent
         self.noteIndex = noteIndex
         self.calendar = calendar
+        self.gmail = gmail
     }
 
     func startIfNeeded() {
@@ -38,6 +41,7 @@ private final class MustardAppScheduler {
         // launch. This is a single fetch + filter, no files, and self-limiting.
         agent.adoptMeetingTaskOwnership()
         calendar.bootstrap()
+        gmail.bootstrap()
         schedulerTask = Task { [weak self] in
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { [weak self] in
@@ -70,6 +74,12 @@ private final class MustardAppScheduler {
             let settings = SourceSettingsStore.loadOrMigrate()
             let updated = await agent.sweepDueSources(settings, now: now)
             SourceSettingsStore.save(updated)
+            let gmailSettings = GmailSettingsStore.load()
+            if gmailSettings.enabled, gmail.state == .connected,
+               GmailSettings.isDue(lastPolledAt: gmail.lastPolled,
+                                   intervalMinutes: gmailSettings.pollIntervalMinutes, now: now) {
+                await gmail.poll(projects: GmailTriage.routes(from: updated))
+            }
             if Date.now.timeIntervalSince(lastInbox) >= 600 {
                 for source in updated.sources where source.enabled && !source.workingDirectory.isEmpty {
                     await agent.ingestInbox(workingDirectory: source.workingDirectory)
@@ -138,6 +148,7 @@ struct MustardApp: App {
     @State private var taskAgent: AgentTaskCoordinator
     @State private var noteIndex: NoteIndexService
     @State private var calendar: GoogleCalendarService
+    @State private var gmail: GmailService
     @State private var scheduler: MustardAppScheduler
     @State private var hoverPanel: HoverPanel?
     @State private var notch: NotchController?
@@ -168,17 +179,35 @@ struct MustardApp: App {
             eventsClient: GoogleEventsClient(),
             store: keychain,
             context: container.mainContext)
+        let gmailKeychain = KeychainTokenStore(service: GmailService.keychainService)
+        let gmail = GmailService(
+            authSession: GoogleAuthSession(
+                makeServer: { LoopbackRedirectServer() },
+                tokenClient: GoogleTokenClient(),
+                store: gmailKeychain,
+                openURL: { NSWorkspace.shared.open($0) },
+                scope: GmailService.scope),
+            tokenClient: GoogleTokenClient(),
+            client: GmailClient(),
+            store: gmailKeychain,
+            claude: ClaudeRunner.run,
+            executionGate: executionGate,
+            ingest: { proposals, vaultPath in
+                await agent.ingestExternal(proposals, vaultPath: vaultPath)
+            })
         self.container = container
         self._executionGate = State(initialValue: executionGate)
         self._agent = State(initialValue: agent)
         self._taskAgent = State(initialValue: taskAgent)
         self._noteIndex = State(initialValue: noteIndex)
         self._calendar = State(initialValue: calendar)
+        self._gmail = State(initialValue: gmail)
         self._scheduler = State(initialValue: MustardAppScheduler(
             agent: agent,
             taskAgent: taskAgent,
             noteIndex: noteIndex,
-            calendar: calendar
+            calendar: calendar,
+            gmail: gmail
         ))
 
         // Manual meeting recorder (Meetings Tasks 6–8): consent-gated
@@ -221,6 +250,7 @@ struct MustardApp: App {
                 .environment(taskAgent)
                 .environment(noteIndex)
                 .environment(calendar)
+                .environment(gmail)
                 .environment(notchNav)
                 .environment(meetingRecorder)
                 .environment(hotKeys)
@@ -235,6 +265,7 @@ struct MustardApp: App {
                                 HoverPanelView()
                                     .environment(agent)
                                     .environment(taskAgent)
+                                    .environment(gmail)
                                     .modelContainer(container)
                             )
                         }
@@ -288,6 +319,7 @@ struct MustardApp: App {
                                     .environment(meetingRecorder)
                                     .environment(meetingSuggestions)
                                     .environment(services)
+                                    .environment(gmail)
                                     .modelContainer(container)
                             )
                         }
