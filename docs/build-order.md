@@ -226,15 +226,24 @@ the sibling Triage-tool repo under `docs/superpowers/plans/`.
 
 ## Next — needs Leon ⛔
 
+- [x] **F32 Gmail inbox (in-app)** — ✅ **BUILT 2026-08-25** (ADR-0012, spec
+      `docs/specs/2026-08-25-gmail-inbox.md`). Mustard-owned Gmail OAuth (Keychain
+      service `com.mustard.gmail`, scopes readonly+modify+send), 5-min polling by
+      label+query, `claude -p` triage with untrusted-data hardening →
+      `ingestExternal` → the normal rec pipeline; explicit per-card **Send reply
+      via Gmail** (confirm dialog) and **Archive in Gmail** (remove INBOX, never
+      delete). Supersedes the ADR-0008 scout for email discovery. *Activation
+      blocked on:* Leon's Google Cloud **OAuth client id** (Desktop app, Gmail API
+      enabled) + connecting in Settings → Gmail.
 - [ ] **N1 Live Google Calendar** — `GoogleAuthSession` (loopback + ASWebAuth) +
       `GoogleCalendarService` (connect/refresh/fetch → upsert) + Keychain + Settings.
       *Blocked on:* Leon's Google Cloud **OAuth client id** (Desktop app).
 - [ ] **N2 CloudKit sync + iOS target** — migrate SPM → Xcode project, iCloud
       entitlement, iOS app sharing `MustardKit`. *Blocked on:* Apple Developer
       account / entitlements (Leon).
-- [ ] **N3 More sources** — email / Slack as triage sources, via the
-      `claude` CLI's MCP config. *Blocked on:* confirming MCP availability + scope.
-      *(Meetings split out to B1 — handled by vault-harvest, not MCP.)*
+- [ ] **N3 More sources** — Slack as a triage source, via the `claude` CLI's MCP
+      config. *Blocked on:* confirming MCP availability + scope. *(Email done —
+      F32/ADR-0012; meetings split out to B1 — handled by vault-harvest, not MCP.)*
 
 ## Next — buildable, unblocked 🟢
 
