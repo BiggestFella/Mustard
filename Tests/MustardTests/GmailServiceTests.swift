@@ -170,6 +170,34 @@ final class GmailServiceTests: XCTestCase {
         await service.poll(projects: routes)
         XCTAssertFalse(claudeRan)
         XCTAssertTrue(GmailSyncStateStore.load(d).seenEventIDs.isEmpty)
+        XCTAssertEqual(service.lastPollSummary, "Agent busy — will retry next poll.")
+    }
+
+    func testPollUnparseableTriageOutputLeavesIDsUnseen() async {
+        let d = makeDefaults("gmail-unparseable")
+        var ingestCalls = 0
+        let (service, _) = makeService(
+            transport: transport { req in
+                let path = req.url!.path
+                if path.hasSuffix("/messages") { return (#"{"messages":[{"id":"m1"}]}"#, 200) }
+                if path.hasSuffix("/labels") { return (#"{"labels":[]}"#, 200) }
+                if path.contains("/messages/m1") { return (self.messageJSON(id: "m1"), 200) }
+                return ("{}", 404)
+            },
+            claude: { _, _ in ClaudeResult(ok: true, text: "sorry, here are my thoughts instead") },
+            ingest: { _, _ in ingestCalls += 1 },
+            defaults: d)
+        await service.poll(projects: routes)
+        XCTAssertEqual(ingestCalls, 0)
+        XCTAssertTrue(GmailSyncStateStore.load(d).seenEventIDs.isEmpty)
+        XCTAssertEqual(service.lastPollSummary, "Triage returned output Mustard couldn't parse.")
+    }
+
+    func testLabelsReturnsEmptyOnTransportFailure() async {
+        let d = makeDefaults("gmail-labels-fail")
+        let (service, _) = makeService(transport: transport { _ in ("boom", 500) }, defaults: d)
+        let labels = await service.labels()
+        XCTAssertEqual(labels, [])
     }
 
     func testSendReplyThreadsOntoOriginal() async {
