@@ -51,6 +51,8 @@ public enum GmailTriage {
     /// set with nothing in common must not ground claude at "/".
     public static func groundingDirectory(for routes: [ProjectRoute]) -> String? {
         guard let first = routes.first else { return nil }
+        // One route: ground at the KB itself — no reason to expose its siblings.
+        guard routes.count > 1 else { return first.workingDirectory }
         var common = URL(fileURLWithPath: first.workingDirectory)
             .deletingLastPathComponent().pathComponents
         for route in routes.dropFirst() {
@@ -67,7 +69,9 @@ public enum GmailTriage {
     /// A route's KB folder relative to the grounding directory, for the prompt's
     /// project list — `./DL-Knowledge-Base/` or `./clients/DL-Knowledge-Base/`.
     static func relativePath(of route: ProjectRoute, from base: String?) -> String {
-        guard let base, route.workingDirectory.hasPrefix(base + "/") else {
+        guard let base else { return URL(fileURLWithPath: route.workingDirectory).lastPathComponent }
+        if route.workingDirectory == base { return "." }
+        guard route.workingDirectory.hasPrefix(base + "/") else {
             return URL(fileURLWithPath: route.workingDirectory).lastPathComponent
         }
         return String(route.workingDirectory.dropFirst(base.count + 1))
@@ -76,7 +80,9 @@ public enum GmailTriage {
     public static func prompt(emails: [EmailContext], projects: [ProjectRoute]) -> String {
         let base = groundingDirectory(for: projects)
         let projectList = projects.map { route in
-            "  • \(route.name) — notes in ./\(relativePath(of: route, from: base))/"
+            let rel = relativePath(of: route, from: base)
+            let loc = rel == "." ? "the current directory" : "./\(rel)/"
+            return "  • \(route.name) — notes in \(loc)"
         }.joined(separator: "\n")
 
         let emailBlocks = emails.map { e -> String in

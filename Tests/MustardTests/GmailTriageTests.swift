@@ -34,6 +34,14 @@ final class GmailTriageTests: XCTestCase {
         XCTAssertNil(GmailTriage.groundingDirectory(for: []))
     }
 
+    func testGroundingDirectorySingleRouteGroundsAtKBNotParent() {
+        let one = [GmailTriage.ProjectRoute(name: "DL", workingDirectory: "/kb/DL-Knowledge-Base")]
+        XCTAssertEqual(GmailTriage.groundingDirectory(for: one), "/kb/DL-Knowledge-Base")
+        // Project list renders the current directory, not a broken ./DL-Knowledge-Base/.
+        let prompt = GmailTriage.prompt(emails: [email()], projects: one)
+        XCTAssertTrue(prompt.contains("the current directory"))
+    }
+
     func testGroundingDirectoryIsDeepestCommonAncestorAcrossParents() {
         let split = [
             GmailTriage.ProjectRoute(name: "A", workingDirectory: "/kb/clients/A-KB"),
