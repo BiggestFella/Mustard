@@ -38,8 +38,8 @@ final class AgentServiceIngestExternalTests: XCTestCase {
     func testIngestExternalDeduplicatesByEventID() async throws {
         let (agent, context) = try makeAgent()
         await agent.ingestExternal([proposal(event: "m1")], vaultPath: "/kb")
-        // m2 carries a distinct thread (sourceItemID): SourceDedupe rule 2 rejects a
-        // same-(source, item, action) proposal while the first rec is still pending.
+        // m2 carries a distinct thread (sourceItemID) so only rule 1 (event id) is in
+        // play here; the same-thread pending rejection is pinned by the next test.
         await agent.ingestExternal([proposal(event: "m1"), proposal(event: "m2", item: "t2")],
                                    vaultPath: "/kb")
         let recs = try context.fetch(FetchDescriptor<Recommendation>())

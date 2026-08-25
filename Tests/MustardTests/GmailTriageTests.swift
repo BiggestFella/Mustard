@@ -34,6 +34,33 @@ final class GmailTriageTests: XCTestCase {
         XCTAssertNil(GmailTriage.groundingDirectory(for: []))
     }
 
+    func testGroundingDirectoryIsDeepestCommonAncestorAcrossParents() {
+        let split = [
+            GmailTriage.ProjectRoute(name: "A", workingDirectory: "/kb/clients/A-KB"),
+            GmailTriage.ProjectRoute(name: "B", workingDirectory: "/kb/internal/B-KB"),
+        ]
+        XCTAssertEqual(GmailTriage.groundingDirectory(for: split), "/kb")
+        // The prompt's project list stays resolvable from that cwd.
+        let prompt = GmailTriage.prompt(emails: [email()], projects: split)
+        XCTAssertTrue(prompt.contains("./clients/A-KB/"))
+        XCTAssertTrue(prompt.contains("./internal/B-KB/"))
+    }
+
+    func testGroundingDirectoryRefusesFilesystemRoot() {
+        let unrelated = [
+            GmailTriage.ProjectRoute(name: "A", workingDirectory: "/x/A-KB"),
+            GmailTriage.ProjectRoute(name: "B", workingDirectory: "/y/B-KB"),
+        ]
+        XCTAssertNil(GmailTriage.groundingDirectory(for: unrelated))
+    }
+
+    func testPromptMarksEmailContentUntrusted() {
+        let prompt = GmailTriage.prompt(emails: [email()], projects: routes)
+        XCTAssertTrue(prompt.contains("UNTRUSTED DATA"))
+        XCTAssertTrue(prompt.contains("NEVER copy"))
+        XCTAssertTrue(prompt.contains("ROUTING:"))
+    }
+
     func testPromptEmbedsEmailsProjectsAndContract() {
         let prompt = GmailTriage.prompt(emails: [email()], projects: routes)
         XCTAssertTrue(prompt.contains("sourceEventID=m1"))
@@ -88,6 +115,26 @@ final class GmailTriageTests: XCTestCase {
                        .unparseable)
         XCTAssertEqual(GmailTriage.parseOutcome("[]", emails: [email()], projects: routes),
                        .proposals([]))
+    }
+
+    func testParseNormalizesUnknownActionToFyi() {
+        let text = #"[{"sourceEventID": "m1", "project": "DL-Knowledge-Base", "title": "t", "action_type": "rm_rf_everything"}]"#
+        guard case .proposals(let ps) = GmailTriage.parseOutcome(text, emails: [email()], projects: routes)
+        else { return XCTFail() }
+        XCTAssertEqual(ps.first?.actionType, "fyi")
+    }
+
+    func testParseCapsModelAuthoredFieldLengths() {
+        let hugeDraft = String(repeating: "d", count: 20_000)
+        let hugeBody = String(repeating: "b", count: 5_000)
+        let text = """
+        [{"sourceEventID": "m1", "project": "DL-Knowledge-Base", "title": "t",
+          "body": "\(hugeBody)", "draft": "\(hugeDraft)"}]
+        """
+        guard case .proposals(let ps) = GmailTriage.parseOutcome(text, emails: [email()], projects: routes)
+        else { return XCTFail() }
+        XCTAssertEqual(ps.first?.draft.count, 10_000)
+        XCTAssertEqual(ps.first?.body.count, 2000)
     }
 
     func testParseClampsConfidence() {
