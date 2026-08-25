@@ -88,6 +88,13 @@ final class GmailTriageTests: XCTestCase {
         XCTAssertFalse(prompt.contains(String(repeating: "x", count: GmailTriage.maxBodyChars + 1)))
     }
 
+    func testIsGmailSourcedDetectsPermalink() {
+        XCTAssertTrue(GmailTriage.isGmailSourced("https://mail.google.com/mail/u/0/#all/m1"))
+        XCTAssertFalse(GmailTriage.isGmailSourced("https://app.shortcut.com/story/1"))
+        XCTAssertFalse(GmailTriage.isGmailSourced(nil))
+        XCTAssertFalse(GmailTriage.isGmailSourced(""))
+    }
+
     func testParseJoinsProvenanceFromFetchNotModel() {
         let text = """
         [{"sourceEventID": "m1", "project": "DL-Knowledge-Base", "title": "Reply to Ana",

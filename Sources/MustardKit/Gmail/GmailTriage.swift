@@ -32,6 +32,15 @@ public enum GmailTriage {
         case unparseable
     }
 
+    static let permalinkPrefix = "https://mail.google.com/mail/u/0/#all/"
+    static func permalink(messageID: String) -> String { permalinkPrefix + messageID }
+    /// True when a recommendation's sourceURL is a Gmail permalink — the durable signal that a
+    /// rec came in over the Gmail transport, surviving IngestNormalizer's source reclassification
+    /// (a Jira/Shortcut-labelled email is stored source=jira/shortcut but keeps this URL).
+    public static func isGmailSourced(_ sourceURL: String?) -> Bool {
+        (sourceURL ?? "").hasPrefix(permalinkPrefix)
+    }
+
     static let maxBodyChars = 4000
     /// Blast-radius caps on model-authored free text: a grounding run that was
     /// tricked into reading a file can't dump much of it into a card field.
@@ -183,7 +192,7 @@ public enum GmailTriage {
                 source: .gmail, project: project,
                 sourceItemID: m.threadId, sourceEventID: m.id,
                 sourceContext: [m.from, m.subject].filter { !$0.isEmpty }.joined(separator: " · "),
-                sourceURL: "https://mail.google.com/mail/u/0/#all/\(m.id)",
+                sourceURL: permalink(messageID: m.id),
                 occurredAt: m.date,
                 title: String(title.prefix(200)),
                 body: String((item["body"] as? String ?? "").prefix(maxFieldChars)),

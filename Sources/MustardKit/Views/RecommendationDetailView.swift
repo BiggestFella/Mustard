@@ -138,7 +138,7 @@ struct RecommendationDetailView: View {
     /// Explicit, per-card Gmail actions (ADR-0012). These are the ONLY paths that
     /// touch the real mailbox — never Approve, never trust auto-approve.
     @ViewBuilder private var gmailActions: some View {
-        if rec.source == SourceID.gmail.rawValue,
+        if GmailTriage.isGmailSourced(rec.sourceURL),
            let messageID = rec.sourceEventID, !messageID.isEmpty,
            gmail.state == .connected {
             VStack(alignment: .leading, spacing: 6) {
