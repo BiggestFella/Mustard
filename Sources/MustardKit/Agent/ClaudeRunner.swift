@@ -176,6 +176,25 @@ final class ClaudeInvocationRegistry: @unchecked Sendable {
 #endif
 
 public enum ClaudeRunner {
+    /// Argv for a `claude -p` run hardened for UNTRUSTED input (email triage, ADR-0012).
+    /// Denies every write/exec/network tool and all MCP servers, and forces non-bypass
+    /// permission mode, so attacker-controlled prompt text cannot reach Bash/Write/Edit/
+    /// WebFetch/WebSearch/Task or any connector — even when the machine's settings default
+    /// to bypassPermissions (CLI `--disallowedTools` is a separate, enforcing mechanism).
+    /// Read/Grep/Glob stay for KB grounding: a read secret can only reach a local, capped
+    /// card field, never the network or an outward action. Pure, so it is unit-tested.
+    static func restrictedArguments(prompt: String) -> [String] {
+        [
+            "-p", prompt,
+            "--output-format", "json",
+            "--permission-mode", "default",
+            "--allowedTools", "Read,Grep,Glob",
+            "--disallowedTools", "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task",
+            "--strict-mcp-config",
+            "--mcp-config", "{}",
+        ]
+    }
+
 #if os(macOS)
     /// Wall-clock budget for a single `claude -p` invocation before it's killed and
     /// treated as a failure. Real headless runs can take minutes, so the default is
@@ -405,6 +424,11 @@ public enum ClaudeRunner {
         ))
     }
 
+    /// `run` for untrusted triage input — see `restrictedArguments`.
+    public static let restrictedRun: ClaudeRun = { prompt, cwd in
+        await invoke(.init(id: UUID(), arguments: restrictedArguments(prompt: prompt), workingDirectory: cwd))
+    }
+
     private static func terminate(
         _ process: Process,
         token: ClaudeCancellationToken,
@@ -429,6 +453,10 @@ public enum ClaudeRunner {
     /// The iOS companion never executes agent work — it reads/writes shared data. This
     /// stub keeps `ClaudeRunner.run` available so `AgentService` compiles for iOS.
     public static let run: ClaudeRun = { _, _ in
+        ClaudeResult(ok: false, text: "The agent runs on the Mac only.")
+    }
+
+    public static let restrictedRun: ClaudeRun = { _, _ in
         ClaudeResult(ok: false, text: "The agent runs on the Mac only.")
     }
 

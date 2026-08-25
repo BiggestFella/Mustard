@@ -9,9 +9,13 @@ import SwiftData
 struct RecommendationDetailView: View {
     @Environment(AgentService.self) private var agent
     @Environment(HotKeyBindingsStore.self) private var hotKeys
+    @Environment(GmailService.self) private var gmail
     let rec: Recommendation
     @State private var commenting = false
     @State private var commentText = ""
+    @State private var confirmingSend = false
+    @State private var gmailActionRunning = false
+    @State private var sendRecipient = ""
 
     private var confidenceSegments: Int { Int((rec.confidence * 5).rounded(.down)) }
     private var confidenceColor: Color { Theme.confidenceColor(rec.confidence) }
@@ -45,6 +49,7 @@ struct RecommendationDetailView: View {
                 }
             }
             drawer
+            gmailActions
             outcomes
             keyHint
         }
@@ -129,6 +134,62 @@ struct RecommendationDetailView: View {
                 .font(Theme.Fonts.caption)
                 .foregroundStyle(Theme.Palette.error)
         }
+    }
+
+    /// Explicit, per-card Gmail actions (ADR-0012). These are the ONLY paths that
+    /// touch the real mailbox — never Approve, never trust auto-approve.
+    @ViewBuilder private var gmailActions: some View {
+        if GmailTriage.isGmailSourced(rec.sourceURL),
+           let messageID = rec.sourceEventID, !messageID.isEmpty,
+           gmail.state == .connected {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    if rec.action == .draftEmail {
+                        Button("Send reply via Gmail") {
+                            Task {
+                                sendRecipient = await gmail.replyRecipient(forMessageID: messageID) ?? ""
+                                confirmingSend = true
+                            }
+                        }
+                            .controlSize(.small).tint(Theme.Palette.accent)
+                            .disabled(gmailActionRunning ||
+                                      rec.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .help("Sends the draft above as a reply on the original thread. Nothing sends without this click.")
+                            .confirmationDialog("Send this reply via Gmail?",
+                                                isPresented: $confirmingSend) {
+                                Button("Send reply") { Task { await sendGmailReply(messageID) } }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text(sendRecipient.isEmpty
+                                    ? "Replies on the original thread with the current draft."
+                                    : "Reply goes to \(sendRecipient). Sends on the original thread with the current draft.")
+                            }
+                    }
+                    Button("Archive in Gmail") { Task { await archiveGmail(messageID) } }
+                        .controlSize(.small)
+                        .disabled(gmailActionRunning)
+                        .help("Removes the email from your Gmail inbox (never deletes) and files this card.")
+                    Spacer()
+                }
+                if let error = gmail.lastActionError {
+                    Text(error).font(Theme.Fonts.caption).foregroundStyle(Theme.Palette.error)
+                }
+            }
+        }
+    }
+
+    private func sendGmailReply(_ messageID: String) async {
+        gmailActionRunning = true
+        defer { gmailActionRunning = false }
+        guard await gmail.sendReply(toMessageID: messageID, body: rec.draft) else { return }
+        agent.keep(rec)   // sent = handled: file to the inbox log, clear the card
+    }
+
+    private func archiveGmail(_ messageID: String) async {
+        gmailActionRunning = true
+        defer { gmailActionRunning = false }
+        guard await gmail.archive(messageID: messageID) else { return }
+        agent.keep(rec)
     }
 
     private var outcomes: some View {

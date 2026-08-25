@@ -105,6 +105,11 @@ Mustard/
                                    ClipsHotKey (⌃⌥V, id 4 — shares the "MSTD" Carbon signature
                                    with capture id 1, dictation id 2, rewrite id 3)
       Calendar/                  GoogleOAuth (PKCE/URL/token), GoogleCalendarParser
+      Gmail/                     Mustard-owned Gmail inbox (ADR-0012): GmailClient
+                                   (list/get/labels/archive/send), GmailParser,
+                                   GmailMime (RFC 2822 replies), GmailTriage
+                                   (claude -p prompt + provenance-safe parser),
+                                   GmailSyncPlanner, GmailSettings, GmailService
       Views/                     SwiftUI screens + surfaces (Root, Today, Board, Week,
                                    AgentConsole, Hover, CommandBar, TaskDetail, rows;
                                    Notes, NoteEditor [live Craft editor — no Source/Preview
@@ -365,10 +370,11 @@ check whether a branch's work is in `main`, reverse-apply its own contribution:
 ## Out of scope (YAGNI) — deliberately not built
 
 Multi-user/auth/billing; a hosted backend (no Supabase/Node — see ADR-0001);
-web app; per-token API usage; email/Slack/meeting *sources* (only the vault source
-exists — fields are modelled, not wired); live Google Calendar fetch (data layer
-done, awaits Leon's OAuth client id); CloudKit sync + iOS target (schema is ready;
-needs an Xcode project for entitlements — see ADR-0004).
+web app; per-token API usage; Slack/meeting *sources* (fields are modelled, not
+wired — the **Gmail source is now real**: in-app OAuth + polling triage, ADR-0012);
+live Google Calendar fetch (data layer done, awaits Leon's OAuth client id);
+CloudKit sync + iOS target (schema is ready; needs an Xcode project for
+entitlements — see ADR-0004).
 
 ## Agent Loop Workflows
 

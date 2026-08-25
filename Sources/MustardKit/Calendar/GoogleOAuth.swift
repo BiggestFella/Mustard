@@ -48,7 +48,8 @@ public enum GoogleOAuth {
     public static let tokenEndpoint = "https://oauth2.googleapis.com/token"
 
     public static func authorizationURL(
-        clientId: String, redirectURI: String, pkce: PKCE, state: String? = nil
+        clientId: String, redirectURI: String, pkce: PKCE, state: String? = nil,
+        scope: String = GoogleOAuth.scope
     ) -> URL {
         var comps = URLComponents(string: authEndpoint)!
         var items: [URLQueryItem] = [

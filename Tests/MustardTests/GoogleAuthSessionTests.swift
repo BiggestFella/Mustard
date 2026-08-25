@@ -42,4 +42,21 @@ final class GoogleAuthSessionTests: XCTestCase {
         }
         XCTAssertNil(try store.loadToken())   // nothing persisted on mismatch
     }
+
+    func testConnectRequestsInjectedScope() async throws {
+        var opened: URL?
+        let session = GoogleAuthSession(
+            makeServer: { StubRedirectServer(port: 7777, result: RedirectResult(code: "c", state: "s")) },
+            tokenClient: GoogleTokenClient(transport: { _ in
+                (Data(#"{"access_token":"a","refresh_token":"r","expires_in":3600}"#.utf8), 200)
+            }),
+            store: InMemoryTokenStore(),
+            openURL: { opened = $0 },
+            scope: "scope-a scope-b",
+            makePKCE: { PKCE(verifier: "v") },
+            makeState: { "s" })
+        _ = try await session.connect(credentials: .init(clientId: "i", clientSecret: "x"))
+        let items = URLComponents(url: opened!, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(items.first { $0.name == "scope" }?.value, "scope-a scope-b")
+    }
 }

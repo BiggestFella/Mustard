@@ -52,4 +52,20 @@ final class GoogleOAuthTests: XCTestCase {
     func test_parseTokenResponse_garbageReturnsNil() {
         XCTAssertNil(GoogleOAuth.parseTokenResponse(Data("nope".utf8)))
     }
+
+    func testAuthorizationURLUsesInjectedScope() {
+        let url = GoogleOAuth.authorizationURL(
+            clientId: "id", redirectURI: "http://127.0.0.1:1", pkce: PKCE(verifier: "v"),
+            scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
+        let scope = items.first { $0.name == "scope" }?.value
+        XCTAssertEqual(scope, "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify")
+    }
+
+    func testAuthorizationURLDefaultsToCalendarScope() {
+        let url = GoogleOAuth.authorizationURL(
+            clientId: "id", redirectURI: "http://127.0.0.1:1", pkce: PKCE(verifier: "v"))
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(items.first { $0.name == "scope" }?.value, GoogleOAuth.scope)
+    }
 }
