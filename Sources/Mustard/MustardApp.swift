@@ -190,7 +190,7 @@ struct MustardApp: App {
             tokenClient: GoogleTokenClient(),
             client: GmailClient(),
             store: gmailKeychain,
-            claude: ClaudeRunner.run,
+            claude: ClaudeRunner.restrictedRun,
             executionGate: executionGate,
             ingest: { proposals, vaultPath in
                 await agent.ingestExternal(proposals, vaultPath: vaultPath)
