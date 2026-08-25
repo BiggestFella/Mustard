@@ -83,7 +83,9 @@ public enum GmailParser {
     /// style/script/head blocks, keep line structure from <br>/</p>, strip the
     /// rest of the tags, decode the common entities, collapse blank-line runs.
     public static func strippedHTML(_ html: String) -> String {
-        var text = html
+        // ReDoS guard: cap input before the regex passes run — an oversized hostile
+        // HTML body must not blow out triage latency.
+        var text = String(html.prefix(20_000))
         for block in ["style", "script", "head"] {
             text = text.replacingOccurrences(
                 of: "<\(block)[^>]*>[\\s\\S]*?</\(block)>", with: "",

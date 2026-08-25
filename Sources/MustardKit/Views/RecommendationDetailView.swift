@@ -15,6 +15,7 @@ struct RecommendationDetailView: View {
     @State private var commentText = ""
     @State private var confirmingSend = false
     @State private var gmailActionRunning = false
+    @State private var sendRecipient = ""
 
     private var confidenceSegments: Int { Int((rec.confidence * 5).rounded(.down)) }
     private var confidenceColor: Color { Theme.confidenceColor(rec.confidence) }
@@ -144,7 +145,12 @@ struct RecommendationDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     if rec.action == .draftEmail {
-                        Button("Send reply via Gmail") { confirmingSend = true }
+                        Button("Send reply via Gmail") {
+                            Task {
+                                sendRecipient = await gmail.replyRecipient(forMessageID: messageID) ?? ""
+                                confirmingSend = true
+                            }
+                        }
                             .controlSize(.small).tint(Theme.Palette.accent)
                             .disabled(gmailActionRunning ||
                                       rec.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -154,7 +160,9 @@ struct RecommendationDetailView: View {
                                 Button("Send reply") { Task { await sendGmailReply(messageID) } }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
-                                Text("Replies on the original thread with the current draft.")
+                                Text(sendRecipient.isEmpty
+                                    ? "Replies on the original thread with the current draft."
+                                    : "Reply goes to \(sendRecipient). Sends on the original thread with the current draft.")
                             }
                     }
                     Button("Archive in Gmail") { Task { await archiveGmail(messageID) } }

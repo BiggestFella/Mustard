@@ -60,6 +60,13 @@ final class GmailParserTests: XCTestCase {
         XCTAssertEqual(m?.body, "Hello & welcome\nbye")
     }
 
+    func testStrippedHTMLHandlesLargeInput() {
+        let huge = "<p>" + String(repeating: "a", count: 100_000) + "</p>"
+        let result = GmailParser.strippedHTML(huge)
+        XCTAssertNotNil(result)
+        XCTAssertFalse(result.isEmpty)
+    }
+
     func testParseMessageRejectsMissingIdentity() {
         XCTAssertNil(GmailParser.parseMessage(Data(#"{"threadId":"t"}"#.utf8)))
         XCTAssertNil(GmailParser.parseMessage(Data("nope".utf8)))

@@ -39,6 +39,10 @@ public final class GmailService {
     private let now: () -> Date
     /// Single-flight refresh, same rationale as GoogleCalendarService.
     private var refreshTask: Task<Void, Error>?
+    /// Re-entrancy guard: a manual poll trigger while the scheduled loop's poll is
+    /// still in flight must not race a second `claude` run against the same ids.
+    /// @MainActor makes this a safe non-atomic guard.
+    private var isPolling = false
 
     static let batchLimit = 12
     static let listLimit = 25
@@ -113,6 +117,9 @@ public final class GmailService {
     /// project → mark seen. Ids are marked seen ONLY after a successful triage
     /// parse, so failures retry on the next due poll.
     public func poll(projects: [GmailTriage.ProjectRoute]) async {
+        guard !isPolling else { return }
+        isPolling = true
+        defer { isPolling = false }
         let settings = GmailSettingsStore.load(defaults)
         guard settings.enabled, state == .connected else { return }
         // Stamp first so a persistently-failing poll retries on the interval,
@@ -151,8 +158,8 @@ public final class GmailService {
                 lastPollSummary = "Agent busy — will retry next poll."
                 return
             }
+            defer { executionGate.release(gateToken) }
             let result = await claude(GmailTriage.prompt(emails: emails, projects: projects), cwd)
-            executionGate.release(gateToken)
             guard result.ok else {
                 let giveUp = GmailSyncPlanner.registerFailures(
                     &sync.failedAttempts, ids: newIDs, giveUpAt: Self.giveUpAfterFailures)
@@ -160,7 +167,7 @@ public final class GmailService {
                     sync.seenEventIDs, adding: giveUp, cap: Self.seenCap)
                 sync.lastPolledAt = now()
                 GmailSyncStateStore.save(sync, to: defaults)
-                lastPollSummary = "Triage failed: \(result.text)"
+                lastPollSummary = "Triage failed: \(String(result.text.prefix(200)))"
                 return
             }
             switch GmailTriage.parseOutcome(result.text, emails: emails, projects: projects) {
@@ -232,6 +239,19 @@ public final class GmailService {
             lastActionError = nil
             return true
         } catch { return recordFailure(error) }
+    }
+
+    /// Who a reply to `messageID` would go to — for the send-confirmation dialog
+    /// (finding H5a), so Leon sees the recipient before confirming a send. Best-effort:
+    /// nil on any fetch failure, letting the caller fall back to generic copy.
+    public func replyRecipient(forMessageID messageID: String) async -> String? {
+        do {
+            try await refreshIfNeeded()
+            guard let token = try store.loadToken() else { return nil }
+            let original = try await client.fetchMessage(accessToken: token.accessToken, id: messageID)
+            let to = original.replyTo.isEmpty ? original.from : original.replyTo
+            return to.isEmpty ? nil : to
+        } catch { return nil }
     }
 
     /// For the Settings label picker. Errors surface as an empty list there.

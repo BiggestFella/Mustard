@@ -76,7 +76,7 @@ private final class MustardAppScheduler {
             SourceSettingsStore.save(updated)
             let gmailSettings = GmailSettingsStore.load()
             if gmailSettings.enabled, gmail.state == .connected,
-               GmailSettings.isDue(lastPolledAt: gmail.lastPolled,
+               GmailSettings.isDue(lastPolledAt: GmailSyncStateStore.load().lastPolledAt,
                                    intervalMinutes: gmailSettings.pollIntervalMinutes, now: now) {
                 await gmail.poll(projects: GmailTriage.routes(from: updated))
             }
