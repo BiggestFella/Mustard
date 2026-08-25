@@ -74,6 +74,14 @@ final class GmailClientTests: XCTestCase {
         XCTAssertEqual(body["threadId"] as? String, "t42")
     }
 
+    func testSendThrowsWhenResponseLacksID() async {
+        let client = GmailClient(transport: { _ in (Data("{}".utf8), 200) })
+        do {
+            _ = try await client.send(accessToken: "t", raw: "QUJD", threadId: nil)
+            XCTFail("expected throw")
+        } catch { XCTAssertEqual(error as? GoogleAuthError, .server("unparseable send response")) }
+    }
+
     func testFetchMessageThrowsOnUnparseableBody() async {
         let client = GmailClient(transport: { _ in (Data("{}".utf8), 200) })
         do {

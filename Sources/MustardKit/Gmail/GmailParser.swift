@@ -52,7 +52,12 @@ public enum GmailParser {
         return ""
     }
 
-    private static func firstPart(_ part: [String: Any], mime: String) -> String? {
+    /// Real emails nest 2–4 levels; the payload is sender-influenced data, so cap
+    /// the walk rather than trusting the structure.
+    private static let maxPartDepth = 16
+
+    private static func firstPart(_ part: [String: Any], mime: String, depth: Int = 0) -> String? {
+        guard depth < maxPartDepth else { return nil }
         if (part["mimeType"] as? String)?.caseInsensitiveCompare(mime) == .orderedSame,
            let body = part["body"] as? [String: Any],
            let dataString = body["data"] as? String,
@@ -61,7 +66,7 @@ public enum GmailParser {
             return text
         }
         for sub in part["parts"] as? [[String: Any]] ?? [] {
-            if let found = firstPart(sub, mime: mime) { return found }
+            if let found = firstPart(sub, mime: mime, depth: depth + 1) { return found }
         }
         return nil
     }

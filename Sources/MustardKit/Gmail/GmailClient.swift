@@ -66,7 +66,12 @@ public struct GmailClient {
         if let threadId, !threadId.isEmpty { body["threadId"] = threadId }
         let data = try await post(Self.sendURL(), accessToken: accessToken, json: body)
         let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        return root?["id"] as? String ?? ""
+        // A 2xx without an id must not degrade to "" — callers would persist a
+        // successful-looking send with no tracking identity. Fail loudly instead.
+        guard let id = root?["id"] as? String, !id.isEmpty else {
+            throw GoogleAuthError.server("unparseable send response")
+        }
+        return id
     }
 
     private func get(_ url: URL, accessToken: String) async throws -> Data {

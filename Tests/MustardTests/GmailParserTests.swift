@@ -65,6 +65,19 @@ final class GmailParserTests: XCTestCase {
         XCTAssertNil(GmailParser.parseMessage(Data("nope".utf8)))
     }
 
+    func testPartWalkStopsAtDepthCap() {
+        // A text/plain part buried 20 levels deep is past the cap → body falls back empty.
+        let plainB64 = Data("too deep".utf8).base64URLEncodedString()
+        var inner = #"{"mimeType":"text/plain","body":{"data":"\#(plainB64)"}}"#
+        for _ in 0..<20 {
+            inner = #"{"mimeType":"multipart/mixed","parts":[\#(inner)]}"#
+        }
+        let json = #"{"id":"m9","threadId":"t9","payload":\#(inner)}"#
+        let m = GmailParser.parseMessage(Data(json.utf8))
+        XCTAssertEqual(m?.id, "m9")
+        XCTAssertEqual(m?.body, "")
+    }
+
     func testHeaderLookupIsCaseInsensitive() {
         let json = #"{"id":"m3","threadId":"t3","payload":{"headers":[{"name":"message-id","value":"<x@y>"}]}}"#
         XCTAssertEqual(GmailParser.parseMessage(Data(json.utf8))?.messageIdHeader, "<x@y>")
