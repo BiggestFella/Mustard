@@ -4,9 +4,10 @@ import Foundation
 /// scout routine made in a connected session now runs through headless `claude -p`:
 /// only Gmail *access* needed a connector (ADR-0007) — the email bodies are
 /// embedded in the prompt, and grounding reads the local KBs because the run's
-/// cwd is the KB folders' common parent. Provenance (ids, thread, URL, labels,
-/// date) always comes from OUR fetch — model output is joined back by id and
-/// never trusted for identity.
+/// cwd is the KB itself (one route) or the KBs' deepest common ancestor (many).
+/// The run is tool-restricted (see `ClaudeRunner.restrictedRun`). Provenance
+/// (ids, thread, URL, labels, date) always comes from OUR fetch — model output
+/// is joined back by id and never trusted for identity.
 public enum GmailTriage {
     public struct ProjectRoute: Equatable, Sendable {
         public let name: String
