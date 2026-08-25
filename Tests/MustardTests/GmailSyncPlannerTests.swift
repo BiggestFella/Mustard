@@ -21,4 +21,18 @@ final class GmailSyncPlannerTests: XCTestCase {
         XCTAssertEqual(GmailSyncPlanner.updatedSeen(["a", "b"], adding: ["b", "c"], cap: 10),
                        ["a", "b", "c"])
     }
+
+    func testGiveUpIDsAfterCap() {
+        var fails: [String: Int] = ["a": 2]
+        let give = GmailSyncPlanner.registerFailures(&fails, ids: ["a", "b"], giveUpAt: 3)
+        XCTAssertEqual(give, ["a"])          // a hits 3 → give up; b now at 1
+        XCTAssertEqual(fails["b"], 1)
+        XCTAssertNil(fails["a"])             // cleared once given up
+    }
+
+    func testRegisterFailuresBounded() {
+        var fails: [String: Int] = [:]
+        _ = GmailSyncPlanner.registerFailures(&fails, ids: (0..<10).map { "id\($0)" }, giveUpAt: 3, cap: 4)
+        XCTAssertLessThanOrEqual(fails.count, 4)
+    }
 }

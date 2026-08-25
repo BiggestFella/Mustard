@@ -17,4 +17,22 @@ public enum GmailSyncPlanner {
         if out.count > cap { out.removeFirst(out.count - cap) }
         return out
     }
+
+    /// Bump failure counts for `ids`; return the ids that have now failed `giveUpAt` times
+    /// (removing them from the map). Bounded to `cap` entries (drops lowest counts first).
+    public static func registerFailures(
+        _ counts: inout [String: Int], ids: [String], giveUpAt: Int, cap: Int = 500
+    ) -> [String] {
+        var giveUp: [String] = []
+        for id in ids {
+            let n = (counts[id] ?? 0) + 1
+            if n >= giveUpAt { counts[id] = nil; giveUp.append(id) } else { counts[id] = n }
+        }
+        if counts.count > cap {
+            for key in counts.sorted(by: { $0.value < $1.value }).prefix(counts.count - cap).map(\.key) {
+                counts[key] = nil
+            }
+        }
+        return giveUp
+    }
 }

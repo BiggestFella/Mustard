@@ -86,7 +86,8 @@ final class GmailServiceTests: XCTestCase {
                 return ("{}", 404)
             },
             claude: { _, cwd in
-                XCTAssertEqual(cwd, "/kb")   // grounding dir = common parent
+                // Single route: grounding dir is the KB itself (H2), not its parent.
+                XCTAssertEqual(cwd, "/kb/DL-Knowledge-Base")
                 return ClaudeResult(ok: true, text: claudeOut)
             },
             ingest: { proposals, path in ingested = proposals; ingestedPath = path },
@@ -191,6 +192,35 @@ final class GmailServiceTests: XCTestCase {
         XCTAssertEqual(ingestCalls, 0)
         XCTAssertTrue(GmailSyncStateStore.load(d).seenEventIDs.isEmpty)
         XCTAssertEqual(service.lastPollSummary, "Triage returned output Mustard couldn't parse.")
+    }
+
+    func testUnparseableTriageIsAbandonedAfterRepeatedFailures() async {
+        let d = makeDefaults("gmail-give-up")
+        var claudeCalls = 0
+        let (service, _) = makeService(
+            transport: transport { req in
+                let path = req.url!.path
+                if path.hasSuffix("/messages") { return (#"{"messages":[{"id":"m1"}]}"#, 200) }
+                if path.hasSuffix("/labels") { return (#"{"labels":[]}"#, 200) }
+                if path.contains("/messages/m1") { return (self.messageJSON(id: "m1"), 200) }
+                return ("{}", 404)
+            },
+            claude: { _, _ in
+                claudeCalls += 1
+                return ClaudeResult(ok: true, text: "sorry, here are my thoughts instead")
+            },
+            defaults: d)
+
+        await service.poll(projects: routes)
+        await service.poll(projects: routes)
+        await service.poll(projects: routes)
+
+        XCTAssertEqual(claudeCalls, 3)
+        XCTAssertEqual(GmailSyncStateStore.load(d).seenEventIDs, ["m1"])
+        XCTAssertNil(GmailSyncStateStore.load(d).failedAttempts["m1"])
+
+        await service.poll(projects: routes)
+        XCTAssertEqual(claudeCalls, 3)   // abandoned id is seen — no 4th claude run
     }
 
     func testLabelsReturnsEmptyOnTransportFailure() async {

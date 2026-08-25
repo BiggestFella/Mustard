@@ -48,10 +48,30 @@ public enum GmailSettingsStore {
 public struct GmailSyncState: Codable, Equatable {
     public var seenEventIDs: [String]
     public var lastPolledAt: Date?
+    /// Failed-triage attempt counts per message id — so an email that keeps producing
+    /// unparseable/failed triage (e.g. an injection emitting prose) is abandoned after a
+    /// few tries instead of re-running claude on it every interval forever.
+    public var failedAttempts: [String: Int]
 
-    public init(seenEventIDs: [String] = [], lastPolledAt: Date? = nil) {
+    public init(seenEventIDs: [String] = [], lastPolledAt: Date? = nil,
+                failedAttempts: [String: Int] = [:]) {
         self.seenEventIDs = seenEventIDs
         self.lastPolledAt = lastPolledAt
+        self.failedAttempts = failedAttempts
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case seenEventIDs, lastPolledAt, failedAttempts
+    }
+
+    // Custom decode so `failedAttempts` (added later) defaults to `[:]` when a stored
+    // blob predates it — older UserDefaults data stays decodable (mirrors
+    // SourceProposal's `init(from:)` pattern for `labels`).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seenEventIDs = try c.decode([String].self, forKey: .seenEventIDs)
+        lastPolledAt = try c.decodeIfPresent(Date.self, forKey: .lastPolledAt)
+        failedAttempts = try c.decodeIfPresent([String: Int].self, forKey: .failedAttempts) ?? [:]
     }
 }
 

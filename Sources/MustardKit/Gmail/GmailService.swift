@@ -43,6 +43,9 @@ public final class GmailService {
     static let batchLimit = 12
     static let listLimit = 25
     static let seenCap = 500
+    /// Give up on an id after this many failed/unparseable triage attempts (finding S3):
+    /// a hostile or malformed email must not re-run claude on every poll forever.
+    static let giveUpAfterFailures = 3
 
     public init(authSession: GoogleAuthSession, tokenClient: GoogleTokenClient,
                 client: GmailClient, store: TokenStore,
@@ -151,17 +154,30 @@ public final class GmailService {
             let result = await claude(GmailTriage.prompt(emails: emails, projects: projects), cwd)
             executionGate.release(gateToken)
             guard result.ok else {
+                let giveUp = GmailSyncPlanner.registerFailures(
+                    &sync.failedAttempts, ids: newIDs, giveUpAt: Self.giveUpAfterFailures)
+                sync.seenEventIDs = GmailSyncPlanner.updatedSeen(
+                    sync.seenEventIDs, adding: giveUp, cap: Self.seenCap)
+                sync.lastPolledAt = now()
+                GmailSyncStateStore.save(sync, to: defaults)
                 lastPollSummary = "Triage failed: \(result.text)"
                 return
             }
             switch GmailTriage.parseOutcome(result.text, emails: emails, projects: projects) {
             case .unparseable:
+                let giveUp = GmailSyncPlanner.registerFailures(
+                    &sync.failedAttempts, ids: newIDs, giveUpAt: Self.giveUpAfterFailures)
+                sync.seenEventIDs = GmailSyncPlanner.updatedSeen(
+                    sync.seenEventIDs, adding: giveUp, cap: Self.seenCap)
+                sync.lastPolledAt = now()
+                GmailSyncStateStore.save(sync, to: defaults)
                 lastPollSummary = "Triage returned output Mustard couldn't parse."
             case .proposals(let proposals):
                 for route in projects {
                     let mine = proposals.filter { $0.project == route.name }
                     if !mine.isEmpty { await ingest(mine, route.workingDirectory) }
                 }
+                for id in newIDs { sync.failedAttempts[id] = nil }
                 sync.seenEventIDs = GmailSyncPlanner.updatedSeen(
                     sync.seenEventIDs, adding: newIDs, cap: Self.seenCap)
                 sync.lastPolledAt = now()
