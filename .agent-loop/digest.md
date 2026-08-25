@@ -1148,3 +1148,22 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #143 opened and merged, remote branch
   deleted. No release, no remote data deletion, no secrets.
 - **Revert:** `git revert a713940`
+
+## 2026-08-25 — F32 Gmail inbox (in-app OAuth + polling triage) · PR #150
+
+- **What:** Mustard-owned Gmail inbox (ADR-0012, supersedes the ADR-0008 scout for email
+  discovery). OAuth (Keychain `com.mustard.gmail`, scopes readonly+modify+send), 5-min
+  polling by label+query, tool-restricted `claude -p` triage → `ingestExternal` → the normal
+  rec pipeline; explicit per-card **Send reply via Gmail** (confirm dialog) and **Archive in
+  Gmail** (remove INBOX, never delete). Ships DISABLED — needs Leon's Google OAuth client id.
+- **Risk:** HIGH (oauth/auth + outward email actions). Deep-review panel: round 1 HELD
+  (security + correctness blocked), fixes applied in-run, round 2 PANEL CLEAR. Report at
+  `.agent-loop/runs/gmail-inbox-2026-08-25/deep-review-report.md`.
+- **Checks:** `swift test` 2170/0 · `swift build` 0 · `./build-ios.sh` 0 · CI (macOS + iOS) pass.
+- **Leon — before enabling polling:** (1) create a Google Cloud **Desktop-app OAuth client**
+  with the Gmail API enabled; connect in Settings → Gmail. (2) Verify the triage tool-restriction
+  holds against your machine's `bypassPermissions` default (see the deep-review report's one-line
+  check). Eye-check: Settings → Gmail connect flow, and a gmail card's Send/Archive buttons.
+- **Outward actions:** branch pushed, PR #150 opened and squash-merged, remote branch deleted.
+  No release, no remote data deletion, no secrets.
+- **Revert:** `git revert 4565cee`
