@@ -68,9 +68,16 @@ idempotent against each other during any overlap.
   (`--permission-mode default`), regardless of the machine's own settings default.
   Residual risk: `Read,Grep,Glob` stay allowed for KB grounding, so a read secret
   could still reach a local, field-capped card — but never the network or an
-  outward action. The tool-restriction's precedence over a machine
-  `bypassPermissions` default must be verified on the host before first
-  activation (a permission-mode misconfiguration there would be silent).
+  outward action.
+- **Verified on-host 2026-08-25.** A control run (no flags) executed a Bash `touch`;
+  the restricted argv refused with *"I don't have the Bash tool available in this
+  session — only file/search tools"*, despite the machine's
+  `permissions.defaultMode: bypassPermissions`. So CLI deny flags do win over the
+  personal-settings default here. The same check caught that `--mcp-config '{}'` is
+  rejected at startup (`mcpServers: expected record, received undefined`) — the CLI
+  exits before running, which would have failed **every** poll instead of securing
+  it. The value must be a full config object, `{"mcpServers":{}}`; pinned by
+  `ClaudeRunnerRestrictedTests`. Re-verify if the `claude` CLI's flag surface changes.
 - Deliberate regression vs the scout: `sourceURL` is always the Gmail permalink,
   never a synthesized Jira/Shortcut deep link (provenance safety). Labels still
   drive `SourceClassifier`, so cards badge correctly; revisit deterministic link
