@@ -375,6 +375,16 @@ public final class AgentService {
         await applyTrust(Self.storedTrust())
     }
 
+    /// Ingest proposals produced in-process (the Gmail poll — ADR-0012) through
+    /// the same normalize → dedupe → insert pipeline as the file-based sources,
+    /// then apply trust. vaultPath = the routed project's KB folder, so keep /
+    /// execution / export behave exactly like scout-era recs.
+    public func ingestExternal(_ proposals: [SourceProposal], vaultPath: String) async {
+        guard !proposals.isEmpty else { return }
+        ingest(proposals, vaultPath: vaultPath)
+        await applyTrust(Self.storedTrust())
+    }
+
     /// Export forAgent/queued tasks under one KB working dir to its `_agent/outbox/`,
     /// and cancel stale outbox files. Pure plan + injected IO. (area/project identify
     /// the KB; in the loop they come from each enabled SourceConfig's own
