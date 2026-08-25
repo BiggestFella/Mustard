@@ -94,6 +94,9 @@ public enum GmailParser {
         }
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "[ \\t]+\n", with: "\n", options: .regularExpression)
+        // Collapses ALL blank lines, including intentional paragraph gaps — by this
+        // stage "</p><br> adjacency" and "deliberate blank line" are indistinguishable.
+        // Acceptable for triage prompts; revisit tag-aware boundaries if readability suffers.
         text = text.replacingOccurrences(of: "\n{2,}", with: "\n", options: .regularExpression)
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
