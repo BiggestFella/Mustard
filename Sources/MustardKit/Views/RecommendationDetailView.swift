@@ -98,13 +98,8 @@ struct RecommendationDetailView: View {
             FlowChips(selected: rec.action) { rec.action = $0 }
         }
 
-        if let original = rec.originalSource, !original.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("ORIGINAL EMAIL").font(.system(size: 10, weight: .semibold)).tracking(0.06)
-                    .foregroundStyle(Theme.Palette.textTertiary)
-                Text(original).font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.textSecondary)
-                    .textSelection(.enabled)
-            }
+        if OriginalSourceDisplay.isPresent(rec.originalSource) {
+            OriginalSourceBlock(rec: rec)
         }
 
         VStack(alignment: .leading, spacing: 6) {

@@ -48,4 +48,16 @@ final class IngestNormalizerTests: XCTestCase {
         XCTAssertEqual(out.source, .gmail)
         XCTAssertEqual(out.actionType, "fyi")
     }
+
+    func test_normalize_preservesOriginalSourceThroughReclassify() {
+        let p = SourceProposal(
+            source: .gmail, project: "DL", sourceItemID: "t", sourceEventID: "e",
+            sourceContext: "Jira · DLA-1 · comment added",
+            sourceURL: "https://mail.google.com/mail/u/0/#all/m1",
+            title: "Reply to comment", actionType: "create_task",
+            originalSource: "the original email body")
+        let out = IngestNormalizer.normalize(p)
+        XCTAssertEqual(out.source, .jira)
+        XCTAssertEqual(out.originalSource, "the original email body")
+    }
 }

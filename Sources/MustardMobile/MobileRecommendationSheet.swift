@@ -35,8 +35,8 @@ struct MobileRecommendationSheet: View {
                     actionAndConfidence
                     if !rec.reasoning.isEmpty { section("WHY", rec.reasoning) }
                     rebucketChips
-                    if let original = rec.originalSource, !original.isEmpty {
-                        section("ORIGINAL SOURCE", original)
+                    if OriginalSourceDisplay.isPresent(rec.originalSource) {
+                        OriginalSourceBlock(rec: rec)
                     }
                     draftEditor
                     commentBlock

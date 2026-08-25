@@ -421,8 +421,9 @@ public struct AgentConsoleView: View {
     }
 }
 
-/// Compact, selectable summary row for the recommendations master list. The full
-/// triage workspace lives in `RecommendationDetailView` (the detail pane).
+/// Compact, selectable summary row for the recommendations master list. Shows a
+/// short original-source preview when present (BAK-265); the full body lives in
+/// `RecommendationDetailView` (the detail pane).
 struct RecommendationRow: View {
     let rec: Recommendation
     let inGroup: Bool
@@ -464,6 +465,12 @@ struct RecommendationRow: View {
                     }
                 }
                 Spacer()
+            }
+            if !inGroup, let preview = OriginalSourceDisplay.previewText(rec.originalSource) {
+                Text(preview)
+                    .font(Theme.Fonts.meta)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(2)
             }
         }
         .padding(.vertical, 9).padding(.horizontal, 11)
@@ -512,26 +519,20 @@ struct ProvenancePill: View {
     }
 }
 
-/// Header for a multi-source fan-out group: shows the provenance pill and,
-/// if available, an expand/collapse toggle for the original email body.
+/// Header for a multi-source fan-out group: shows the provenance pill and a
+/// short original-source preview (full body lives in the detail pane).
 struct SourceGroupHeader: View {
     let rec: Recommendation
-    @State private var showEmail = false
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ProvenancePill(rec: rec)
-            if let original = rec.originalSource, !original.isEmpty {
-                Button { withAnimation(Theme.Motion.settle) { showEmail.toggle() } } label: {
-                    Label(showEmail ? "Hide original" : "Original email",
-                          systemImage: showEmail ? "chevron.down" : "chevron.right")
-                        .font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.textTertiary)
-                }.buttonStyle(.plain)
-                if showEmail {
-                    Text(original).font(Theme.Fonts.meta).foregroundStyle(Theme.Palette.textSecondary)
-                        .textSelection(.enabled)
-                        .padding(.leading, 10)
-                        .overlay(alignment: .leading) { Rectangle().fill(Theme.Palette.hairline).frame(width: 1) }
-                }
+            if let preview = OriginalSourceDisplay.previewText(rec.originalSource) {
+                Text(preview)
+                    .font(Theme.Fonts.meta)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(2)
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) { Rectangle().fill(Theme.Palette.hairline).frame(width: 1) }
             }
         }
         .padding(.top, 6).padding(.bottom, 2)

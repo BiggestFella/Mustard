@@ -62,8 +62,21 @@ public enum PreviewData {
             confidence: 0.82,
             reasoning: "He flagged a regression and asked for status by EOD; the tracker shows the fix moved to In Review yesterday.",
             draft: "Hi Kamil,\n\nConfirming the BLE handshake regression is now in review — fix landed yesterday, QA verifying today. Verified build by EOD tomorrow.\n\nCheers,\nLeon",
-            source: "gmail", sourceContext: "Thales SDK — kamil@thalesgroup.com"
+            source: "gmail", sourceContext: "Thales SDK — kamil@thalesgroup.com",
+            sourceURL: GmailTriage.permalink(messageID: "sample")
         )
+        rec.originalSource = """
+        Hi Leon,
+
+        The BLE handshake regression we saw on Thursday is still reproducible on the latest firmware. Can you send a status by EOD?
+
+        We've tried two devices and both fail at the same pairing step. The pairing log shows a timeout after 8 seconds on the GATT characteristic write.
+
+        Happy to jump on a call if that's faster.
+
+        Thanks,
+        Kamil
+        """
         ctx.insert(rec)
 
         // Sample note index entries (BAK-148) for the Notes surface preview.

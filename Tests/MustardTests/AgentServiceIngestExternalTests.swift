@@ -59,4 +59,34 @@ final class AgentServiceIngestExternalTests: XCTestCase {
         await agent.ingestExternal([], vaultPath: "/kb")
         XCTAssertEqual(try context.fetch(FetchDescriptor<Recommendation>()).count, 0)
     }
+
+    func testIngestExternalCarriesOriginalSource() async throws {
+        let (agent, context) = try makeAgent()
+        let p = SourceProposal(
+            source: .gmail, project: "DL-Knowledge-Base",
+            sourceItemID: "t1", sourceEventID: "m1",
+            sourceURL: "https://mail.google.com/mail/u/0/#all/m1",
+            title: "Reply to Ana", actionType: "draft_email",
+            originalSource: "please review the build",
+            confidence: 0.9, draft: "Hi Ana")
+        await agent.ingestExternal([p], vaultPath: "/kb")
+        let rec = try context.fetch(FetchDescriptor<Recommendation>()).first
+        XCTAssertEqual(rec?.originalSource, "please review the build")
+        XCTAssertEqual(rec?.source, "gmail")
+    }
+
+    func testIngestExternalPreservesOriginalSourceAfterReclassify() async throws {
+        let (agent, context) = try makeAgent()
+        let p = SourceProposal(
+            source: .gmail, project: "DL-Knowledge-Base",
+            sourceItemID: "t1", sourceEventID: "m1",
+            sourceContext: "Jira · DLA-1 · comment added",
+            sourceURL: "https://mail.google.com/mail/u/0/#all/m1",
+            title: "Reply to comment", actionType: "create_task",
+            originalSource: "raw email body")
+        await agent.ingestExternal([p], vaultPath: "/kb")
+        let rec = try context.fetch(FetchDescriptor<Recommendation>()).first
+        XCTAssertEqual(rec?.source, "jira")
+        XCTAssertEqual(rec?.originalSource, "raw email body")
+    }
 }
