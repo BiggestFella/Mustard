@@ -7,6 +7,7 @@ public struct GoogleAuthSession {
     let tokenClient: GoogleTokenClient
     let store: TokenStore
     let openURL: (URL) -> Void
+    let scope: String
     let makePKCE: () -> PKCE
     let makeState: () -> String
     let timeout: TimeInterval
@@ -15,6 +16,7 @@ public struct GoogleAuthSession {
                 tokenClient: GoogleTokenClient,
                 store: TokenStore,
                 openURL: @escaping (URL) -> Void,
+                scope: String = GoogleOAuth.scope,
                 makePKCE: @escaping () -> PKCE = { PKCE.random() },
                 makeState: @escaping () -> String = { UUID().uuidString },
                 timeout: TimeInterval = 120) {
@@ -22,6 +24,7 @@ public struct GoogleAuthSession {
         self.tokenClient = tokenClient
         self.store = store
         self.openURL = openURL
+        self.scope = scope
         self.makePKCE = makePKCE
         self.makeState = makeState
         self.timeout = timeout
@@ -35,7 +38,8 @@ public struct GoogleAuthSession {
         defer { server.stop() }
         let redirectURI = "http://127.0.0.1:\(port)"
         openURL(GoogleOAuth.authorizationURL(clientId: credentials.clientId,
-                                             redirectURI: redirectURI, pkce: pkce, state: state))
+                                             redirectURI: redirectURI, pkce: pkce, state: state,
+                                             scope: scope))
         let result = try await server.awaitCode(timeout: timeout)
         // Anti-forgery: the returned state must match what we sent, or this redirect
         // didn't originate from our request (auth-code injection / login-CSRF).
