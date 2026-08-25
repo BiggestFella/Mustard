@@ -61,8 +61,16 @@ idempotent against each other during any overlap.
 - Prompt-injection surface acknowledged: hostile email content reaches a
   filesystem-capable model. Mitigations shipped: untrusted-data prompt framing,
   provenance never model-authored, action whitelist, field caps, gated outward
-  actions. Follow-up worth doing: per-call tool restriction in `ClaudeRunner`
-  (e.g. read-only, KB-scoped) for triage runs.
+  actions, and (2026-08-25 hardening) the triage run is now **tool-restricted**:
+  `ClaudeRunner.restrictedRun` denies every write/exec/network/MCP tool
+  (`--disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task`,
+  `--strict-mcp-config` + `--mcp-config {}`) and forces non-bypass permission mode
+  (`--permission-mode default`), regardless of the machine's own settings default.
+  Residual risk: `Read,Grep,Glob` stay allowed for KB grounding, so a read secret
+  could still reach a local, field-capped card — but never the network or an
+  outward action. The tool-restriction's precedence over a machine
+  `bypassPermissions` default must be verified on the host before first
+  activation (a permission-mode misconfiguration there would be silent).
 - Deliberate regression vs the scout: `sourceURL` is always the Gmail permalink,
   never a synthesized Jira/Shortcut deep link (provenance safety). Labels still
   drive `SourceClassifier`, so cards badge correctly; revisit deterministic link
