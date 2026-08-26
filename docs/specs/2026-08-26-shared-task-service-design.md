@@ -31,14 +31,14 @@ routines can be added later behind the same API.
 |---|---|
 | 1 | Phase 1 success = any agent session can list, claim, execute, question, and complete tasks via a skill. Off-Mac daemons/adapters are later. |
 | 2 | No billing change initially: each agent session runs on whatever subscription/login it already has. Metered adapters are a later, explicit add. |
-| 3 | Scope eventually includes **everything** — tasks, agent runs, recommendations/triage, Gmail, meetings, calendar, notes — staged in slices; tasks + runs first. |
+| 3 | Scope eventually includes **everything** — tasks, agent runs, recommendations/triage, Gmail, meetings, calendar — staged in slices; tasks + runs first. **Notes stay in the git-backed vault repo** (Leon, 26 Aug): agents reach them via the repo; the server stores note references, not content. |
 | 4 | Personal data leaving the Mac is accepted in principle; the security bar below applies. |
 | 5 | Integration credentials: deferred. Phase-1 workers use their own connectors; tasks carry instructions and context references only, never tokens. |
 | 6 | Provider capability differences: dissolved for phase 1 (all interactive sessions can ask questions and resume). A capability model is documented for later headless adapters. |
 | 7 | Backend region/security bar: Leon doesn't mind — defaults chosen below (Sydney, encrypted at rest, private). |
 | 8 | The `drain-agent-queue` file-bridge worker is effectively unused and will be retired once the API path covers connected work. |
 | 9 | Push notifications: not needed yet. iOS uses pull/refresh until APNs is worth its Apple-Developer prerequisite (ADR-0004). |
-| 10 | Backend budget assumption: ~$25/mo, zero server babysitting, managed platform. |
+| 10 | Backend: managed platform, zero server babysitting, **free tier to start** (approved 26 Aug); pay only when a slice needs backups/storage. |
 
 ## Backend comparison and recommendation
 
@@ -49,9 +49,22 @@ not Tailscale-only), server-side enforcement of state transitions/leases/idempot
 
 | Option | Shape | Cost (verify at kickoff) | Assessment |
 |---|---|---|---|
-| **A. Supabase (Sydney)** — recommended | Managed Postgres + Storage + Edge Functions in one project. Our own API written as a single TypeScript (Hono) app deployed to Edge Functions; PostgREST/direct table access **never exposed** — clients only see our API. | [$25/mo Pro](https://uibakery.io/blog/supabase-pricing), Sydney (AWS ap-southeast-2) available | One vendor, one bill, zero servers. Postgres + object storage + deploys included. The state machine lives in plain TypeScript modules (unit-testable, matching this repo's TDD culture), not PL/pgSQL. If Edge Function limits ever bite, the same Hono app moves to a $5 VM unchanged. |
+| **A. Supabase (Sydney)** — recommended, **approved by Leon 2026-08-26 (free tier)** | Managed Postgres + Storage + Edge Functions in one project. Our own API written as a single TypeScript (Hono) app deployed to Edge Functions; PostgREST/direct table access **never exposed** — clients only see our API. | **Free tier to start** (≈500MB DB, ~1GB storage — ample for text task/run/message data). Upgrade to [$25/mo Pro](https://uibakery.io/blog/supabase-pricing) only when a slice needs daily backups or storage headroom. Sydney (AWS ap-southeast-2) available. Free-tier caveats: no real backups (mitigated — the Mac keeps a full SwiftData mirror), and the project pauses after ~1 week of zero activity (a normal sync loop prevents this; a long holiday means a one-click unpause). | One vendor, zero servers, $0 now. The state machine lives in plain TypeScript modules (unit-testable, matching this repo's TDD culture), not PL/pgSQL. If Edge Function limits ever bite, the same Hono app moves to a $5 VM unchanged. |
 | **B. Custom service on Fly.io + Fly Managed Postgres + Tigris** | Swift Vapor or TS API on a Fly machine, Sydney region | [Managed Postgres starts at $38/mo](https://fly.io/docs/mpg/) + machine + [Tigris storage](https://fly.io/docs/tigris/) ≈ $45+/mo | Most control; a Swift server could share contract types with MustardKit. But over budget, two more moving parts to operate, and the shared-Swift benefit is small — every client (skills, iOS, Mac) talks HTTP/JSON anyway; an OpenAPI spec covers type-sharing. |
-| **C. TS API on Railway/Render + Neon Postgres + Cloudflare R2** | Three-vendor budget stack | ~$10–20/mo | Cheapest, but three vendors/regions to wire (Neon has no Sydney; nearest Singapore), three dashboards, three failure surfaces. Saves ~$10/mo over A while costing real operational simplicity. |
+| **C. TS API on Railway/Render + Neon Postgres + Cloudflare R2** | Three-vendor budget stack | ~$10–20/mo | Three vendors/regions to wire (Neon has no Sydney; nearest Singapore), three dashboards, three failure surfaces — and no longer cheaper than A's free tier. |
+
+Also considered at Leon's request (2026-08-26): **MongoDB Atlas** — free tier and
+Sydney exist, but the design's core mechanics (atomic lease claims, a global
+append-only event sequence for sync cursors, enforced schema) are native Postgres
+and awkward in Mongo, and Atlas is database-only (API hosting and object storage
+would be separate vendors). **Pinecone** — a vector database, not a system of
+record; not applicable. If semantic search over tasks/notes is ever wanted,
+Postgres's `pgvector` extension provides it inside the same Supabase project.
+
+A **Mac-hosted API** (Mustard serving the same API locally + Tailscale) was also
+weighed: $0 and data never leaves the Mac, but every bot and the iPhone would
+depend on the Mac being awake with the app running. Rejected in favour of the
+hosted free tier, which costs the same and removes the single point of failure.
 
 **Recommendation: Option A.** ADR-0001 rejected Supabase because the product was
 local-first with no backend at all; that context is what's being superseded, so the
@@ -130,8 +143,11 @@ soft (`deleted_at`) so the event stream stays coherent.
 own table: for server tasks, draft **content** is uploaded and becomes an
 `artifacts` row, removing the local-path dependence.
 
-Later slices add `recommendations`, `calendar_events`, `gmail_*`, `meeting_*`, and
-`notes` tables, each mapped from its SwiftData model in its own slice spec. The
+Later slices add `recommendations`, `calendar_events`, `gmail_*`, and `meeting_*`
+tables, each mapped from its SwiftData model in its own slice spec. Notes get no
+content table — the vault repo stays the source of truth and `task_context` carries
+note references (project + relative path); `NoteIndexEntry` remains a Mac-local
+derived index. The
 `Recommendation` triage loop (sweep → propose → approve) stays Mac-local until its
 slice; approval continues to create tasks — which, once slice 4 lands, are server
 tasks.
@@ -336,18 +352,20 @@ independently revertible.
 5. **Local runtime on the API:** AgentTaskCoordinator claims via API; file bridge
    retired.
 6. **Domain slices (each with its own short spec):** recommendations/triage →
-   Gmail → calendar → meetings → notes.
+   Gmail → calendar → meetings. (Notes: repo-backed, no server slice.)
 7. **iOS full client** (needs ADR-0004's Xcode migration first).
 
 ## Open decisions for Leon
 
-1. **Approve the direction + Option A (Supabase Sydney, ~$25/mo)** — this is also
-   the billing acceptance.
-2. **Approve the ADR-0013 supersession** as tabled above.
-3. **Data-content toggle for later slices:** are email bodies and meeting
+~~Vendor/billing~~ — resolved 26 Aug: Supabase Sydney free tier, notes stay in the
+repo.
+
+1. **Approve the ADR-0013 supersession** as tabled above (this doc's merge is the
+   approval gate).
+2. **Data-content toggle for later slices:** are email bodies and meeting
    transcripts allowed in the hosted DB when those slices arrive, or references
    only? (Not blocking slices 2–5.)
-4. **Mac offline edits:** recommended yes (queue + replay + surfaced conflicts) —
+3. **Mac offline edits:** recommended yes (queue + replay + surfaced conflicts) —
    confirm.
 
 Everything else in the handoff's open list is resolved in this document or
