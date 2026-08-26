@@ -1167,3 +1167,25 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #150 opened and squash-merged, remote branch deleted.
   No release, no remote data deletion, no secrets.
 - **Revert:** `git revert 4565cee`
+
+## 2026-08-26 — Shared task service design + ADR-0013 (docs only) · PR #154
+
+- **What:** Approved design for the hosted single-user task control plane
+  (`docs/specs/2026-08-26-shared-task-service-design.md`): Supabase Sydney **free
+  tier**, custom TS/Hono API on Edge Functions, provider-neutral `mustard-worker`
+  skill so Leon's own Claude/Codex/Grok/Hermes sessions claim and execute tasks via
+  leases; full SwiftData→Postgres schema map; staged plan with per-slice
+  `useTaskService` rollback. ADR-0013 added; ADR-0001 superseded (CloudKit path
+  retired); ADR-0003 amended. Notes stay in the git vault repo. No production code.
+- **Risk:** LOW mechanically (docs only) — but it supersedes ADR-0001, which Leon
+  explicitly approved in chat 2026-08-26 (vendor, free tier, notes-in-repo,
+  direction).
+- **Checks:** CI pass on PR #154 (macOS build+test, iOS Simulator build). No code
+  touched.
+- **Next:** implementation starts at slice 2 (control-plane skeleton) in a fresh
+  session per the staged plan. Open decisions carried in the spec: hosted
+  email/transcript content vs references (later slices), Mac offline edits
+  (recommended yes).
+- **Outward actions:** branch pushed, PR #154 squash-merged. No release, no remote
+  data deletion, no secrets.
+- **Revert:** `git revert 3e32f8f`
