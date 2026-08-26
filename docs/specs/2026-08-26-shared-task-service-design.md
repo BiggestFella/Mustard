@@ -1,7 +1,7 @@
 # Shared task service and multi-agent clients — design
 
 - **Date:** 2026-08-26
-- **Status:** Draft — awaiting Leon's approval (spec gate). No implementation authorised.
+- **Status:** Approved by Leon 2026-08-26 (chat). Implementation may begin per the staged plan.
 - **Builds on:** `docs/handoffs/2026-08-26-shared-task-service-and-multi-agent-clients.md`,
   ADR-0003, ADR-0010, and the agent-task-sessions design
   (`docs/specs/2026-07-13-agent-task-sessions-design.md`)

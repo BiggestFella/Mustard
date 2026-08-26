@@ -1,6 +1,9 @@
 # ADR-0001 — SwiftData + CloudKit, no hosted backend
 
-**Status:** Accepted (2026-06-12)
+**Status:** Superseded by [ADR-0013](0013-hosted-task-control-plane.md) (2026-08-26)
+for structured shared state — a hosted task control plane is now authoritative and
+the CloudKit sync path is retired. SwiftData remains as the Mac's local cache, and
+the local-markdown vault decision stands.
 
 ## Context
 The predecessor (a local web "Triage Cockpit") stored tasks as Obsidian markdown
