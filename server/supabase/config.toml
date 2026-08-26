@@ -1,0 +1,11 @@
+# Minimal Supabase project config for the hosted task control plane
+# (ADR-0013). See server/README.md for the one-time deploy walkthrough.
+#
+# `verify_jwt = false` is correct, not a security hole: this function does
+# its own bearer-token auth against `clients.token_hash` (src/auth.ts,
+# checked in src/app.ts's `/v1/*` middleware) — Supabase JWTs play no part
+# in this single-user service, so requiring one would just reject every
+# legitimate caller.
+
+[functions.api]
+verify_jwt = false
