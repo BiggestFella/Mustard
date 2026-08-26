@@ -5,7 +5,7 @@ consequences. Supersede rather than edit when a decision changes.
 
 | # | Decision | Status |
 |---|----------|--------|
-| [0001](0001-swiftdata-cloudkit-not-server.md) | SwiftData + CloudKit, no hosted backend | Accepted |
+| [0001](0001-swiftdata-cloudkit-not-server.md) | SwiftData + CloudKit, no hosted backend | Superseded by 0013 |
 | [0002](0002-native-swiftui-not-web-wrapper.md) | Native SwiftUI, not an Electron/Tauri web wrapper | Accepted |
 | [0003](0003-agent-via-claude-subscription.md) | Agent runs via the `claude` CLI subscription, not the API | Accepted |
 | [0004](0004-spm-now-xcode-for-cloudkit.md) | Ship as a Swift Package now; Xcode project when CloudKit/iOS land | Accepted |
@@ -16,3 +16,5 @@ consequences. Supersede rather than edit when a decision changes.
 | [0009](0009-curated-kb.md) | Curated KB: store only Kept items; retire the email→KB firehose | Accepted |
 | [0010](0010-decoupled-agent-execution-via-board-queue.md) | Decoupled agent execution via the board queue; `stage` model; retire OutputCard | Accepted |
 | [0011](0011-voice-capture-push-to-talk-cleanup-queue.md) | Voice capture: push-to-talk hotkey, instant raw task, queued agent cleanup + triage routing | Accepted |
+| [0012](0012-mustard-owned-gmail-inbox.md) | Mustard-owned Gmail inbox: in-app OAuth, polling triage, explicit act | Accepted |
+| [0013](0013-hosted-task-control-plane.md) | Hosted single-user task control plane; multi-agent workers via skill; CloudKit path retired | Accepted |

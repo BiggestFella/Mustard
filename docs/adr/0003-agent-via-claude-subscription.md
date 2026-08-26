@@ -1,6 +1,10 @@
 # ADR-0003 — Agent runs via the `claude` CLI subscription, not the API
 
-**Status:** Accepted (2026-06-12)
+**Status:** Accepted (2026-06-12); amended by
+[ADR-0013](0013-hosted-task-control-plane.md) (2026-08-26) — the Mac-local
+subscription runtime remains the default Claude executor, but other providers now
+execute via Leon's own sessions through the task API, so "anchored to this Mac" no
+longer describes the system as a whole.
 
 ## Context
 For personal use Leon wants to use his **Claude Code subscription**, not pay
