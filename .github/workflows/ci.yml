@@ -63,3 +63,30 @@ jobs:
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
           ./build-ios.sh
+
+  server-tests:
+    name: Task service (TypeScript)
+    # The hosted task control plane (ADR-0013) lives in server/. Pure lifecycle
+    # logic and route handlers are unit-tested under node/vitest — no Docker, no
+    # network. Same fork gate: this runs on Leon's Mac.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, mustard]
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      # Homebrew is not on the runner's default PATH; node is brew-installed.
+      - name: Install dependencies
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          node --version
+          npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          npm run typecheck
+      - name: Test
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          npm test
