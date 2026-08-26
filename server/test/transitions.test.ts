@@ -6,9 +6,78 @@ import {
   canRequestChanges,
   canTakeBack,
   decisionForOutcome,
+  freshAttemptRunReset,
+  isGatedActionType,
+  messageKindForOutcome,
   reviewAction,
 } from "../src/domain/transitions.ts";
 import type { TurnOutcome } from "../src/domain/stages.ts";
+
+describe("messageKindForOutcome", () => {
+  it("maps needs_input/completed/failed/completion_uncertain per the task brief", () => {
+    expect(messageKindForOutcome("needs_input")).toBe("question");
+    expect(messageKindForOutcome("completed")).toBe("result");
+    expect(messageKindForOutcome("failed")).toBe("error");
+    expect(messageKindForOutcome("completion_uncertain")).toBe("error");
+  });
+
+  it("maps cancelled to recovery, verified against AgentTaskCoordinator.apply's .cancelled branch (Swift ground truth appends kind .recovery, not .error)", () => {
+    expect(messageKindForOutcome("cancelled")).toBe("recovery");
+  });
+
+  it("maps requires_connected_worker to progress", () => {
+    expect(messageKindForOutcome("requires_connected_worker")).toBe("progress");
+  });
+
+  it("covers every outcome without falling through to a default", () => {
+    const outcomes: TurnOutcome[] = [
+      "needs_input",
+      "completed",
+      "requires_connected_worker",
+      "failed",
+      "cancelled",
+      "completion_uncertain",
+    ];
+    for (const outcome of outcomes) {
+      expect(() => messageKindForOutcome(outcome)).not.toThrow();
+    }
+  });
+});
+
+describe("freshAttemptRunReset", () => {
+  it("returns the fixed field resets a human-initiated turn applies to the run", () => {
+    expect(freshAttemptRunReset()).toEqual({
+      requiresConnectedWorker: false,
+      completedAt: null,
+      lastError: null,
+      nextAttemptAt: null,
+      autoRetryCount: 0,
+    });
+  });
+});
+
+describe("isGatedActionType", () => {
+  it("treats no action type as not gated", () => {
+    expect(isGatedActionType(null)).toBe(false);
+  });
+
+  it("gates the three outward-facing action types", () => {
+    expect(isGatedActionType("draft_email")).toBe(true);
+    expect(isGatedActionType("draft_slack")).toBe(true);
+    expect(isGatedActionType("ticket_write")).toBe(true);
+  });
+
+  it("does not gate known non-outward action types", () => {
+    expect(isGatedActionType("create_task")).toBe(false);
+    expect(isGatedActionType("vault_note")).toBe(false);
+    expect(isGatedActionType("fyi")).toBe(false);
+    expect(isGatedActionType("ignore")).toBe(false);
+  });
+
+  it("fails closed on an unknown/typo'd action type", () => {
+    expect(isGatedActionType("mystery_action")).toBe(true);
+  });
+});
 
 describe("decisionForOutcome", () => {
   it("needs_input releases the slot and puts both task and run into needs_input", () => {

@@ -355,6 +355,17 @@ independently revertible.
    Gmail → calendar → meetings. (Notes: repo-backed, no server slice.)
 7. **iOS full client** (needs ADR-0004's Xcode migration first).
 
+## Known fidelity gaps deferred by slice 2 (recorded 2026-08-26 review)
+
+- **Recurrence on accept:** the server's accept action marks a task done but does
+  not port `TaskCompletion.complete`/`RecurrenceEngine` (next-instance creation).
+  The Mac client owns recurrence until a later slice; TODOs sit at both stores'
+  `review(accept)`.
+- **Area routing / F26 rescue:** the server replaces area→project routing with
+  explicit provider selection; the F26 area-less default-route rescue has no
+  server counterpart. Routing (and project resolution) stays client-side — the
+  Mac coordinator and worker configs — until slice 5 revisits it.
+
 ## Open decisions for Leon
 
 ~~Vendor/billing~~ — resolved 26 Aug: Supabase Sydney free tier, notes stay in the

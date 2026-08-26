@@ -45,6 +45,45 @@ function errorBody(error: string, detail?: string): { error: string; detail?: st
   return detail !== undefined ? { error, detail } : { error };
 }
 
+interface RouteResponse {
+  body: unknown;
+  status: number;
+}
+
+/**
+ * Reserve-then-act idempotency wrapper for the two routes that accept an
+ * `Idempotency-Key` (item G of the fix pass). The old flow was
+ * check-then-act (`getIdempotent` -> maybe execute -> `putIdempotent`),
+ * which left a race: two concurrent requests carrying the same key could
+ * both see nothing cached and both execute `run`. `Store.reserveIdempotent`
+ * atomically claims the key first; only the request that wins the
+ * reservation calls `run`, and its result — success OR failure — is what
+ * every replay (including the losing concurrent request, once it retries)
+ * gets back.
+ */
+async function withIdempotency(
+  store: Store,
+  client: ClientRow,
+  key: string | undefined,
+  route: string,
+  now: Date,
+  run: () => Promise<RouteResponse>,
+): Promise<RouteResponse> {
+  if (!key) return run();
+
+  const reservation = await store.reserveIdempotent(client.id, key, route, now);
+  if (reservation.status === "complete") {
+    return { body: reservation.response.response, status: reservation.response.status };
+  }
+  if (reservation.status === "in_flight") {
+    return { body: errorBody("idempotency_in_flight"), status: 409 };
+  }
+
+  const result = await run();
+  await store.completeIdempotent(client.id, key, route, result.status, result.body);
+  return result;
+}
+
 export function createApp(deps: { store: Store }) {
   const { store } = deps;
   const app = new Hono<{ Variables: Variables }>();
@@ -80,26 +119,23 @@ export function createApp(deps: { store: Store }) {
 
     const idempotencyKey = c.req.header("Idempotency-Key");
     const route = "POST /v1/tasks";
-    if (idempotencyKey) {
-      const cached = await store.getIdempotent(client.id, idempotencyKey, route);
-      if (cached) return c.json(cached.response as never, cached.status as never);
-    }
+    const now = new Date();
 
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.title !== "string" || body.title.length === 0) {
-      return c.json(errorBody("invalid_request", "title is required"), 400);
-    }
-    const input: CreateTaskInput = body;
-    const result = await store.createTask(input, client.id, new Date());
-    if (!result.ok) {
-      const [body2, status] = storeError(result);
-      return c.json(body2, status as never);
-    }
+    const { body, status } = await withIdempotency(store, client, idempotencyKey, route, now, async () => {
+      const reqBody = await c.req.json().catch(() => ({}));
+      if (typeof reqBody.title !== "string" || reqBody.title.length === 0) {
+        return { body: errorBody("invalid_request", "title is required"), status: 400 };
+      }
+      const input: CreateTaskInput = reqBody;
+      const result = await store.createTask(input, client.id, now);
+      if (!result.ok) {
+        const [errBody, errStatus] = storeError(result);
+        return { body: errBody, status: errStatus };
+      }
+      return { body: result.value, status: 201 };
+    });
 
-    if (idempotencyKey) {
-      await store.putIdempotent(client.id, idempotencyKey, route, 201, result.value);
-    }
-    return c.json(result.value, 201);
+    return c.json(body as never, status as never);
   });
 
   app.get("/v1/tasks", async (c) => {
@@ -240,22 +276,19 @@ export function createApp(deps: { store: Store }) {
 
     const idempotencyKey = c.req.header("Idempotency-Key");
     const route = "POST /v1/tasks/:id/outcome";
-    if (idempotencyKey) {
-      const cached = await store.getIdempotent(client.id, idempotencyKey, route);
-      if (cached) return c.json(cached.response as never, cached.status as never);
-    }
+    const now = new Date();
 
-    const input: OutcomeInput = await c.req.json().catch(() => ({}));
-    const result = await store.applyOutcome(c.req.param("id"), client, input, new Date());
-    if (!result.ok) {
-      const [body, status] = storeError(result);
-      return c.json(body, status as never);
-    }
+    const { body, status } = await withIdempotency(store, client, idempotencyKey, route, now, async () => {
+      const input: OutcomeInput = await c.req.json().catch(() => ({}));
+      const result = await store.applyOutcome(c.req.param("id"), client, input, now);
+      if (!result.ok) {
+        const [errBody, errStatus] = storeError(result);
+        return { body: errBody, status: errStatus };
+      }
+      return { body: result.value, status: 200 };
+    });
 
-    if (idempotencyKey) {
-      await store.putIdempotent(client.id, idempotencyKey, route, 200, result.value);
-    }
-    return c.json(result.value);
+    return c.json(body as never, status as never);
   });
 
   app.post("/v1/tasks/:id/reply", async (c) => {
@@ -280,8 +313,8 @@ export function createApp(deps: { store: Store }) {
 
     const body = await c.req.json().catch(() => ({}));
     const action = body.action as ReviewActionKind;
-    if (action !== "accept" && action !== "request_changes" && action !== "take_back") {
-      return c.json(errorBody("invalid_request", "action must be accept | request_changes | take_back"), 400);
+    if (action !== "accept" && action !== "request_changes" && action !== "take_back" && action !== "approve") {
+      return c.json(errorBody("invalid_request", "action must be accept | request_changes | take_back | approve"), 400);
     }
     const feedback: string | undefined = typeof body.feedback === "string" ? body.feedback : undefined;
     const result = await store.review(c.req.param("id"), action, feedback, client.id, new Date());

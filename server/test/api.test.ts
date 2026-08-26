@@ -376,3 +376,169 @@ describe("me / health", () => {
     expect(me.provider).toBe("claude");
   });
 });
+
+describe("idempotency reserve-then-act", () => {
+  it("409s a concurrent request reusing a key that's already reserved and still in flight, and does not execute it", async () => {
+    const { app, store } = await setup();
+    const client = await store.getClientByTokenHash(await sha256Hex(USER_TOKEN));
+    if (!client) throw new Error("setup failed");
+
+    // Simulate a request that already reserved the key and hasn't completed
+    // yet (the race window `reserveIdempotent`/`completeIdempotent` close).
+    await store.reserveIdempotent(client.id, "in-flight-key", "POST /v1/tasks", new Date());
+
+    const res = await app.request("/v1/tasks", {
+      method: "POST",
+      headers: { ...auth(USER_TOKEN), "Idempotency-Key": "in-flight-key" },
+      body: JSON.stringify({ title: "should not be created" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await json(res)).error).toBe("idempotency_in_flight");
+
+    const list = await app.request("/v1/tasks?owner=me", { headers: auth(USER_TOKEN) });
+    const tasks = await json(list);
+    expect(tasks.filter((t: any) => t.title === "should not be created")).toHaveLength(0);
+  });
+
+  it("still replays the identical response for a completed key (reserve-then-act preserves the old replay behavior)", async () => {
+    const { app } = await setup();
+
+    const created = await app.request("/v1/tasks", {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ title: "outcome idempotency", owner: "agent", stage: "for_agent" }),
+    });
+    const task = await json(created);
+    await app.request(`/v1/tasks/${task.id}/claim`, {
+      method: "POST",
+      headers: auth(WORKER_TOKEN),
+      body: JSON.stringify({}),
+    });
+
+    const res1 = await app.request(`/v1/tasks/${task.id}/outcome`, {
+      method: "POST",
+      headers: { ...auth(WORKER_TOKEN), "Idempotency-Key": "outcome-key-1" },
+      body: JSON.stringify({ outcome: "completed", message: "done" }),
+    });
+    expect(res1.status).toBe(200);
+    const body1 = await json(res1);
+
+    const res2 = await app.request(`/v1/tasks/${task.id}/outcome`, {
+      method: "POST",
+      headers: { ...auth(WORKER_TOKEN), "Idempotency-Key": "outcome-key-1" },
+      body: JSON.stringify({ outcome: "completed", message: "done" }),
+    });
+    expect(res2.status).toBe(200);
+    const body2 = await json(res2);
+    expect(body2).toEqual(body1);
+  });
+});
+
+describe("PATCH ledger grant/revoke side effect", () => {
+  it("grants agentApprovalGranted when a ledger (meeting-sourced) task's stage moves to queued", async () => {
+    const { app } = await setup();
+    const created = await app.request("/v1/tasks", {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ title: "ledger task", owner: "agent", stage: "needs_approval", source: "meeting" }),
+    });
+    const task = await json(created);
+    expect(task.agentApprovalGranted).toBe(false);
+
+    const patched = await app.request(`/v1/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { ...auth(USER_TOKEN), "If-Match": String(task.revision) },
+      body: JSON.stringify({ stage: "queued" }),
+    });
+    expect(patched.status).toBe(200);
+    const queued = await json(patched);
+    expect(queued.stage).toBe("queued");
+    expect(queued.agentApprovalGranted).toBe(true);
+
+    // Dropping it back onto for_agent revokes the grant.
+    const revoked = await app.request(`/v1/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { ...auth(USER_TOKEN), "If-Match": String(queued.revision) },
+      body: JSON.stringify({ stage: "for_agent" }),
+    });
+    expect(revoked.status).toBe(200);
+    expect((await json(revoked)).agentApprovalGranted).toBe(false);
+  });
+
+  it("never grants approval for a non-ledger task's stage move", async () => {
+    const { app } = await setup();
+    const created = await app.request("/v1/tasks", {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ title: "voice task", owner: "agent", stage: "for_agent", source: "voice" }),
+    });
+    const task = await json(created);
+
+    const patched = await app.request(`/v1/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { ...auth(USER_TOKEN), "If-Match": String(task.revision) },
+      body: JSON.stringify({ stage: "queued" }),
+    });
+    expect(patched.status).toBe(200);
+    expect((await json(patched)).agentApprovalGranted).toBe(false);
+  });
+
+  it("leaves agentApprovalGranted untouched for a PATCH that doesn't touch stage", async () => {
+    const { app } = await setup();
+    const created = await app.request("/v1/tasks", {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ title: "ledger task", owner: "agent", stage: "needs_approval", source: "meeting" }),
+    });
+    const task = await json(created);
+
+    const patched = await app.request(`/v1/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { ...auth(USER_TOKEN), "If-Match": String(task.revision) },
+      body: JSON.stringify({ title: "renamed" }),
+    });
+    expect(patched.status).toBe(200);
+    expect((await json(patched)).agentApprovalGranted).toBe(false);
+  });
+});
+
+describe("review('approve') endpoint", () => {
+  it("approves a needs_approval task to its computed target", async () => {
+    const { app } = await setup();
+    const created = await app.request("/v1/tasks", {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ title: "approve via http", owner: "me", stage: "needs_approval" }),
+    });
+    const task = await json(created);
+
+    const res = await app.request(`/v1/tasks/${task.id}/review`, {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ action: "approve" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.task.stage).toBe("needs_review");
+  });
+
+  it("403s a worker calling approve (review stays user_app-only)", async () => {
+    const { app } = await setup();
+    const res = await app.request("/v1/tasks/00000000-0000-0000-0000-000000000000/review", {
+      method: "POST",
+      headers: auth(WORKER_TOKEN),
+      body: JSON.stringify({ action: "approve" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("400s an action outside the accept | request_changes | take_back | approve vocabulary", async () => {
+    const { app } = await setup();
+    const res = await app.request("/v1/tasks/00000000-0000-0000-0000-000000000000/review", {
+      method: "POST",
+      headers: auth(USER_TOKEN),
+      body: JSON.stringify({ action: "bogus" }),
+    });
+    expect(res.status).toBe(400);
+  });
+});

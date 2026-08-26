@@ -34,6 +34,7 @@ import type {
   ClientRow,
   CreateTaskInput,
   ExpandedTask,
+  IdempotencyReservation,
   LeaseRow,
   MessageInput,
   OutcomeInput,
@@ -52,61 +53,55 @@ import type {
   MessageKind,
   Provider,
   TaskStage,
-  TurnOutcome,
 } from "../domain/stages.ts";
-import { isClaimable, type QueueTask } from "../domain/queue.ts";
 import {
+  compareQueueOrder,
+  computeIsBlocked,
+  isClaimable,
+  providerMatches,
+  requiresLedgerApproval,
+  type QueueTask,
+} from "../domain/queue.ts";
+import {
+  agentApprovalGrantForMove,
+  approveTarget,
   canReply,
   canRequestChanges,
   canTakeBack,
   decisionForOutcome,
+  freshAttemptRunReset,
+  isGatedActionType,
+  messageKindForOutcome,
   reviewAction,
+  type ApproveContext,
   type ReviewActionKind,
 } from "../domain/transitions.ts";
-
-// ---------------------------------------------------------------------------
-// Small pure helpers that mirror Swift logic not otherwise ported to
-// src/domain (out of scope for this slice to add new domain modules — these
-// are the minimum needed to call the given domain functions correctly).
-// ---------------------------------------------------------------------------
-
-/**
- * Mirrors `MeetingTaskSource.requiresAgentApproval` (Sources/MustardKit/
- * Logic/MeetingTaskSource.swift:17-19): true only for vault-harvested ledger
- * work (`source === "meeting"`), never for `"meeting-recording"` or anything
- * else. Needed to build the `QueueTask.requiresAgentApproval` input that
- * `isClaimable` (src/domain/queue.ts) requires — no TS port of
- * `MeetingTaskSource` exists in src/domain for this slice to call instead.
- */
-const MEETING_LEDGER_SOURCE = "meeting";
-function requiresLedgerApproval(source: string): boolean {
-  return source === MEETING_LEDGER_SOURCE;
-}
-
-/**
- * Mirrors `MustardTask.isGated` / `RecommendationAction.isGated` (Sources/
- * MustardKit/Models/MustardTask.swift:111-115, Logic/RecommendationAction.swift):
- * no/empty action type -> not gated; a known action type -> its own gating;
- * an unknown/typo'd token fails closed (gated). Needed only for the
- * lease-expiry sweep's "gated action -> needs_review" routing
- * (expireLeases) — see the design doc's "Lease gap confirmed" note, which
- * says the sweeper mirrors `AgentTaskCoordinator.reconcileInterruptedRuns`.
- */
-const KNOWN_ACTION_TYPES = new Set([
-  "draft_email",
-  "draft_slack",
-  "create_task",
-  "vault_note",
-  "ticket_write",
-  "fyi",
-  "ignore",
-]);
-const GATED_ACTION_TYPES = new Set(["draft_email", "draft_slack", "ticket_write"]);
-function isGatedActionType(actionType: string | null): boolean {
-  if (!actionType) return false;
-  if (!KNOWN_ACTION_TYPES.has(actionType)) return true; // fail closed
-  return GATED_ACTION_TYPES.has(actionType);
-}
+import {
+  EVENT_APPROVED,
+  EVENT_LEASE_EXPIRED,
+  EVENT_LEASE_RELEASED,
+  EVENT_LEASE_RENEWED,
+  EVENT_MESSAGE_APPENDED,
+  EVENT_OUTCOME_APPLIED,
+  EVENT_PROVIDER_ASSIGNED,
+  EVENT_REPLIED,
+  EVENT_REVIEWED,
+  EVENT_TASK_CLAIMED,
+  EVENT_TASK_CREATED,
+  EVENT_TASK_UPDATED,
+  approvedPayload,
+  leaseExpiredPayload,
+  leaseReleasedPayload,
+  leaseRenewedPayload,
+  messageAppendedPayload,
+  outcomeAppliedPayload,
+  providerAssignedPayload,
+  repliedPayload,
+  reviewedPayload,
+  taskClaimedPayload,
+  taskCreatedPayload,
+  taskUpdatedPayload,
+} from "../domain/events.ts";
 
 // ---------------------------------------------------------------------------
 // Row -> camelCase mapping
@@ -279,7 +274,10 @@ interface EventInput {
   runId: string | null;
   actor: string | null;
   type: string;
-  payload: Record<string, unknown>;
+  // `object`, not `Record<string, unknown>` — see store.ts's TaskEventRow
+  // comment: payloads come from src/domain/events.ts's typed builders, which
+  // have no index signature.
+  payload: object;
 }
 
 async function insertEvent(tx: TransactionSql, input: EventInput, now: Date): Promise<TaskEventRow> {
@@ -291,21 +289,30 @@ async function insertEvent(tx: TransactionSql, input: EventInput, now: Date): Pr
   return mapEvent(rows[0] as Record<string, unknown>);
 }
 
-/** Loads the full ExpandedTask graph inside the caller's transaction. */
+/**
+ * Loads the full ExpandedTask graph inside the caller's transaction.
+ * `context`/`run`/`artifacts`/`lease` don't depend on one another, so they're
+ * fired together via `Promise.all` and pipelined by postgres.js over the
+ * transaction's one connection, rather than four sequential round trips;
+ * `messages` genuinely depends on `run`'s id, so it stays a separate,
+ * dependent query after the batch resolves.
+ */
 async function loadExpandedTask(tx: TransactionSql, taskId: string): Promise<Result<ExpandedTask>> {
   const taskRows = await tx`select * from tasks where id = ${taskId} and deleted_at is null`;
   const taskRow = taskRows[0] as Record<string, unknown> | undefined;
   if (!taskRow) return { ok: false, error: "not_found" };
 
-  const contextRows = await tx`select * from task_context where task_id = ${taskId}`;
-  const runRows = await tx`select * from agent_runs where task_id = ${taskId}`;
+  const [contextRows, runRows, artifactRows, leaseRows] = await Promise.all([
+    tx`select * from task_context where task_id = ${taskId}`,
+    tx`select * from agent_runs where task_id = ${taskId}`,
+    tx`select * from artifacts where task_id = ${taskId} order by created_at asc`,
+    tx`select * from leases where task_id = ${taskId} and released = false`,
+  ]);
   const runRow = runRows[0] as Record<string, unknown> | undefined;
 
   const messageRows = runRow
     ? await tx`select * from agent_messages where run_id = ${runRow.id as string} order by seq asc`
     : [];
-  const artifactRows = await tx`select * from artifacts where task_id = ${taskId} order by created_at asc`;
-  const leaseRows = await tx`select * from leases where task_id = ${taskId} and released = false`;
 
   return {
     ok: true,
@@ -390,33 +397,32 @@ export class PgStore implements Store {
 
   // ---- idempotency ----
 
-  async getIdempotent(
-    clientId: string,
-    key: string,
-    route: string,
-  ): Promise<{ status: number; response: unknown } | null> {
+  async reserveIdempotent(clientId: string, key: string, route: string, now: Date): Promise<IdempotencyReservation> {
     return this.sql.begin(async (tx) => {
+      const inserted = await tx`
+        insert into idempotency_keys (client_id, key, route, state, created_at)
+        values (${clientId}, ${key}, ${route}, 'pending', ${now})
+        on conflict (client_id, key, route) do nothing
+        returning id
+      `;
+      if (inserted.length > 0) return { status: "reserved" };
+
       const rows = await tx`
-        select status, response from idempotency_keys
+        select state, status, response from idempotency_keys
         where client_id = ${clientId} and key = ${key} and route = ${route}
       `;
-      const row = rows[0] as Record<string, unknown> | undefined;
-      return row ? { status: row.status as number, response: row.response } : null;
+      const row = rows[0] as Record<string, unknown>;
+      if (row.state === "pending") return { status: "in_flight" };
+      return { status: "complete", response: { status: row.status as number, response: row.response } };
     });
   }
 
-  async putIdempotent(
-    clientId: string,
-    key: string,
-    route: string,
-    status: number,
-    response: unknown,
-  ): Promise<void> {
+  async completeIdempotent(clientId: string, key: string, route: string, status: number, response: unknown): Promise<void> {
     await this.sql.begin(async (tx) => {
       await tx`
-        insert into idempotency_keys (client_id, key, route, status, response)
-        values (${clientId}, ${key}, ${route}, ${status}, ${jsonb(tx, response as object)})
-        on conflict (client_id, key, route) do nothing
+        update idempotency_keys
+        set state = 'complete', status = ${status}, response = ${jsonb(tx, response as object)}
+        where client_id = ${clientId} and key = ${key} and route = ${route}
       `;
     });
   }
@@ -479,7 +485,7 @@ export class PgStore implements Store {
         runId = (runRows[0] as Record<string, unknown>).id as string;
       }
 
-      await insertEvent(tx, { taskId, runId, actor, type: "task_created", payload: {} }, now);
+      await insertEvent(tx, { taskId, runId, actor, type: EVENT_TASK_CREATED, payload: taskCreatedPayload(taskRow.title as string, taskRow.stage as TaskStage) }, now);
 
       return { ok: true, value: mapTask(taskRow) };
     });
@@ -487,55 +493,94 @@ export class PgStore implements Store {
 
   async listTasks(filter: TaskFilter, now: Date): Promise<TaskRow[]> {
     return this.sql.begin(async (tx) => {
+      if (filter.claimableBy) return this.listClaimableTasks(tx, filter, now);
+
       const conditions: ReturnType<TransactionSql>[] = [tx`deleted_at is null`];
       if (filter.stage) conditions.push(tx`stage = ${filter.stage}`);
       if (filter.owner) conditions.push(tx`owner = ${filter.owner}`);
       if (filter.provider) conditions.push(tx`selected_provider = ${filter.provider}`);
       if (filter.updatedAfter) conditions.push(tx`updated_at > ${new Date(filter.updatedAfter)}`);
 
-      if (filter.claimableBy) {
-        // Mirrors src/domain/queue.ts's `isClaimable` predicate, evaluated in
-        // SQL: owner/stage/blocked here, ledger approval via
-        // `requiresLedgerApproval` (MeetingTaskSource.swift), and the run's
-        // requiresConnectedWorker/backoff gates via a correlated subquery
-        // (no run row at all is claimable — those two gates only ever
-        // *restrict*, they never require a run to exist).
-        conditions.push(tx`owner = 'agent'`);
-        conditions.push(tx`stage in ('for_agent', 'queued')`);
-        conditions.push(tx`blocked_by_task_id is null`);
-        conditions.push(tx`not (source = ${MEETING_LEDGER_SOURCE} and agent_approval_granted = false)`);
-        conditions.push(
-          tx`(selected_provider is null or selected_provider = 'any' or selected_provider = ${filter.claimableBy})`,
-        );
-        conditions.push(tx`
-          not exists (
-            select 1 from agent_runs r
-            where r.task_id = tasks.id
-              and (r.requires_connected_worker = true or (r.next_attempt_at is not null and r.next_attempt_at > ${now}))
-          )
-        `);
-      }
-
       const where = joinAnd(tx, conditions);
       const limit = filter.limit ?? 200;
-
-      // Claimable listings order like the agent queue (src/domain/queue.ts's
-      // `compareQueueOrder`: priority rank, then createdAt, then id); a plain
-      // listing has no such ordering requirement, so it's most-recently
-      // touched first.
-      const rows = filter.claimableBy
-        ? await tx`
-            select * from tasks where ${where}
-            order by
-              case priority when 'urgent' then 0 when 'high' then 1 when 'normal' then 2 when 'low' then 3 else 4 end,
-              created_at asc,
-              id asc
-            limit ${limit}
-          `
-        : await tx`select * from tasks where ${where} order by updated_at desc limit ${limit}`;
-
+      const rows = await tx`select * from tasks where ${where} order by updated_at desc limit ${limit}`;
       return (rows as Record<string, unknown>[]).map(mapTask);
     });
+  }
+
+  /**
+   * The `claimableBy` branch of `listTasks`. Rewritten (item C/D4 of the
+   * fix pass) to load owner/stage-filtered candidate rows — joined once to
+   * each candidate's blocker task (for `computeIsBlocked`'s "blocker
+   * exists and isn't done" condition, which the old SQL never checked) and
+   * its run (for `isClaimable`'s connected-worker/backoff gates) — then run
+   * every candidate through the SAME domain predicates `claimTask` uses
+   * (`isClaimable`, `providerMatches`), rather than a hand-rolled SQL
+   * mirror of them that had already drifted (missing `blockedReason`,
+   * ledger-approval spelled out ad hoc). This is the single source of
+   * truth the task brief calls for; loading candidates by owner/stage and
+   * filtering in TS is fine at this data scale per the brief.
+   */
+  private async listClaimableTasks(tx: TransactionSql, filter: TaskFilter, now: Date): Promise<TaskRow[]> {
+    const claimableBy = filter.claimableBy!;
+    const conditions: ReturnType<TransactionSql>[] = [
+      tx`t.deleted_at is null`,
+      tx`t.owner = 'agent'`,
+      tx`t.stage in ('for_agent', 'queued')`,
+    ];
+    if (filter.stage) conditions.push(tx`t.stage = ${filter.stage}`);
+    if (filter.owner) conditions.push(tx`t.owner = ${filter.owner}`);
+    if (filter.provider) conditions.push(tx`t.selected_provider = ${filter.provider}`);
+    if (filter.updatedAfter) conditions.push(tx`t.updated_at > ${new Date(filter.updatedAfter)}`);
+    const where = joinAnd(tx, conditions);
+
+    const rows = await tx`
+      select
+        t.*,
+        b.stage as blocker_stage,
+        r.id as run_id,
+        r.requires_connected_worker as run_requires_connected_worker,
+        r.next_attempt_at as run_next_attempt_at
+      from tasks t
+      left join tasks b on b.id = t.blocked_by_task_id
+      left join agent_runs r on r.task_id = t.id
+      where ${where}
+    `;
+
+    const candidates = (rows as Record<string, unknown>[]).map((row) => {
+      const task = mapTask(row);
+      const isBlocked = computeIsBlocked({
+        blockedByTaskId: task.blockedByTaskId,
+        blockerStage: (row.blocker_stage as TaskStage | null) ?? null,
+        blockedReason: task.blockedReason,
+      });
+      const queueTask: QueueTask = {
+        uid: task.id,
+        owner: task.owner,
+        stage: task.stage,
+        isBlocked,
+        priority: task.priority,
+        createdAt: task.createdAt,
+        requiresAgentApproval: requiresLedgerApproval(task.source),
+        agentApprovalGranted: task.agentApprovalGranted,
+        run:
+          row.run_id !== null && row.run_id !== undefined
+            ? {
+                requiresConnectedWorker: row.run_requires_connected_worker as boolean,
+                nextAttemptAt: iso(row.run_next_attempt_at),
+              }
+            : null,
+      };
+      return { task, queueTask };
+    });
+
+    const claimable = candidates.filter(
+      ({ task, queueTask }) => isClaimable(queueTask, now) && providerMatches(task.selectedProvider, claimableBy),
+    );
+    claimable.sort((a, b) => compareQueueOrder(a.queueTask, b.queueTask));
+
+    const limit = filter.limit ?? 200;
+    return claimable.slice(0, limit).map(({ task }) => task);
   }
 
   async getTask(taskId: string): Promise<Result<ExpandedTask>> {
@@ -553,7 +598,29 @@ export class PgStore implements Store {
       const fragments: ReturnType<TransactionSql>[] = [];
       if (patch.title !== undefined) fragments.push(tx`title = ${patch.title}`);
       if (patch.notes !== undefined) fragments.push(tx`notes = ${patch.notes}`);
-      if (patch.stage !== undefined) fragments.push(tx`stage = ${patch.stage}`);
+      if (patch.stage !== undefined) {
+        fragments.push(tx`stage = ${patch.stage}`);
+        // A board-lane move on a ledger-imported meeting task grants/revokes
+        // the Do/Don't approval bit alongside the stage change (mirrors
+        // PersonalBoard.move, PersonalBoard.swift:72-75). Locked read (not
+        // just the outer row lock from `revision =` below, which only takes
+        // effect once we already know the new value) so a concurrent PATCH
+        // can't race the grant computation.
+        const currentRows = await tx`
+          select source, agent_approval_granted from tasks
+          where id = ${taskId} and deleted_at is null
+          for update
+        `;
+        const current = currentRows[0] as Record<string, unknown> | undefined;
+        if (current) {
+          const newGrant = agentApprovalGrantForMove(
+            requiresLedgerApproval(current.source as string),
+            current.agent_approval_granted as boolean,
+            patch.stage,
+          );
+          fragments.push(tx`agent_approval_granted = ${newGrant}`);
+        }
+      }
       if (patch.owner !== undefined) fragments.push(tx`owner = ${patch.owner}`);
       if (patch.priority !== undefined) fragments.push(tx`priority = ${patch.priority}`);
       if (patch.scheduledAt !== undefined) fragments.push(tx`scheduled_at = ${patch.scheduledAt}`);
@@ -581,7 +648,7 @@ export class PgStore implements Store {
       }
 
       const taskRow = rows[0] as Record<string, unknown>;
-      await insertEvent(tx, { taskId, runId: null, actor, type: "task_updated", payload: { patch } }, now);
+      await insertEvent(tx, { taskId, runId: null, actor, type: EVENT_TASK_UPDATED, payload: taskUpdatedPayload(patch) }, now);
       return { ok: true, value: mapTask(taskRow) };
     });
   }
@@ -596,7 +663,7 @@ export class PgStore implements Store {
       `;
       if (rows.length === 0) return { ok: false, error: "not_found" };
       const taskRow = rows[0] as Record<string, unknown>;
-      await insertEvent(tx, { taskId, runId: null, actor, type: "provider_set", payload: { provider } }, now);
+      await insertEvent(tx, { taskId, runId: null, actor, type: EVENT_PROVIDER_ASSIGNED, payload: providerAssignedPayload(provider) }, now);
       return { ok: true, value: mapTask(taskRow) };
     });
   }
@@ -630,19 +697,20 @@ export class PgStore implements Store {
         await tx`update leases set released = true where id = ${activeLease.id as string}`;
         await insertEvent(
           tx,
-          { taskId, runId: (runRow?.id as string) ?? null, actor: null, type: "lease_expired", payload: {} },
+          { taskId, runId: (runRow?.id as string) ?? null, actor: null, type: EVENT_LEASE_EXPIRED, payload: leaseExpiredPayload(activeLease.id as string) },
           now,
         );
         if (runRow) {
           const updated = await tx`
-            update agent_runs set state = 'interrupted', last_error = ${"Lease expired; run interrupted."}, updated_at = ${now}
+            update agent_runs
+            set state = 'interrupted', last_error = ${"Lease expired; run interrupted."}, revision = revision + 1, updated_at = ${now}
             where id = ${runRow.id as string}
             returning *
           `;
           runRow = updated[0] as Record<string, unknown>;
         }
         taskStage = "queued";
-        await tx`update tasks set stage = 'queued', updated_at = ${now} where id = ${taskId}`;
+        await tx`update tasks set stage = 'queued', revision = revision + 1, updated_at = ${now} where id = ${taskId}`;
       }
 
       // Provider compatibility: a client with no provider can never claim; a
@@ -652,15 +720,32 @@ export class PgStore implements Store {
         return { ok: false, error: "not_claimable", detail: "client has no provider" };
       }
       const selectedProvider = taskRow.selected_provider as Provider | null;
-      if (selectedProvider !== null && selectedProvider !== "any" && selectedProvider !== client.provider) {
+      if (!providerMatches(selectedProvider, client.provider)) {
         return { ok: false, error: "not_claimable", detail: "provider mismatch" };
       }
+
+      // Blocked-ness: mirrors src/domain/queue.ts's `computeIsBlocked`
+      // exactly (a blocker task that exists and isn't `done`, OR a non-empty
+      // `blockedReason`) — the old inline check here only looked at
+      // `blocked_by_task_id is not null`, ignoring both the blocker's actual
+      // stage and `blockedReason` entirely.
+      const blockedByTaskId = taskRow.blocked_by_task_id as string | null;
+      let blockerStage: TaskStage | null = null;
+      if (blockedByTaskId) {
+        const blockerRows = await tx`select stage from tasks where id = ${blockedByTaskId}`;
+        blockerStage = (blockerRows[0] as Record<string, unknown> | undefined)?.stage as TaskStage | undefined ?? null;
+      }
+      const isBlocked = computeIsBlocked({
+        blockedByTaskId,
+        blockerStage,
+        blockedReason: taskRow.blocked_reason as string,
+      });
 
       const queueTask: QueueTask = {
         uid: taskId,
         owner: taskRow.owner as QueueTask["owner"],
         stage: taskStage,
-        isBlocked: taskRow.blocked_by_task_id !== null,
+        isBlocked,
         priority: taskRow.priority as QueueTask["priority"],
         createdAt: isoRequired(taskRow.created_at),
         requiresAgentApproval: requiresLedgerApproval(taskRow.source as string),
@@ -706,6 +791,7 @@ export class PgStore implements Store {
               resume_count = resume_count + ${resumeInc},
               started_at = coalesce(started_at, ${now}),
               last_activity_at = ${now},
+              revision = revision + 1,
               updated_at = ${now}
           where id = ${runRow.id as string}
           returning *
@@ -713,10 +799,10 @@ export class PgStore implements Store {
         updatedRunRow = updated[0] as Record<string, unknown>;
       }
 
-      await tx`update tasks set stage = 'in_progress', updated_at = ${now} where id = ${taskId}`;
+      await tx`update tasks set stage = 'in_progress', revision = revision + 1, updated_at = ${now} where id = ${taskId}`;
       await insertEvent(
         tx,
-        { taskId, runId: updatedRunRow.id as string, actor: client.id, type: "task_claimed", payload: {} },
+        { taskId, runId: updatedRunRow.id as string, actor: client.id, type: EVENT_TASK_CLAIMED, payload: taskClaimedPayload(newLeaseRow.id as string, updatedRunRow.id as string) },
         now,
       );
 
@@ -740,7 +826,7 @@ export class PgStore implements Store {
         update leases set expires_at = ${expiresAt}, renewed_at = ${now} where id = ${leaseId} returning *
       `;
       const taskId = leaseRow.task_id as string;
-      await insertEvent(tx, { taskId, runId: null, actor: clientId, type: "lease_renewed", payload: {} }, now);
+      await insertEvent(tx, { taskId, runId: null, actor: clientId, type: EVENT_LEASE_RENEWED, payload: leaseRenewedPayload(leaseId) }, now);
       return { ok: true, value: mapLease(updated[0] as Record<string, unknown>) };
     });
   }
@@ -755,55 +841,107 @@ export class PgStore implements Store {
 
       await tx`update leases set released = true where id = ${leaseId}`;
       const taskId = leaseRow.task_id as string;
-      await insertEvent(tx, { taskId, runId: null, actor: clientId, type: "lease_released", payload: {} }, now);
+      await insertEvent(tx, { taskId, runId: null, actor: clientId, type: EVENT_LEASE_RELEASED, payload: leaseReleasedPayload(leaseId) }, now);
       return { ok: true, value: undefined };
     });
   }
 
+  /**
+   * Sweeps every unreleased, past-expiry lease. Mirrors
+   * `AgentTaskCoordinator.reconcileInterruptedRuns` per the design doc's
+   * "Lease gap confirmed" note: a gated action's completion is uncertain
+   * (-> `needs_review`, run `failed`, matching
+   * `decisionForOutcome("completion_uncertain")`); anything else just goes
+   * back to the queue with the run marked `interrupted`.
+   *
+   * Efficiency (item I of the fix pass): partially set-based. The per-lease
+   * task/run SELECTs are hoisted into ONE joined SELECT (locking every
+   * candidate lease row), and the leases/tasks/runs UPDATEs are each done as
+   * ONE bulk statement (tasks and runs split into two — gated vs ungated —
+   * bulk UPDATEs apiece) using `in ${tx(ids)}` rather than one UPDATE per
+   * lease. The `task_events` INSERTs are deliberately NOT batched into a
+   * single multi-row insert: this file's header comment already documents
+   * that a `jsonb` column bound from a plain JS value/array has no inferred
+   * Postgres type and silently stringifies wrong unless it goes through
+   * `jsonb()`/`tx.array()` — postgres.js's array-of-objects insert helper
+   * (`sql([{...}, ...])`) doesn't have a documented per-row jsonb-column
+   * story, and there's no local Postgres here to verify one against, so
+   * batching the event insert was judged too risky to ship unverified. Each
+   * event is still inserted individually via the existing `insertEvent`
+   * helper, which already handles `jsonb` correctly.
+   */
   async expireLeases(now: Date): Promise<TaskEventRow[]> {
     return this.sql.begin(async (tx) => {
-      const leaseRows = await tx`select * from leases where released = false and expires_at < ${now} for update`;
-      const events: TaskEventRow[] = [];
+      const rows = await tx`
+        select l.id as lease_id, l.task_id, t.action_type, r.id as run_id
+        from leases l
+        join tasks t on t.id = l.task_id
+        left join agent_runs r on r.task_id = l.task_id
+        where l.released = false and l.expires_at < ${now}
+        for update of l
+      `;
+      if (rows.length === 0) return [];
 
-      for (const leaseRow of leaseRows as Record<string, unknown>[]) {
-        const taskId = leaseRow.task_id as string;
-        const taskRows = await tx`select * from tasks where id = ${taskId} for update`;
-        const taskRow = taskRows[0] as Record<string, unknown> | undefined;
-        if (!taskRow) continue; // FK guarantees this shouldn't happen
+      const leaseRows = rows as Record<string, unknown>[];
+      const leaseIds = leaseRows.map((r) => r.lease_id as string);
+      await tx`update leases set released = true where id in ${tx(leaseIds)}`;
 
-        const runRows = await tx`select * from agent_runs where task_id = ${taskId} for update`;
-        const runRow = runRows[0] as Record<string, unknown> | undefined;
+      const gatedTaskIds: string[] = [];
+      const ungatedTaskIds: string[] = [];
+      const gatedRunIds: string[] = [];
+      const ungatedRunIds: string[] = [];
+      for (const row of leaseRows) {
+        const gated = isGatedActionType(row.action_type as string | null);
+        (gated ? gatedTaskIds : ungatedTaskIds).push(row.task_id as string);
+        const runId = row.run_id as string | null;
+        if (runId) (gated ? gatedRunIds : ungatedRunIds).push(runId);
+      }
 
-        await tx`update leases set released = true where id = ${leaseRow.id as string}`;
-
-        // Mirrors AgentTaskCoordinator.reconcileInterruptedRuns's two
-        // reachable branches per the design doc's "Lease gap confirmed"
-        // note: a gated action's completion is uncertain (-> needs_review,
-        // run failed, matching decisionForOutcome("completion_uncertain"));
-        // anything else just goes back to the queue with the run marked
-        // interrupted (the DB's dedicated state for exactly this case).
-        const gated = isGatedActionType(taskRow.action_type as string | null);
-        const newTaskStage: TaskStage = gated ? "needs_review" : "queued";
-        const newRunState: AgentRunState = gated ? "failed" : "interrupted";
-
+      if (gatedTaskIds.length > 0) {
         await tx`
-          update tasks set stage = ${newTaskStage}, revision = revision + 1, updated_at = ${now} where id = ${taskId}
+          update tasks set stage = 'needs_review', revision = revision + 1, updated_at = ${now}
+          where id in ${tx(gatedTaskIds)}
         `;
-        if (runRow) {
-          const lastError = gated
-            ? "Lease expired mid-turn; completion uncertain."
-            : "Lease expired; run interrupted.";
-          const completedAtFragment = gated ? tx`, completed_at = ${now}` : tx``;
-          await tx`
-            update agent_runs
-            set state = ${newRunState}, last_error = ${lastError}, updated_at = ${now} ${completedAtFragment}
-            where id = ${runRow.id as string}
-          `;
-        }
+      }
+      if (ungatedTaskIds.length > 0) {
+        await tx`
+          update tasks set stage = 'queued', revision = revision + 1, updated_at = ${now}
+          where id in ${tx(ungatedTaskIds)}
+        `;
+      }
+      if (gatedRunIds.length > 0) {
+        await tx`
+          update agent_runs
+          set state = 'failed',
+              last_error = ${"Lease expired mid-turn; completion uncertain."},
+              completed_at = ${now},
+              revision = revision + 1,
+              updated_at = ${now}
+          where id in ${tx(gatedRunIds)}
+        `;
+      }
+      if (ungatedRunIds.length > 0) {
+        await tx`
+          update agent_runs
+          set state = 'interrupted',
+              last_error = ${"Lease expired; run interrupted."},
+              revision = revision + 1,
+              updated_at = ${now}
+          where id in ${tx(ungatedRunIds)}
+        `;
+      }
 
+      const events: TaskEventRow[] = [];
+      for (const row of leaseRows) {
         const event = await insertEvent(
           tx,
-          { taskId, runId: (runRow?.id as string) ?? null, actor: null, type: "lease_expired", payload: { gated } },
+          {
+            taskId: row.task_id as string,
+            runId: (row.run_id as string | null) ?? null,
+            actor: null,
+            type: EVENT_LEASE_EXPIRED,
+            payload: leaseExpiredPayload(row.lease_id as string),
+          },
           now,
         );
         events.push(event);
@@ -847,10 +985,11 @@ export class PgStore implements Store {
         )
         returning *
       `;
-      await tx`update agent_runs set last_activity_at = ${now}, updated_at = ${now} where id = ${runId}`;
-      await insertEvent(tx, { taskId, runId, actor: client.id, type: "message_appended", payload: { kind: input.kind } }, now);
+      await tx`update agent_runs set last_activity_at = ${now}, revision = revision + 1, updated_at = ${now} where id = ${runId}`;
+      const insertedMessage = mapMessage(inserted[0] as Record<string, unknown>);
+      await insertEvent(tx, { taskId, runId, actor: client.id, type: EVENT_MESSAGE_APPENDED, payload: messageAppendedPayload(insertedMessage.id, insertedMessage.kind) }, now);
 
-      return { ok: true, value: mapMessage(inserted[0] as Record<string, unknown>) };
+      return { ok: true, value: insertedMessage };
     });
   }
 
@@ -878,16 +1017,11 @@ export class PgStore implements Store {
       const decision = decisionForOutcome(input.outcome);
       const runId = runRow.id as string;
 
-      // Message kind + content: "question" joins questions[]; "result" and
-      // "error" per the brief; the three outcomes without an explicit named
-      // kind get the closest fit (progress for the two non-terminal/neutral
-      // outcomes, error for completion_uncertain since its run ends
-      // `failed` just like a genuine failure).
       const kind = messageKindForOutcome(input.outcome);
       const content =
         input.outcome === "needs_input" && input.questions && input.questions.length > 0
           ? input.questions.join("\n")
-          : input.outcome === "completed" && input.summary
+          : input.outcome === "completed" && input.summary !== undefined
             ? input.summary
             : input.message;
 
@@ -913,8 +1047,10 @@ export class PgStore implements Store {
       `;
 
       const completedAt = completedAtForState(decision.runState, now);
-      const lastError =
-        input.outcome === "failed" || input.outcome === "completion_uncertain" ? (input.errorCategory ?? input.message) : null;
+      // Swift's `AgentRun.lastError` holds the verbatim runtime output, not a
+      // category label — mirror that exactly (memory.ts already did).
+      // `errorCategory` moves to the `outcome_applied` event payload instead.
+      const lastError = input.outcome === "failed" || input.outcome === "completion_uncertain" ? input.message : null;
       const providerSessionFragment =
         input.providerSessionId !== undefined ? tx`, provider_session_id = ${input.providerSessionId}` : tx``;
       const completedAtFragment = completedAt.touch ? tx`, completed_at = ${completedAt.value}` : tx``;
@@ -925,6 +1061,7 @@ export class PgStore implements Store {
             last_error = ${lastError},
             requires_connected_worker = ${decision.requiresConnectedWorker},
             last_activity_at = ${now},
+            revision = revision + 1,
             updated_at = ${now}
             ${providerSessionFragment}
             ${completedAtFragment}
@@ -935,7 +1072,17 @@ export class PgStore implements Store {
         await tx`update leases set released = true where id = ${activeLease.id as string}`;
       }
 
-      await insertEvent(tx, { taskId, runId, actor: client.id, type: "outcome_reported", payload: { outcome: input.outcome } }, now);
+      await insertEvent(
+        tx,
+        {
+          taskId,
+          runId,
+          actor: client.id,
+          type: EVENT_OUTCOME_APPLIED,
+          payload: outcomeAppliedPayload(input.outcome, decision.taskStage, decision.runState, input.errorCategory),
+        },
+        now,
+      );
 
       return loadExpandedTask(tx, taskId);
     });
@@ -971,8 +1118,24 @@ export class PgStore implements Store {
       `;
 
       await tx`update tasks set stage = 'queued', revision = revision + 1, updated_at = ${now} where id = ${taskId}`;
-      await tx`update agent_runs set state = 'queued', last_activity_at = ${now}, updated_at = ${now} where id = ${runId}`;
-      await insertEvent(tx, { taskId, runId, actor, type: "reply_posted", payload: {} }, now);
+      // Mirrors `queueHumanTurn`'s reset block (AgentTaskCoordinator.swift:
+      // 772-778) — a human-driven turn is a fresh attempt: clear any backoff/
+      // retry budget and stale error alongside the state transition.
+      const reset = freshAttemptRunReset();
+      await tx`
+        update agent_runs
+        set state = 'queued',
+            requires_connected_worker = ${reset.requiresConnectedWorker},
+            completed_at = ${reset.completedAt},
+            last_error = ${reset.lastError},
+            next_attempt_at = ${reset.nextAttemptAt},
+            auto_retry_count = ${reset.autoRetryCount},
+            last_activity_at = ${now},
+            revision = revision + 1,
+            updated_at = ${now}
+        where id = ${runId}
+      `;
+      await insertEvent(tx, { taskId, runId, actor, type: EVENT_REPLIED, payload: repliedPayload(content) }, now);
 
       return loadExpandedTask(tx, taskId);
     });
@@ -993,6 +1156,39 @@ export class PgStore implements Store {
       const runRows = await tx`select * from agent_runs where task_id = ${taskId} for update`;
       const runRow = runRows[0] as Record<string, unknown> | undefined;
 
+      if (action === "approve") {
+        const stage = taskRow.stage as TaskStage;
+        const owner = taskRow.owner as "me" | "agent";
+        const ctx: ApproveContext = {
+          isExistenceTriage: requiresLedgerApproval(taskRow.source as string) && owner === "me",
+          isGated: isGatedActionType(taskRow.action_type as string | null),
+          owner,
+        };
+        const target = approveTarget(stage, ctx);
+        if (!target) return { ok: false, error: "illegal_transition" };
+
+        const newGrant = agentApprovalGrantForMove(
+          requiresLedgerApproval(taskRow.source as string),
+          taskRow.agent_approval_granted as boolean,
+          target,
+        );
+        const completedAtFragment = target === "done" ? tx`, completed_at = ${now}` : tx``;
+        await tx`
+          update tasks
+          set stage = ${target}, agent_approval_granted = ${newGrant}, revision = revision + 1, updated_at = ${now}
+              ${completedAtFragment}
+          where id = ${taskId}
+        `;
+
+        await insertEvent(
+          tx,
+          { taskId, runId: (runRow?.id as string) ?? null, actor, type: EVENT_APPROVED, payload: approvedPayload(stage, target) },
+          now,
+        );
+
+        return loadExpandedTask(tx, taskId);
+      }
+
       const owner = taskRow.owner as "me" | "agent";
       const stage = taskRow.stage as TaskStage;
       const legal =
@@ -1004,6 +1200,9 @@ export class PgStore implements Store {
       if (!legal) return { ok: false, error: "illegal_transition" };
 
       const result = reviewAction(action, { requiresAgentApproval: requiresLedgerApproval(taskRow.source as string) });
+      // TODO(slice 6): recurrence cascade on accept — TaskCompletion.complete/
+      // RecurrenceEngine has no server port; the Mac client owns next-instance
+      // creation until then.
 
       const ownerFragment = result.owner ? tx`, owner = ${result.owner}` : tx``;
       const completedAtFragment = result.stage === "done" ? tx`, completed_at = ${now}` : tx``;
@@ -1019,11 +1218,40 @@ export class PgStore implements Store {
       if (result.runState && runRow) {
         const completedAt = completedAtForState(result.runState, now);
         const completedAtRunFragment = completedAt.touch ? tx`, completed_at = ${completedAt.value}` : tx``;
+        // Mirrors `queueHumanTurn`'s reset block (AgentTaskCoordinator.swift:
+        // 772-778): request_changes is a human-driven fresh attempt, so any
+        // backoff/retry budget from a prior failed attempt is cleared.
+        const resetFragment =
+          action === "request_changes"
+            ? (() => {
+                const reset = freshAttemptRunReset();
+                return tx`,
+                  requires_connected_worker = ${reset.requiresConnectedWorker},
+                  next_attempt_at = ${reset.nextAttemptAt},
+                  auto_retry_count = ${reset.autoRetryCount}`;
+              })()
+            : tx``;
         await tx`
           update agent_runs
-          set state = ${result.runState}, last_activity_at = ${now}, updated_at = ${now} ${completedAtRunFragment}
+          set state = ${result.runState}, last_activity_at = ${now}, revision = revision + 1, updated_at = ${now}
+              ${completedAtRunFragment} ${resetFragment}
           where id = ${runRow.id as string}
         `;
+      }
+
+      if (action === "take_back") {
+        // A take-back can happen from queued/in_progress, where a lease may
+        // still be held — reclaiming the task from the agent must free it.
+        // Mirrors memory.ts's take_back lease release.
+        const activeLease = await findActiveLease(tx, taskId);
+        if (activeLease && !activeLease.released) {
+          await tx`update leases set released = true where id = ${activeLease.id as string}`;
+          await insertEvent(
+            tx,
+            { taskId, runId: (runRow?.id as string) ?? null, actor, type: EVENT_LEASE_RELEASED, payload: leaseReleasedPayload(activeLease.id as string) },
+            now,
+          );
+        }
       }
 
       if (feedback && feedback.trim() !== "" && runRow) {
@@ -1038,7 +1266,7 @@ export class PgStore implements Store {
 
       await insertEvent(
         tx,
-        { taskId, runId: (runRow?.id as string) ?? null, actor, type: `review_${action}`, payload: { action, feedback: feedback ?? null } },
+        { taskId, runId: (runRow?.id as string) ?? null, actor, type: EVENT_REVIEWED, payload: reviewedPayload(action) },
         now,
       );
 
@@ -1091,22 +1319,6 @@ export class PgStore implements Store {
       const rows = await tx`select * from task_events where seq > ${afterSeq} order by seq asc limit ${limit}`;
       return (rows as Record<string, unknown>[]).map(mapEvent);
     });
-  }
-}
-
-function messageKindForOutcome(outcome: TurnOutcome): MessageKind {
-  switch (outcome) {
-    case "needs_input":
-      return "question";
-    case "completed":
-      return "result";
-    case "failed":
-      return "error";
-    case "completion_uncertain":
-      return "error";
-    case "cancelled":
-    case "requires_connected_worker":
-      return "progress";
   }
 }
 

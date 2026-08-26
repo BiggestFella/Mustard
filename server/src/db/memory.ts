@@ -22,11 +22,13 @@ import type {
   ClientRow,
   CreateTaskInput,
   ExpandedTask,
+  IdempotencyReservation,
   LeaseRow,
   MessageInput,
   OutcomeInput,
   Result,
   Store,
+  StoreError,
   TaskContextRow,
   TaskEventRow,
   TaskFilter,
@@ -35,16 +37,55 @@ import type {
   TaskRow,
 } from "./store.ts";
 import type { AgentMessageRow, AgentRunRow } from "./store.ts";
-import type { MessageKind, Provider, TurnOutcome } from "../domain/stages.ts";
+import type { Provider } from "../domain/stages.ts";
 import {
+  agentApprovalGrantForMove,
+  approveTarget,
   canReply,
   canRequestChanges,
   canTakeBack,
   decisionForOutcome,
+  freshAttemptRunReset,
+  isGatedActionType,
+  messageKindForOutcome,
   reviewAction,
+  type ApproveContext,
   type ReviewActionKind,
 } from "../domain/transitions.ts";
-import { compareQueueOrder, isClaimable, type QueueTask } from "../domain/queue.ts";
+import {
+  compareQueueOrder,
+  computeIsBlocked,
+  isClaimable,
+  providerMatches,
+  requiresLedgerApproval,
+  type QueueTask,
+} from "../domain/queue.ts";
+import {
+  EVENT_APPROVED,
+  EVENT_LEASE_EXPIRED,
+  EVENT_LEASE_RELEASED,
+  EVENT_LEASE_RENEWED,
+  EVENT_MESSAGE_APPENDED,
+  EVENT_OUTCOME_APPLIED,
+  EVENT_PROVIDER_ASSIGNED,
+  EVENT_REPLIED,
+  EVENT_REVIEWED,
+  EVENT_TASK_CLAIMED,
+  EVENT_TASK_CREATED,
+  EVENT_TASK_UPDATED,
+  approvedPayload,
+  leaseExpiredPayload,
+  leaseReleasedPayload,
+  leaseRenewedPayload,
+  messageAppendedPayload,
+  outcomeAppliedPayload,
+  providerAssignedPayload,
+  repliedPayload,
+  reviewedPayload,
+  taskClaimedPayload,
+  taskCreatedPayload,
+  taskUpdatedPayload,
+} from "../domain/events.ts";
 import type { ClientScope } from "../auth.ts";
 
 // ---------------------------------------------------------------------------
@@ -80,43 +121,6 @@ function mergeLinks(existing: TaskLinkJSON[], incoming: TaskLinkJSON[] | undefin
   return [...byUrl.values()];
 }
 
-/**
- * Message kind for an applied turn outcome. `needs_input` -> `completed` ->
- * `failed` are spelled out explicitly by the task brief; the other three
- * outcomes aren't, so this resolves them by the closest fit in
- * `MessageKind` and documents the reasoning inline (see also this file's
- * evidence report):
- *  - `completion_uncertain` is routed through `decisionForOutcome` exactly
- *    like `failed` (runState: "failed") — mirror that for the message kind.
- *  - `cancelled` is likewise a terminal negative outcome with no dedicated
- *    kind, so it gets the same treatment.
- *  - `requires_connected_worker` isn't a failure — the task simply requeues
- *    pending a capability this worker doesn't have — so it's tagged
- *    `progress` (an in-flight update) rather than `error`.
- */
-function messageKindForOutcome(outcome: TurnOutcome): MessageKind {
-  switch (outcome) {
-    case "needs_input":
-      return "question";
-    case "completed":
-      return "result";
-    case "failed":
-    case "cancelled":
-    case "completion_uncertain":
-      return "error";
-    case "requires_connected_worker":
-      return "progress";
-  }
-}
-
-function requiresAgentApproval(source: string): boolean {
-  // Mirrors Sources/MustardKit/Logic/MeetingTaskSource.swift:
-  // `requiresAgentApproval(_:) { source == "meeting" }`. "meeting-recording"
-  // is a *different* pipeline that is already locally approved and must NOT
-  // match here (see that file's doc comment).
-  return source === "meeting";
-}
-
 // ---------------------------------------------------------------------------
 // MemoryStore
 // ---------------------------------------------------------------------------
@@ -136,7 +140,10 @@ export class MemoryStore implements Store {
   private clients = new Map<string, ClientRow>();
   private clientsByTokenHash = new Map<string, string>(); // tokenHash -> clientId
   private lastSeenAt = new Map<string, string>(); // clientId -> ISO (ClientRow has no field for it)
-  private idempotency = new Map<string, { status: number; response: unknown }>();
+  private idempotency = new Map<
+    string,
+    { state: "pending" } | { state: "complete"; status: number; response: unknown }
+  >();
 
   constructor(seed?: MemoryStoreSeed) {
     for (const c of seed?.clients ?? []) {
@@ -168,7 +175,7 @@ export class MemoryStore implements Store {
     runId: string | null,
     actor: string | null,
     type: string,
-    payload: Record<string, unknown>,
+    payload: object,
     now: Date = new Date(),
   ): TaskEventRow {
     this.eventSeq += 1;
@@ -192,13 +199,12 @@ export class MemoryStore implements Store {
   }
 
   private computeIsBlocked(task: TaskRow): boolean {
-    // Mirrors MustardTask.isBlocked (Models/MustardTask.swift): blocked by
-    // an unfinished dependency, or by a non-empty free-text reason.
-    if (task.blockedByTaskId) {
-      const blocker = this.tasks.get(task.blockedByTaskId);
-      if (blocker && blocker.stage !== "done") return true;
-    }
-    return task.blockedReason.trim().length > 0;
+    const blocker = task.blockedByTaskId ? this.tasks.get(task.blockedByTaskId) : undefined;
+    return computeIsBlocked({
+      blockedByTaskId: task.blockedByTaskId,
+      blockerStage: blocker ? blocker.stage : null,
+      blockedReason: task.blockedReason,
+    });
   }
 
   private toQueueTask(task: TaskRow, run: AgentRunRow | null): QueueTask {
@@ -209,7 +215,7 @@ export class MemoryStore implements Store {
       isBlocked: this.computeIsBlocked(task),
       priority: task.priority,
       createdAt: task.createdAt,
-      requiresAgentApproval: requiresAgentApproval(task.source),
+      requiresAgentApproval: requiresLedgerApproval(task.source),
       agentApprovalGranted: task.agentApprovalGranted,
       run: run ? { requiresConnectedWorker: run.requiresConnectedWorker, nextAttemptAt: run.nextAttemptAt } : null,
     };
@@ -242,12 +248,12 @@ export class MemoryStore implements Store {
    * Sweeps every unreleased, past-expiry lease. Shared by the lazy sweep
    * `claimTask` performs and the public `expireLeases`.
    *
-   * Simplification (documented per the task brief): this slice has no
-   * action-gating information, so EVERY expired-lease task routes back to
-   * `queued` with its run marked `interrupted` — there is no
-   * gated-completion-uncertain branch here. That distinction arrives with
-   * the recommendations slice, which is what will carry the "was this a
-   * gated action?" signal this sweep would need.
+   * Mirrors pg.ts's `expireLeases` gated-vs-not routing (which mirrors
+   * `AgentTaskCoordinator.reconcileInterruptedRuns` per the design doc's
+   * "Lease gap confirmed" note): a gated action's completion is uncertain
+   * (-> `needs_review`, run `failed`, matching
+   * `decisionForOutcome("completion_uncertain")`); anything else just goes
+   * back to the queue with the run marked `interrupted`.
    */
   private sweepExpiredLeases(now: Date): TaskEventRow[] {
     const expiredEvents: TaskEventRow[] = [];
@@ -263,23 +269,44 @@ export class MemoryStore implements Store {
       const task = this.tasks.get(lease.taskId);
       let runId: string | null = null;
       if (task) {
-        task.stage = "queued";
+        const gated = isGatedActionType(task.actionType);
+        task.stage = gated ? "needs_review" : "queued";
         task.revision += 1;
         task.updatedAt = now.toISOString();
 
         const run = this.getRunForTask(lease.taskId);
         if (run) {
-          run.state = "interrupted";
+          run.state = gated ? "failed" : "interrupted";
+          run.lastError = gated
+            ? "Lease expired mid-turn; completion uncertain."
+            : "Lease expired; run interrupted.";
+          if (gated) run.completedAt = now.toISOString();
           run.lastActivityAt = now.toISOString();
           run.revision += 1;
           runId = run.id;
         }
       }
 
-      const event = this.appendEvent(lease.taskId, runId, null, "lease_expired", { leaseId: lease.id }, now);
+      const event = this.appendEvent(lease.taskId, runId, null, EVENT_LEASE_EXPIRED, leaseExpiredPayload(lease.id), now);
       expiredEvents.push(event);
     }
     return expiredEvents;
+  }
+
+  /**
+   * Verifies `client` currently holds the task's live, unexpired lease.
+   * Only enforced for `worker` clients — `user_app` appends/reports freely
+   * per store.ts's contract. Shared by `appendMessage` and `applyOutcome`,
+   * which previously copy-pasted this check WITHOUT the expiry test (pg.ts's
+   * `leaseFailure` already had it) — collapsed into one helper here.
+   */
+  private leaseFailure(taskId: string, client: ClientRow, now: Date): StoreError | null {
+    if (client.kind !== "worker") return null;
+    const activeLeaseId = this.activeLeaseByTask.get(taskId);
+    const lease = activeLeaseId ? this.leases.get(activeLeaseId) : undefined;
+    if (!lease || lease.clientId !== client.id) return "lease_required";
+    if (new Date(lease.expiresAt).getTime() <= now.getTime()) return "lease_expired";
+    return null;
   }
 
   // -------------------------------------------------------------------
@@ -300,12 +327,19 @@ export class MemoryStore implements Store {
   // idempotency
   // -------------------------------------------------------------------
 
-  async getIdempotent(clientId: string, key: string, route: string): Promise<{ status: number; response: unknown } | null> {
-    return this.idempotency.get(idempotencyKey(clientId, key, route)) ?? null;
+  async reserveIdempotent(clientId: string, key: string, route: string, _now: Date): Promise<IdempotencyReservation> {
+    const k = idempotencyKey(clientId, key, route);
+    const existing = this.idempotency.get(k);
+    if (!existing) {
+      this.idempotency.set(k, { state: "pending" });
+      return { status: "reserved" };
+    }
+    if (existing.state === "pending") return { status: "in_flight" };
+    return { status: "complete", response: { status: existing.status, response: existing.response } };
   }
 
-  async putIdempotent(clientId: string, key: string, route: string, status: number, response: unknown): Promise<void> {
-    this.idempotency.set(idempotencyKey(clientId, key, route), { status, response });
+  async completeIdempotent(clientId: string, key: string, route: string, status: number, response: unknown): Promise<void> {
+    this.idempotency.set(idempotencyKey(clientId, key, route), { state: "complete", status, response });
   }
 
   // -------------------------------------------------------------------
@@ -400,7 +434,7 @@ export class MemoryStore implements Store {
       this.runByTask.set(id, runId);
     }
 
-    this.appendEvent(id, this.runByTask.get(id) ?? null, actor, "task_created", { title: task.title, stage: task.stage }, now);
+    this.appendEvent(id, this.runByTask.get(id) ?? null, actor, EVENT_TASK_CREATED, taskCreatedPayload(task.title, task.stage), now);
     return { ok: true, value: task };
   }
 
@@ -420,8 +454,7 @@ export class MemoryStore implements Store {
       results = results.filter((t) => {
         const run = this.getRunForTask(t.id);
         if (!isClaimable(this.toQueueTask(t, run), now)) return false;
-        if (t.selectedProvider === null || t.selectedProvider === "any") return true;
-        return t.selectedProvider === claimableBy;
+        return providerMatches(t.selectedProvider, claimableBy);
       });
       results.sort((a, b) =>
         compareQueueOrder(this.toQueueTask(a, this.getRunForTask(a.id)), this.toQueueTask(b, this.getRunForTask(b.id))),
@@ -451,7 +484,19 @@ export class MemoryStore implements Store {
 
     if (patch.title !== undefined) task.title = patch.title;
     if (patch.notes !== undefined) task.notes = patch.notes;
-    if (patch.stage !== undefined) task.stage = patch.stage;
+    if (patch.stage !== undefined) {
+      task.stage = patch.stage;
+      // A board-lane move on a ledger-imported meeting task grants/revokes
+      // the Do/Don't approval bit alongside the stage change (mirrors
+      // PersonalBoard.move, PersonalBoard.swift:72-75) — the PATCH route has
+      // no separate "approve" verb of its own, so this is the only place a
+      // plain stage-drag can flip the grant.
+      task.agentApprovalGranted = agentApprovalGrantForMove(
+        requiresLedgerApproval(task.source),
+        task.agentApprovalGranted,
+        patch.stage,
+      );
+    }
     if (patch.owner !== undefined) task.owner = patch.owner;
     if (patch.priority !== undefined) task.priority = patch.priority;
     if (patch.scheduledAt !== undefined) task.scheduledAt = patch.scheduledAt;
@@ -465,7 +510,7 @@ export class MemoryStore implements Store {
     task.revision += 1;
     task.updatedAt = now.toISOString();
 
-    this.appendEvent(taskId, this.runByTask.get(taskId) ?? null, actor, "task_updated", { patch }, now);
+    this.appendEvent(taskId, this.runByTask.get(taskId) ?? null, actor, EVENT_TASK_UPDATED, taskUpdatedPayload(patch), now);
     return { ok: true, value: task };
   }
 
@@ -477,7 +522,7 @@ export class MemoryStore implements Store {
     task.revision += 1;
     task.updatedAt = now.toISOString();
 
-    this.appendEvent(taskId, this.runByTask.get(taskId) ?? null, actor, "provider_assigned", { provider }, now);
+    this.appendEvent(taskId, this.runByTask.get(taskId) ?? null, actor, EVENT_PROVIDER_ASSIGNED, providerAssignedPayload(provider), now);
     return { ok: true, value: task };
   }
 
@@ -505,7 +550,7 @@ export class MemoryStore implements Store {
     }
     const clientProvider: Provider = client.provider;
 
-    if (task.selectedProvider !== null && task.selectedProvider !== "any" && task.selectedProvider !== clientProvider) {
+    if (!providerMatches(task.selectedProvider, clientProvider)) {
       return { ok: false, error: "not_claimable", detail: "provider mismatch" };
     }
 
@@ -567,7 +612,7 @@ export class MemoryStore implements Store {
     task.revision += 1;
     task.updatedAt = nowIso;
 
-    this.appendEvent(taskId, run.id, client.id, "task_claimed", { leaseId, runId: run.id }, now);
+    this.appendEvent(taskId, run.id, client.id, EVENT_TASK_CLAIMED, taskClaimedPayload(leaseId, run.id), now);
 
     return { ok: true, value: { lease, task: this.expand(taskId) } };
   }
@@ -585,7 +630,7 @@ export class MemoryStore implements Store {
     lease.renewedAt = now.toISOString();
     lease.expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
 
-    this.appendEvent(lease.taskId, this.runByTask.get(lease.taskId) ?? null, clientId, "lease_renewed", { leaseId }, now);
+    this.appendEvent(lease.taskId, this.runByTask.get(lease.taskId) ?? null, clientId, EVENT_LEASE_RENEWED, leaseRenewedPayload(leaseId), now);
     return { ok: true, value: lease };
   }
 
@@ -599,7 +644,7 @@ export class MemoryStore implements Store {
       if (this.activeLeaseByTask.get(lease.taskId) === lease.id) {
         this.activeLeaseByTask.delete(lease.taskId);
       }
-      this.appendEvent(lease.taskId, this.runByTask.get(lease.taskId) ?? null, clientId, "lease_released", { leaseId }, now);
+      this.appendEvent(lease.taskId, this.runByTask.get(lease.taskId) ?? null, clientId, EVENT_LEASE_RELEASED, leaseReleasedPayload(leaseId), now);
     }
 
     return { ok: true, value: undefined };
@@ -617,13 +662,8 @@ export class MemoryStore implements Store {
     const task = this.tasks.get(taskId);
     if (!task || task.deletedAt) return { ok: false, error: "not_found" };
 
-    if (client.kind === "worker") {
-      const activeLeaseId = this.activeLeaseByTask.get(taskId);
-      const lease = activeLeaseId ? this.leases.get(activeLeaseId) : undefined;
-      if (!lease || lease.clientId !== client.id) {
-        return { ok: false, error: "lease_required" };
-      }
-    }
+    const failure = this.leaseFailure(taskId, client, now);
+    if (failure) return { ok: false, error: failure };
 
     const run = this.getRunForTask(taskId);
     if (!run) return { ok: false, error: "not_found", detail: "task has no active run" };
@@ -645,7 +685,7 @@ export class MemoryStore implements Store {
     run.lastActivityAt = nowIso;
     run.revision += 1;
 
-    this.appendEvent(taskId, run.id, client.id, "message_appended", { messageId: message.id, kind: message.kind }, now);
+    this.appendEvent(taskId, run.id, client.id, EVENT_MESSAGE_APPENDED, messageAppendedPayload(message.id, message.kind), now);
     return { ok: true, value: message };
   }
 
@@ -653,13 +693,8 @@ export class MemoryStore implements Store {
     const task = this.tasks.get(taskId);
     if (!task || task.deletedAt) return { ok: false, error: "not_found" };
 
-    if (client.kind === "worker") {
-      const activeLeaseId = this.activeLeaseByTask.get(taskId);
-      const lease = activeLeaseId ? this.leases.get(activeLeaseId) : undefined;
-      if (!lease || lease.clientId !== client.id) {
-        return { ok: false, error: "lease_required" };
-      }
-    }
+    const failure = this.leaseFailure(taskId, client, now);
+    if (failure) return { ok: false, error: failure };
 
     const run = this.getRunForTask(taskId);
     if (!run) return { ok: false, error: "not_found", detail: "task has no active run" };
@@ -671,7 +706,7 @@ export class MemoryStore implements Store {
     let content: string;
     if (input.outcome === "needs_input" && input.questions && input.questions.length > 0) {
       content = input.questions.join("\n");
-    } else if (input.outcome === "completed" && input.summary) {
+    } else if (input.outcome === "completed" && input.summary !== undefined) {
       content = input.summary;
     } else {
       content = input.message;
@@ -721,8 +756,8 @@ export class MemoryStore implements Store {
       taskId,
       run.id,
       client.id,
-      "outcome_applied",
-      { outcome: input.outcome, taskStage: task.stage, runState: run.state },
+      EVENT_OUTCOME_APPLIED,
+      outcomeAppliedPayload(input.outcome, task.stage, run.state, input.errorCategory),
       now,
     );
 
@@ -730,6 +765,10 @@ export class MemoryStore implements Store {
   }
 
   async reply(taskId: string, content: string, actor: string, now: Date): Promise<Result<ExpandedTask>> {
+    if (!content || content.trim() === "") {
+      return { ok: false, error: "illegal_transition", detail: "reply content is empty" };
+    }
+
     const task = this.tasks.get(taskId);
     if (!task || task.deletedAt) return { ok: false, error: "not_found" };
 
@@ -751,11 +790,17 @@ export class MemoryStore implements Store {
     task.revision += 1;
     task.updatedAt = nowIso;
 
+    const reset = freshAttemptRunReset();
     run.state = "queued";
+    run.requiresConnectedWorker = reset.requiresConnectedWorker;
+    run.completedAt = reset.completedAt;
+    run.lastError = reset.lastError;
+    run.nextAttemptAt = reset.nextAttemptAt;
+    run.autoRetryCount = reset.autoRetryCount;
     run.lastActivityAt = nowIso;
     run.revision += 1;
 
-    this.appendEvent(taskId, run.id, actor, "replied", { content }, now);
+    this.appendEvent(taskId, run.id, actor, EVENT_REPLIED, repliedPayload(content), now);
     return { ok: true, value: this.expand(taskId) };
   }
 
@@ -770,6 +815,34 @@ export class MemoryStore implements Store {
     if (!task || task.deletedAt) return { ok: false, error: "not_found" };
 
     const run = this.getRunForTask(taskId);
+    const nowIso = now.toISOString();
+
+    if (action === "approve") {
+      const ctx: ApproveContext = {
+        isExistenceTriage: requiresLedgerApproval(task.source) && task.owner === "me",
+        isGated: isGatedActionType(task.actionType),
+        owner: task.owner,
+      };
+      const target = approveTarget(task.stage, ctx);
+      if (!target) return { ok: false, error: "illegal_transition" };
+
+      const fromStage = task.stage;
+      task.stage = target;
+      // Mirrors PersonalBoard's grant/revoke on a lane move — approving a
+      // ledger task into `queued` grants the Do/Don't bit the same way a
+      // manual board drag would.
+      task.agentApprovalGranted = agentApprovalGrantForMove(
+        requiresLedgerApproval(task.source),
+        task.agentApprovalGranted,
+        target,
+      );
+      if (target === "done") task.completedAt = nowIso;
+      task.revision += 1;
+      task.updatedAt = nowIso;
+
+      this.appendEvent(taskId, run ? run.id : null, actor, EVENT_APPROVED, approvedPayload(fromStage, target), now);
+      return { ok: true, value: this.expand(taskId) };
+    }
 
     let legal: boolean;
     if (action === "accept") {
@@ -783,18 +856,30 @@ export class MemoryStore implements Store {
     }
     if (!legal) return { ok: false, error: "illegal_transition" };
 
-    const result = reviewAction(action, { requiresAgentApproval: requiresAgentApproval(task.source) });
-    const nowIso = now.toISOString();
+    const result = reviewAction(action, { requiresAgentApproval: requiresLedgerApproval(task.source) });
 
     task.stage = result.stage;
     if (result.owner !== undefined) task.owner = result.owner;
     if (result.agentApprovalGranted !== undefined) task.agentApprovalGranted = result.agentApprovalGranted;
-    if (action === "accept") task.completedAt = nowIso;
+    if (action === "accept") {
+      task.completedAt = nowIso;
+      // TODO(slice 6): recurrence cascade on accept — TaskCompletion.complete/
+      // RecurrenceEngine has no server port; the Mac client owns next-instance
+      // creation until then.
+    }
     task.revision += 1;
     task.updatedAt = nowIso;
 
     if (run && result.runState !== undefined) {
       run.state = result.runState;
+      if (action === "request_changes") {
+        const reset = freshAttemptRunReset();
+        run.requiresConnectedWorker = reset.requiresConnectedWorker;
+        run.completedAt = reset.completedAt;
+        run.lastError = reset.lastError;
+        run.nextAttemptAt = reset.nextAttemptAt;
+        run.autoRetryCount = reset.autoRetryCount;
+      }
       run.lastActivityAt = nowIso;
       run.revision += 1;
     }
@@ -807,6 +892,7 @@ export class MemoryStore implements Store {
         const lease = this.leases.get(activeLeaseId);
         if (lease) lease.released = true;
         this.activeLeaseByTask.delete(taskId);
+        this.appendEvent(taskId, run ? run.id : null, actor, EVENT_LEASE_RELEASED, leaseReleasedPayload(activeLeaseId), now);
       }
     }
 
@@ -825,7 +911,7 @@ export class MemoryStore implements Store {
       );
     }
 
-    this.appendEvent(taskId, run ? run.id : null, actor, "reviewed", { action, feedback: feedback ?? null }, now);
+    this.appendEvent(taskId, run ? run.id : null, actor, EVENT_REVIEWED, reviewedPayload(action), now);
     return { ok: true, value: this.expand(taskId) };
   }
 

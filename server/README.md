@@ -35,7 +35,8 @@ supabase link --project-ref <ref-from-project-url>
 supabase db push
 ```
 
-   (or `psql "$DB_URL" -f migrations/0001_init.sql` if you prefer psql.)
+   (or `psql "$DB_URL" -f migrations/0001_init.sql -f migrations/0002_idempotency_reserve.sql`
+   if you prefer psql — apply every file in `migrations/` in filename order.)
 4. Deploy the API:
 
 ```bash

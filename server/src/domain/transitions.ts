@@ -11,7 +11,7 @@
 //                                                           queueHumanTurn ~line 736,
 //                                                           persistLocalCancellation ~line 910)
 
-import type { AgentRunState, TaskOwner, TaskStage, TurnOutcome } from "./stages.ts";
+import type { AgentRunState, MessageKind, TaskOwner, TaskStage, TurnOutcome } from "./stages.ts";
 import { isClaimable, type QueueTask } from "./queue.ts";
 
 /**
@@ -97,6 +97,96 @@ export function decisionForOutcome(outcome: TurnOutcome): TransitionDecision {
         requiresConnectedWorker: false,
       };
   }
+}
+
+/**
+ * Message kind an applied turn outcome appends. `needs_input` -> `question`,
+ * `completed` -> `result`, `failed`/`completion_uncertain` -> `error` are the
+ * task brief's explicit mapping. `cancelled` is verified against Swift
+ * ground truth: `AgentTaskCoordinator.apply`'s `.cancelled` branch
+ * (AgentTaskCoordinator.swift:~684-692) appends a message with kind
+ * `.recovery` — NOT `.error` — because a cancelled turn isn't itself a
+ * failure signal, so this mirrors that exactly rather than guessing.
+ * `requires_connected_worker` has no Swift-verified case checked for this
+ * slice's fix pass; it keeps the pre-existing `progress` mapping (an
+ * in-flight update — the task simply requeues pending a capability this
+ * worker doesn't have, not a failure).
+ */
+export function messageKindForOutcome(outcome: TurnOutcome): MessageKind {
+  switch (outcome) {
+    case "needs_input":
+      return "question";
+    case "completed":
+      return "result";
+    case "failed":
+    case "completion_uncertain":
+      return "error";
+    case "cancelled":
+      return "recovery";
+    case "requires_connected_worker":
+      return "progress";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fresh-attempt run reset (reply / request-changes)
+// ---------------------------------------------------------------------------
+
+export interface FreshAttemptRunReset {
+  requiresConnectedWorker: false;
+  completedAt: null;
+  lastError: null;
+  nextAttemptAt: null;
+  autoRetryCount: 0;
+}
+
+/**
+ * Field resets a human-initiated turn (reply to a question, or request
+ * changes on a review) applies to the run, on top of the state transition
+ * itself. Mirrors `queueHumanTurn`'s reset block
+ * (AgentTaskCoordinator.swift:772-778): a human-driven turn is a fresh
+ * attempt, so any backoff/retry budget or stale error from a prior failed
+ * attempt is cleared. Both stores must apply this in `reply()` and
+ * `review("request_changes")`.
+ */
+export function freshAttemptRunReset(): FreshAttemptRunReset {
+  return {
+    requiresConnectedWorker: false,
+    completedAt: null,
+    lastError: null,
+    nextAttemptAt: null,
+    autoRetryCount: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Gated action types (recommendation/task action-type -> always-gated?)
+// ---------------------------------------------------------------------------
+
+const KNOWN_ACTION_TYPES = new Set([
+  "draft_email",
+  "draft_slack",
+  "create_task",
+  "vault_note",
+  "ticket_write",
+  "fyi",
+  "ignore",
+]);
+const GATED_ACTION_TYPES = new Set(["draft_email", "draft_slack", "ticket_write"]);
+
+/**
+ * Mirrors `RecommendationAction.isGated` / `MustardTask.isGated` (Sources/
+ * MustardKit/Logic/RecommendationAction.swift:29-33, Models/MustardTask.swift
+ * :111-115): no/empty action type -> not gated; a known action type -> its
+ * own gating; an unknown/typo'd token fails closed (gated). The single copy
+ * — both the lease-expiry sweep (gated -> needs_review) and the approve
+ * action (`approveTarget`'s `ApproveContext.isGated`) call this rather than
+ * re-deriving it.
+ */
+export function isGatedActionType(actionType: string | null): boolean {
+  if (!actionType) return false;
+  if (!KNOWN_ACTION_TYPES.has(actionType)) return true; // fail closed
+  return GATED_ACTION_TYPES.has(actionType);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +295,17 @@ export function canRequestChanges(owner: TaskOwner, stage: TaskStage): boolean {
 // Review actions (Needs Review column: Accept / Request changes / Take back)
 // ---------------------------------------------------------------------------
 
-export type ReviewActionKind = "accept" | "request_changes" | "take_back";
+/**
+ * `approve` is a distinct action from the three below: it resolves a
+ * `needs_approval`/`needs_review` gate via `approveTarget` rather than
+ * `reviewAction` (see that function's narrower parameter type). It is
+ * included here so the wire-level action vocabulary
+ * (`POST /v1/tasks/:id/review`'s `action` field) has one enum, not two.
+ */
+export type ReviewActionKind = "accept" | "request_changes" | "take_back" | "approve";
+
+/** The subset of `ReviewActionKind` that `reviewAction` (below) handles. */
+export type PlainReviewActionKind = Exclude<ReviewActionKind, "approve">;
 
 export interface ReviewContext {
   /**
@@ -242,7 +342,7 @@ export interface ReviewResult {
  *    `run.state = .cancelled`; it also revokes the ledger grant unconditionally
  *    when the task requires agent approval (see `ReviewContext`).
  */
-export function reviewAction(action: ReviewActionKind, ctx: ReviewContext = {}): ReviewResult {
+export function reviewAction(action: PlainReviewActionKind, ctx: ReviewContext = {}): ReviewResult {
   switch (action) {
     case "accept":
       return { stage: "done" };

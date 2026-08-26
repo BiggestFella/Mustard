@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { compareQueueOrder, isClaimable, nextRunnable, type QueueTask } from "../src/domain/queue.ts";
+import {
+  compareQueueOrder,
+  computeIsBlocked,
+  isClaimable,
+  nextRunnable,
+  providerMatches,
+  requiresLedgerApproval,
+  type QueueTask,
+} from "../src/domain/queue.ts";
 
 function task(overrides: Partial<QueueTask> & { uid: string }): QueueTask {
   return {
@@ -181,5 +189,66 @@ describe("nextRunnable", () => {
     });
     const runnable = task({ uid: "b", priority: "low" });
     expect(nextRunnable([backingOff, runnable], NOW)?.uid).toBe("b");
+  });
+});
+
+describe("providerMatches", () => {
+  it("never matches a client with no provider, even against an unassigned task", () => {
+    expect(providerMatches(null, null)).toBe(false);
+    expect(providerMatches("claude", null)).toBe(false);
+    expect(providerMatches("any", null)).toBe(false);
+  });
+
+  it("an unassigned (null) task matches any provider-carrying client", () => {
+    expect(providerMatches(null, "claude")).toBe(true);
+    expect(providerMatches(null, "codex")).toBe(true);
+  });
+
+  it("the 'any' wildcard task matches any provider-carrying client", () => {
+    expect(providerMatches("any", "claude")).toBe(true);
+    expect(providerMatches("any", "codex")).toBe(true);
+  });
+
+  it("otherwise requires an exact match", () => {
+    expect(providerMatches("claude", "claude")).toBe(true);
+    expect(providerMatches("claude", "codex")).toBe(false);
+  });
+});
+
+describe("requiresLedgerApproval", () => {
+  it("is true only for the meeting source", () => {
+    expect(requiresLedgerApproval("meeting")).toBe(true);
+  });
+
+  it("is false for meeting-recording (a different, already-approved pipeline) and everything else", () => {
+    expect(requiresLedgerApproval("meeting-recording")).toBe(false);
+    expect(requiresLedgerApproval("manual")).toBe(false);
+    expect(requiresLedgerApproval("voice")).toBe(false);
+  });
+});
+
+describe("computeIsBlocked", () => {
+  it("is false with no blocker and no reason", () => {
+    expect(computeIsBlocked({ blockedByTaskId: null, blockerStage: null, blockedReason: "" })).toBe(false);
+  });
+
+  it("is true when the blocker exists and isn't done", () => {
+    expect(computeIsBlocked({ blockedByTaskId: "t1", blockerStage: "in_progress", blockedReason: "" })).toBe(true);
+  });
+
+  it("is false once the blocker reaches done", () => {
+    expect(computeIsBlocked({ blockedByTaskId: "t1", blockerStage: "done", blockedReason: "" })).toBe(false);
+  });
+
+  it("is false for a dangling blocker reference (blockerStage null) with no reason", () => {
+    expect(computeIsBlocked({ blockedByTaskId: "missing", blockerStage: null, blockedReason: "" })).toBe(false);
+  });
+
+  it("is true from a non-empty blockedReason alone, independent of any blocker", () => {
+    expect(computeIsBlocked({ blockedByTaskId: null, blockerStage: null, blockedReason: "waiting on design" })).toBe(true);
+  });
+
+  it("whitespace-only blockedReason does not block", () => {
+    expect(computeIsBlocked({ blockedByTaskId: null, blockerStage: null, blockedReason: "   " })).toBe(false);
   });
 });

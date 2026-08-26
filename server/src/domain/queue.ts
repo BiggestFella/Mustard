@@ -7,7 +7,7 @@
 //
 // No I/O: callers own fetching the candidate task list and passing `now`.
 
-import type { TaskOwner, TaskPriority, TaskStage } from "./stages.ts";
+import type { Provider, TaskOwner, TaskPriority, TaskStage } from "./stages.ts";
 
 /** The subset of an agent run's fields the queue predicate needs. */
 export interface QueueRun {
@@ -103,4 +103,54 @@ export function nextRunnable(tasks: readonly QueueTask[], now: Date = new Date()
     }
   }
   return best;
+}
+
+// ---------------------------------------------------------------------------
+// Provider-compatibility and ledger-approval predicates shared by both
+// stores' claim/list-claimable paths. Extracted so there is exactly one copy
+// of each rule (previously duplicated, slightly differently, across
+// memory.ts's claimTask/listTasks and pg.ts's claimTask/listTasks SQL).
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a task whose `selectedProvider` is `selectedProvider` may be
+ * claimed by a client whose provider is `clientProvider`. A client with no
+ * provider (e.g. a `user_app`-only client) can never claim; a task with no
+ * selected provider (or the `"any"` wildcard) matches any provider-carrying
+ * client; otherwise it's an exact match.
+ */
+export function providerMatches(selectedProvider: Provider | null, clientProvider: Provider | null): boolean {
+  if (clientProvider === null) return false;
+  if (selectedProvider === null || selectedProvider === "any") return true;
+  return selectedProvider === clientProvider;
+}
+
+/**
+ * Mirrors `MeetingTaskSource.requiresAgentApproval` (Sources/MustardKit/
+ * Logic/MeetingTaskSource.swift:17-19): true only for vault-harvested ledger
+ * work (`source === "meeting"`) — "meeting-recording" is a different,
+ * already-locally-approved pipeline and must NOT match here.
+ */
+export function requiresLedgerApproval(source: string): boolean {
+  return source === "meeting";
+}
+
+/**
+ * Whether a task is blocked. Mirrors `MustardTask.isBlocked` (Models/
+ * MustardTask.swift): blocked by an unfinished dependency (a
+ * `blockedByTaskId` whose target task exists and isn't `done`), OR by a
+ * non-empty free-text `blockedReason`. `blockerStage` is `null` when the
+ * task has no blocker, or the blocker task couldn't be found (soft-deleted /
+ * dangling reference) — callers resolve it however their storage backend
+ * naturally does (a Map lookup for memory.ts, a join/subquery for pg.ts).
+ */
+export function computeIsBlocked(inputs: {
+  blockedByTaskId: string | null;
+  blockerStage: TaskStage | null;
+  blockedReason: string;
+}): boolean {
+  if (inputs.blockedByTaskId && inputs.blockerStage !== null && inputs.blockerStage !== "done") {
+    return true;
+  }
+  return inputs.blockedReason.trim().length > 0;
 }

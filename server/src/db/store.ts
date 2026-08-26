@@ -139,7 +139,12 @@ export interface TaskEventRow {
   runId: string | null;
   actor: string | null;
   type: string;
-  payload: Record<string, unknown>;
+  // `object`, not `Record<string, unknown>`: every payload is built by one of
+  // src/domain/events.ts's typed builder functions (named interfaces with no
+  // index signature), and `Record<string, unknown>` cannot accept those
+  // without a cast. Nothing in this codebase indexes into `payload` by key —
+  // it's opaque here, only ever JSON-serialized on the way out.
+  payload: object;
   createdAt: string;
 }
 
@@ -163,6 +168,18 @@ export type StoreError =
   | "illegal_transition";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: StoreError; detail?: string };
+
+/**
+ * Outcome of `reserveIdempotent`, the reserve-then-act half of the
+ * idempotency-key flow (see `Store.reserveIdempotent`'s doc comment below).
+ * `"reserved"` means the caller now owns this key and must eventually call
+ * `completeIdempotent`; `"in_flight"` means another request already reserved
+ * it and hasn't completed yet; `"complete"` replays the prior response.
+ */
+export type IdempotencyReservation =
+  | { status: "reserved" }
+  | { status: "in_flight" }
+  | { status: "complete"; response: { status: number; response: unknown } };
 
 export interface CreateTaskInput {
   id?: string;
@@ -251,9 +268,16 @@ export interface Store {
   getClientByTokenHash(tokenHash: string): Promise<ClientRow | null>;
   touchClientSeen(clientId: string, now: Date): Promise<void>;
 
-  // idempotency
-  getIdempotent(clientId: string, key: string, route: string): Promise<{ status: number; response: unknown } | null>;
-  putIdempotent(clientId: string, key: string, route: string, status: number, response: unknown): Promise<void>;
+  // idempotency: reserve-then-act, not check-then-act — a plain get/put pair
+  // left a race between two concurrent requests carrying the same
+  // Idempotency-Key (both could see "nothing cached yet" and both execute).
+  // `reserveIdempotent` atomically claims the key (inserting a `pending`
+  // marker, or reporting that one already exists); the caller then always
+  // calls `completeIdempotent` with the final outcome — success or failure —
+  // once the underlying operation has run, so replays return the identical
+  // response as the first attempt.
+  reserveIdempotent(clientId: string, key: string, route: string, now: Date): Promise<IdempotencyReservation>;
+  completeIdempotent(clientId: string, key: string, route: string, status: number, response: unknown): Promise<void>;
 
   // tasks
   createTask(input: CreateTaskInput, actor: string, now: Date): Promise<Result<TaskRow>>;
