@@ -1189,3 +1189,24 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #154 squash-merged. No release, no remote
   data deletion, no secrets.
 - **Revert:** `git revert 3e32f8f`
+
+## 2026-08-26 — Task-service control plane skeleton (slice 2, ADR-0013) · PR #156
+
+- **What:** New `server/` subsystem — Postgres schema (11 tables + idempotency-reserve
+  migration), pure TS domain port of the Swift lifecycle (transitions, queue, events,
+  gating), memory + postgres.js Store implementations, Hono API (bearer auth, leases,
+  If-Match, reserve-then-act idempotency), Supabase Edge Function entry + deno.json,
+  deploy runbook in server/README.md, and a new `server-tests` CI job. No Swift touched.
+- **Review:** fresh-context, 5 finder angles + per-candidate verification → 20 CONFIRMED
+  issues (memory-vs-pg drift, a PATCH gate bypass, stranded take-back lease, missing
+  revision bumps, idempotency race) — all fixed in-run; suite 73→116. Deferred with
+  TODOs + design-doc notes: recurrence-on-accept, F26 area routing.
+- **Checks:** `npx vitest run` 116/116 exit 0 · `npx tsc --noEmit` exit 0 · CI pass on
+  all three jobs (macOS build+test, iOS Simulator, Task service TypeScript).
+- **Leon — to make it live (~10 min, needs your Supabase login):** follow
+  `server/README.md` — create the free-tier Sydney project, `supabase link`,
+  `db push`, `functions deploy api`, set `DB_URL`, mint the two client tokens.
+  Slice 3 (the `mustard-worker` skill + end-to-end vertical slice) starts after that.
+- **Outward actions:** branch pushed, PR #156 squash-merged, remote branch deleted.
+  No release, no remote data deletion, no secrets.
+- **Revert:** `git revert 60d7437`
