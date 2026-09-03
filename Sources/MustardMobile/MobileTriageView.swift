@@ -328,6 +328,18 @@ private struct DeckCard: View {
                 Text(rec.sourceContext).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
             }
 
+            // Original email/source preview — context for the draft, before opening detail.
+            if let preview = OriginalSourceDisplay.previewText(rec.originalSource) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(OriginalSourceDisplay.sectionLabel(source: rec.source, sourceURL: rec.sourceURL))
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                    Text(preview).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 8))
+            }
+
             // Proposed draft preview — the actual content the agent wants to send/write.
             if !draftPreview.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {

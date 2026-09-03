@@ -52,8 +52,9 @@ targets:
           # iOS reads/writes the shared conversation data but never executes turns.
           - "Agent/ClaudeTaskRuntime.swift"
           - "Agent/AgentTaskCoordinator.swift"
-      # The one shared view: mobile triage rows draw the same brand marks as the
-      # desktop console (`SourceLogo`). Everything else under Views/ is AppKit.
+      # Shared SwiftUI-only views: mobile triage rows draw the same brand marks
+      # as the desktop console (`SourceLogo`), and the original-source block
+      # (BAK-265). Everything else under Views/ is AppKit.
       #
       # Everything NOT listed above compiles for iOS, including the voice,
       # meeting, dictation, clipboard and rewrite layers — their macOS plumbing
@@ -62,3 +63,5 @@ targets:
       # Keep it that way: a new macOS-only framework call belongs behind a
       # platform guard, not on a new excludes line.
       - path: Sources/MustardKit/Views/SourceLogo.swift
+      # Shared original-source block (BAK-265): SwiftUI-only, no AppKit.
+      - path: Sources/MustardKit/Views/OriginalSourceBlock.swift

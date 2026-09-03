@@ -61,7 +61,21 @@ enum MobileSampleData {
             body: "The BLE disconnect regression from 5.1 is still open; Kamil asked for a status by Friday.",
             actionType: "draft_email", confidence: 0.76,
             reasoning: "Flagged in yesterday's meeting notes; a reply is overdue and Kamil is blocked on it.",
-            draft: "Hi Kamil,\n\nQuick update on the BLE disconnect regression — reproduced on 5.1, fix in review, expect it in 5.2.\n\nLeon")
+            draft: "Hi Kamil,\n\nQuick update on the BLE disconnect regression — reproduced on 5.1, fix in review, expect it in 5.2.\n\nLeon",
+            source: "gmail", sourceContext: "Thales SDK — kamil@thalesgroup.com",
+            sourceURL: GmailTriage.permalink(messageID: "sample"))
+        rec.originalSource = """
+        Hi Leon,
+
+        The BLE handshake regression we saw on Thursday is still reproducible on the latest firmware. Can you send a status by EOD?
+
+        We've tried two devices and both fail at the same pairing step. The pairing log shows a timeout after 8 seconds on the GATT characteristic write.
+
+        Happy to jump on a call if that's faster.
+
+        Thanks,
+        Kamil
+        """
         context.insert(rec)
         gated.delegation = rec
 

@@ -24,6 +24,16 @@ final class RecommendationProvenanceTests: XCTestCase {
         XCTAssertNil(Recommendation(title: "x").originalSource)
     }
 
+    func test_initFromProposal_mapsOriginalSource() {
+        let p = SourceProposal(
+            source: .gmail, project: "DL", sourceItemID: "t", sourceEventID: "e",
+            title: "Reply", body: "summary", originalSource: "Hi Leon — the figures")
+        let rec = Recommendation(from: p, vaultPath: "/kb")
+        XCTAssertEqual(rec.originalSource, "Hi Leon — the figures")
+        XCTAssertEqual(rec.body, "summary")
+        XCTAssertEqual(rec.source, "gmail")
+    }
+
     func test_originalSource_roundTrip() throws {
         let ctx = try makeContext()
         let rec = Recommendation(title: "From email", source: "gmail")
