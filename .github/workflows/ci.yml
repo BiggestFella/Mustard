@@ -19,13 +19,14 @@ jobs:
     # only that machine picks up these jobs. To register one, see
     # docs/ci-self-hosted-runner.md.
     runs-on: [self-hosted, macOS, mustard]
-    # The Voice Suite compiles against macOS 27-only APIs (Speech, Foundation
-    # Models), so CI must build with the Xcode 27 beta SDK — the runner's
-    # xcode-select default is still Xcode 26.6. DEVELOPER_DIR is the per-process
-    # equivalent of xcode-select (see BAK-275); update this path when Xcode 27
-    # moves to /Applications or becomes the system default.
-    env:
-      DEVELOPER_DIR: /Users/leoncreed-baker/Downloads/Xcode-beta.app/Contents/Developer
+    # Deliberately no DEVELOPER_DIR — same as the iOS job below. This used to pin
+    # ~/Downloads/Xcode-beta.app because the Voice Suite needed two macOS 27-only
+    # symbols (Speech.AnalyzerInputConverter, FoundationModels.LanguageModelError).
+    # Apple deleted both in the macOS 28 SDK, the Voice code was migrated off them,
+    # and the beta was later removed from Downloads — so from 2026-09-03 every run
+    # died at `xcrun: error: missing DEVELOPER_DIR path` and this job, the repo's
+    # primary gate, silently gated nothing (#152 merged straight through it).
+    # Build against the runner's selected Xcode; do not re-pin a per-user path.
     steps:
       - uses: actions/checkout@v4
       - name: Show toolchain
