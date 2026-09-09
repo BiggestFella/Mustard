@@ -1210,3 +1210,62 @@ exact and dictation is byte-for-byte unchanged.
 - **Outward actions:** branch pushed, PR #156 squash-merged, remote branch deleted.
   No release, no remote data deletion, no secrets.
 - **Revert:** `git revert 60d7437`
+
+## 2026-09-09 — CI's macOS gate was dead for six days · PR #159
+
+- **What:** `Build & test (macOS)` pinned `DEVELOPER_DIR` to
+  `~/Downloads/Xcode-beta.app`, which no longer exists on the runner. Since
+  **2026-09-03** every run died in the *first* step (`xcrun: error: missing
+  DEVELOPER_DIR path`) — the repo's primary gate compiled nothing and tested
+  nothing, and **#152 (BAK-265) merged straight through it**. Dropped the env
+  block; the job now builds against the runner's selected Xcode, as the iOS job
+  already did.
+- **Why the pin was dead weight:** it existed for two macOS 27-only symbols
+  (`Speech.AnalyzerInputConverter`, `FoundationModels.LanguageModelError`). Apple
+  deleted both in the macOS 28 SDK and the Voice code was migrated off them —
+  CLAUDE.md has said "do NOT export `DEVELOPER_DIR`" since that migration; the
+  workflow was never updated to match.
+- **Found by:** a docs-only PR (#158) failing CI for no reason it could own.
+- **Risk:** low — CI config only, no product code; strictly restores a gate that
+  was passing vacuously.
+- **Checks:** on the runner's own toolchain (Xcode 26.6/17F113, Swift 6.3.3, no
+  `DEVELOPER_DIR`) `swift build` exit 0, `swift test` exit 0 — **2184 tests, 3
+  skipped, 0 failures**. PR #159's own CI: all three jobs pass (macOS 1m45s — the
+  first real macOS build+test in CI since 3 Sep).
+- **Note for future runs:** a green tick on the macOS job between 2026-09-03 and
+  this fix means nothing. Any PR merged in that window was never macOS-gated.
+- **Outward actions:** branch pushed, PR #159 opened and squash-merged, remote
+  branch deleted. No release, no remote data deletion, no secrets.
+- **Revert:** `git revert 0eb9299`
+
+## 2026-09-09 — Task-service migrations were where `db push` never looks · PR #158
+
+- **What:** `server/supabase/config.toml` is the Supabase CLI's config root, so
+  `supabase db push` reads `server/supabase/migrations/` — but both slice-2
+  migrations lived at `server/migrations/`. The CLI **skips a misplaced migration
+  silently** rather than erroring, so README step 3 would have reported success
+  against an empty schema and the smoke test would have failed on missing tables.
+  Moved both into `supabase/migrations/` with timestamped filenames
+  (`20260826000001_init.sql`, `20260826000002_idempotency_reserve.sql`), order
+  preserved; corrected the README's psql fallback and said why the directory is
+  not optional.
+- **Found by:** writing Leon's step-by-step setup walkthrough. The slice-2 deploy
+  runbook had never been executed against a real project, so this had not
+  surfaced.
+- **Risk:** low — no SQL content changed, no TypeScript touched.
+- **Checks:** `npx vitest run` 116 passed exit 0 · `npx tsc --noEmit` exit 0 · CI
+  pass on all three jobs. **Not verified:** `supabase db push` itself — the CLI is
+  SIGKILLed in the agent sandbox and needs Leon's login, so the path is reasoned
+  from the CLI's documented config-root behaviour. It gets exercised the first
+  time Leon runs step 3.
+- **Leon — still yours (unchanged):** Gmail OAuth client id/secret (Settings →
+  Gmail; nothing reaches triage until then) and the ~10-min Supabase setup in
+  `server/README.md`, which unblocks slice 3. Open decisions: hosted email/
+  transcript content vs references; Mac offline edits. Parked spec awaiting a
+  yes/no: `feat/worker-apply-mode`.
+- **Also cleared this session:** the Gmail deep-review's last-mile check — Mustard's
+  exact restricted invocation against the machine's `bypassPermissions` default
+  reports `NO_BASH_TOOL`, exit 0. The tool restriction holds.
+- **Outward actions:** branch pushed, PR #158 opened and squash-merged, remote
+  branch deleted. No release, no remote data deletion, no secrets.
+- **Revert:** `git revert fe809e6`
