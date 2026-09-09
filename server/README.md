@@ -35,8 +35,11 @@ supabase link --project-ref <ref-from-project-url>
 supabase db push
 ```
 
-   (or `psql "$DB_URL" -f migrations/0001_init.sql -f migrations/0002_idempotency_reserve.sql`
-   if you prefer psql — apply every file in `migrations/` in filename order.)
+   (or `psql "$DB_URL" -f supabase/migrations/20260826000001_init.sql -f supabase/migrations/20260826000002_idempotency_reserve.sql`
+   if you prefer psql — apply every file in `supabase/migrations/` in filename
+   order.) Migrations must live in `supabase/migrations/` with timestamped
+   filenames: that is the only directory `supabase db push` reads, and it skips
+   a misplaced migration silently instead of erroring.
 4. Deploy the API:
 
 ```bash

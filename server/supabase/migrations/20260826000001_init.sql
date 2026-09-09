@@ -7,7 +7,10 @@
 -- disagree, the design doc wins — fix this migration, don't reinterpret it.
 --
 -- Applied via `supabase db push` (or plain `psql` against the Supabase Postgres
--- connection string) from server/migrations, in filename order.
+-- connection string) from server/supabase/migrations, in filename order. That
+-- path is the Supabase CLI's default and is not optional: `db push` only reads
+-- `<config-dir>/supabase/migrations`, so a migration living anywhere else is
+-- silently skipped rather than reported missing.
 --
 -- Scope: tasks + agent runs only (staged-plan slice 2/3). Later-slice tables
 -- (recommendations, gmail_*, calendar_events, meeting_*) are NOT created here —
